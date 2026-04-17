@@ -43,6 +43,7 @@ class MailerCore:
             timeout=self._config.smtp_timeout,
             warmup_delay=self._config.warmup_delay,
             warmup_count=self._config.warmup_count,
+            ignore_ssl_errors=self._config.ignore_ssl_errors,
         )
         self._worker = SMTPWorker(
             self._smtp_pool,

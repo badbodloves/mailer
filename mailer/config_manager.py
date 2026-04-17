@@ -82,6 +82,11 @@ class ConfigManager:
         return self.getint("sending", "smtp_timeout", fallback=30)
 
     @property
+    def ignore_ssl_errors(self) -> bool:
+        raw = self.get("sending", "ignore_ssl_errors", fallback="true")
+        return raw.lower() in ("true", "1", "yes")
+
+    @property
     def from_name(self) -> str:
         return self.get("sender", "from_name")
 

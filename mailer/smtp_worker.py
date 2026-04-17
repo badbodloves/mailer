@@ -40,6 +40,7 @@ class SMTPPool:
         timeout: int = 30,
         warmup_delay: float = 30.0,
         warmup_count: int = 5,
+        ignore_ssl_errors: bool = True,
     ):
         self._accounts: List[SMTPAccount] = []
         self._lock = threading.Lock()
@@ -47,6 +48,7 @@ class SMTPPool:
         self._timeout = timeout
         self._warmup_delay = warmup_delay
         self._warmup_count = warmup_count
+        self._ignore_ssl_errors = ignore_ssl_errors
         self._dns_cache = DNSCache()
         self._load(smtp_path)
 
@@ -114,9 +116,16 @@ class SMTPPool:
                 return self._warmup_delay
         return 0.0
 
+    def _build_ssl_context(self) -> ssl.SSLContext:
+        ctx = ssl.create_default_context()
+        if self._ignore_ssl_errors:
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+        return ctx
+
     def connect(self, account: SMTPAccount) -> smtplib.SMTP:
         self._dns_cache.resolve_a(account.host)
-        ctx = ssl.create_default_context()
+        ctx = self._build_ssl_context()
         if account.port == 465:
             server = smtplib.SMTP_SSL(account.host, account.port, timeout=self._timeout, context=ctx)
         else:
