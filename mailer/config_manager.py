@@ -38,6 +38,14 @@ class ConfigManager:
         return self.get("paths", "leads_file")
 
     @property
+    def names_file(self) -> str:
+        return self.get("paths", "names_file")
+
+    @property
+    def subjects_file(self) -> str:
+        return self.get("paths", "subjects_file")
+
+    @property
     def html_dir(self) -> str:
         return self.get("paths", "html_dir")
 

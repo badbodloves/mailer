@@ -3,7 +3,9 @@ import re
 import random
 import string
 import html as html_module
-from typing import Optional
+from typing import Optional, List
+
+from .utils import resolve_txt_paths, read_lines_from_paths
 
 
 class ContentEngine:
@@ -21,14 +23,25 @@ class ContentEngine:
         "a-zA-Z0-9": string.ascii_letters + string.digits,
     }
 
-    def __init__(self, html_dir: str, attachments_dir: str, spintax_dir: str):
+    def __init__(
+        self,
+        html_dir: str,
+        attachments_dir: str,
+        spintax_dir: str,
+        names_file: str = "",
+        subjects_file: str = "",
+    ):
         self._html_dir = html_dir
         self._attachments_dir = attachments_dir
         self._spintax_dir = spintax_dir
         self._html_files: list = []
         self._attachment_files: list = []
         self._spintax_cache: dict = {}
+        self._names: List[str] = []
+        self._subjects: List[str] = []
         self._load_files()
+        self._load_names(names_file)
+        self._load_subjects(subjects_file)
 
     def _load_files(self) -> None:
         if os.path.isdir(self._html_dir):
@@ -43,6 +56,36 @@ class ContentEngine:
                 for f in os.listdir(self._attachments_dir)
                 if os.path.isfile(os.path.join(self._attachments_dir, f))
             ]
+
+    def _load_names(self, path: str) -> None:
+        if not path:
+            return
+        paths = resolve_txt_paths(path)
+        self._names = read_lines_from_paths(paths)
+
+    def _load_subjects(self, path: str) -> None:
+        if not path:
+            return
+        paths = resolve_txt_paths(path)
+        self._subjects = read_lines_from_paths(paths)
+
+    @property
+    def has_names(self) -> bool:
+        return len(self._names) > 0
+
+    @property
+    def has_subjects(self) -> bool:
+        return len(self._subjects) > 0
+
+    def get_random_name(self) -> str:
+        if not self._names:
+            return ""
+        return random.choice(self._names)
+
+    def get_random_subject(self) -> str:
+        if not self._subjects:
+            return ""
+        return random.choice(self._subjects)
 
     def get_random_html(self) -> Optional[str]:
         if not self._html_files:
@@ -63,9 +106,16 @@ class ContentEngine:
     def process(self, template: str, email: str) -> str:
         text = self._resolve_spintax_files(template)
         text = self._resolve_spintax(text)
+        text = self._resolve_from_name(text)
         text = self._resolve_placeholders(text, email)
         text = self._resolve_randstr(text)
         return text
+
+    def _resolve_from_name(self, text: str) -> str:
+        if "{from_name}" not in text:
+            return text
+        name = self.get_random_name()
+        return text.replace("{from_name}", name)
 
     def _resolve_spintax_files(self, text: str) -> str:
         def replacer(match: re.Match) -> str:

@@ -7,6 +7,7 @@ from dataclasses import dataclass, field
 from typing import List, Optional
 
 from .dns_cache import DNSCache
+from .utils import resolve_txt_paths
 
 logger = logging.getLogger("mailer.smtp")
 
@@ -35,7 +36,7 @@ class SMTPAccount:
 class SMTPPool:
     def __init__(
         self,
-        smtp_file: str,
+        smtp_path: str,
         timeout: int = 30,
         warmup_delay: float = 30.0,
         warmup_count: int = 5,
@@ -47,9 +48,14 @@ class SMTPPool:
         self._warmup_delay = warmup_delay
         self._warmup_count = warmup_count
         self._dns_cache = DNSCache()
-        self._load(smtp_file)
+        self._load(smtp_path)
 
     def _load(self, path: str) -> None:
+        file_paths = resolve_txt_paths(path)
+        for fpath in file_paths:
+            self._parse_smtp_file(fpath)
+
+    def _parse_smtp_file(self, path: str) -> None:
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 for line in fh:
@@ -67,7 +73,7 @@ class SMTPPool:
                     user = parts[2].strip()
                     password = parts[3].strip()
                     self._accounts.append(SMTPAccount(host, port, user, password))
-        except FileNotFoundError:
+        except OSError:
             pass
 
     @property
@@ -133,8 +139,15 @@ class SMTPWorker:
         self._normal_delay = normal_delay
         self._provider_delay = provider_delay
 
-    def send(self, from_email: str, to_email: str, raw_message: str) -> bool:
-        account = self._pool.acquire()
+    def send(
+        self,
+        from_email: str,
+        to_email: str,
+        raw_message: str,
+        account: Optional[SMTPAccount] = None,
+    ) -> bool:
+        if account is None:
+            account = self._pool.acquire()
         if account is None:
             raise RuntimeError("No live SMTP servers available")
 
@@ -161,8 +174,6 @@ class SMTPWorker:
                     server.quit()
                 except Exception:
                     pass
-
-        return False
 
     def get_delay(self, to_email: str) -> float:
         domain = to_email.split("@")[1].lower() if "@" in to_email else ""

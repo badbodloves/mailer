@@ -1,7 +1,8 @@
 import sqlite3
 import threading
-import os
-from typing import Optional, List, Tuple
+from typing import List, Tuple
+
+from .utils import resolve_txt_paths, extract_emails
 
 
 class DBManager:
@@ -44,31 +45,49 @@ class DBManager:
             conn.commit()
             self._initialized = True
 
-    def load_leads(self, leads_file: str) -> int:
-        if not os.path.isfile(leads_file):
+    def load_leads(self, leads_path: str) -> int:
+        file_paths = resolve_txt_paths(leads_path)
+        if not file_paths:
             return 0
-        with open(leads_file, "r", encoding="utf-8", errors="replace") as fh:
-            emails = []
-            for line in fh:
-                email = line.strip().lower()
-                if email and "@" in email:
-                    emails.append(email)
+
+        all_emails: list = []
+        seen: set = set()
+        for fpath in file_paths:
+            try:
+                with open(fpath, "r", encoding="utf-8", errors="replace") as fh:
+                    for line in fh:
+                        for email in extract_emails(line):
+                            if email not in seen:
+                                seen.add(email)
+                                all_emails.append(email)
+            except OSError:
+                continue
+
+        if not all_emails:
+            return 0
 
         conn = self._get_conn()
         inserted = 0
         batch_size = 500
-        for i in range(0, len(emails), batch_size):
-            batch = emails[i : i + batch_size]
+        for i in range(0, len(all_emails), batch_size):
+            batch = all_emails[i : i + batch_size]
             try:
+                before = self._count_total(conn)
                 conn.executemany(
                     "INSERT OR IGNORE INTO leads (email, state) VALUES (?, ?)",
                     [(e, self.STATE_PENDING) for e in batch],
                 )
-                inserted += conn.total_changes
                 conn.commit()
+                after = self._count_total(conn)
+                inserted += after - before
             except sqlite3.Error:
                 conn.rollback()
         return inserted
+
+    @staticmethod
+    def _count_total(conn: sqlite3.Connection) -> int:
+        cursor = conn.execute("SELECT COUNT(*) FROM leads")
+        return cursor.fetchone()[0]
 
     def fetch_pending_batch(self, batch_size: int = 100) -> List[Tuple[int, str]]:
         conn = self._get_conn()
@@ -125,8 +144,7 @@ class DBManager:
 
     def total_count(self) -> int:
         conn = self._get_conn()
-        cursor = conn.execute("SELECT COUNT(*) FROM leads")
-        return cursor.fetchone()[0]
+        return self._count_total(conn)
 
     def close(self) -> None:
         if hasattr(self._local, "conn") and self._local.conn:

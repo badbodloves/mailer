@@ -1,11 +1,9 @@
 import logging
-import os
 import sys
 import time
 import signal
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
 
 from .config_manager import ConfigManager
 from .db_manager import DBManager
@@ -34,9 +32,11 @@ class MailerCore:
 
         self._db = DBManager(self._config.db_path)
         self._content = ContentEngine(
-            self._config.html_dir,
-            self._config.attachments_dir,
-            self._config.spintax_dir,
+            html_dir=self._config.html_dir,
+            attachments_dir=self._config.attachments_dir,
+            spintax_dir=self._config.spintax_dir,
+            names_file=self._config.names_file,
+            subjects_file=self._config.subjects_file,
         )
         self._smtp_pool = SMTPPool(
             self._config.smtp_file,
@@ -76,6 +76,11 @@ class MailerCore:
             print(f"{Fore.RED}[!] No SMTP accounts loaded. Check {self._config.smtp_file}{Style.RESET_ALL}")
             sys.exit(1)
         print(f"  SMTP accounts: {Fore.GREEN}{self._smtp_pool.size}{Style.RESET_ALL} live / {self._smtp_pool.total} total")
+
+        if self._content.has_names:
+            print(f"  Names pool:    {Fore.GREEN}loaded{Style.RESET_ALL}")
+        if self._content.has_subjects:
+            print(f"  Subjects pool: {Fore.GREEN}loaded{Style.RESET_ALL}")
 
         self._db.reset_in_progress()
         loaded = self._db.load_leads(self._config.leads_file)
@@ -147,16 +152,21 @@ class MailerCore:
         if self._shutdown.is_set():
             return False
 
+        account = self._smtp_pool.acquire()
+        if account is None:
+            return False
+
         from_email = self._config.from_email
         if not from_email:
-            account = self._smtp_pool.acquire()
-            if account:
-                from_email = account.user
-            else:
-                return False
+            from_email = account.user
 
         from_name = self._content.process(self._config.from_name, email)
-        subject = self._content.process(self._config.subject, email)
+
+        if self._content.has_subjects:
+            subject_template = self._content.get_random_subject()
+        else:
+            subject_template = self._config.subject
+        subject = self._content.process(subject_template, email)
 
         html_template = self._content.get_random_html()
         if html_template is None:
@@ -177,7 +187,7 @@ class MailerCore:
             attachment=attachment,
         )
 
-        success = self._worker.send(from_email, email, raw_msg)
+        success = self._worker.send(from_email, email, raw_msg, account=account)
 
         delay = self._worker.get_delay(email)
         if delay > 0 and not self._shutdown.is_set():
@@ -191,8 +201,11 @@ class MailerCore:
             if not recipient:
                 continue
             try:
-                self._send_one(-1, recipient)
-                print(f"    {Fore.GREEN}[OK]{Style.RESET_ALL} Test sent to {recipient}")
+                success = self._send_one(-1, recipient)
+                if success:
+                    print(f"    {Fore.GREEN}[OK]{Style.RESET_ALL} Test sent to {recipient}")
+                else:
+                    print(f"    {Fore.RED}[FAIL]{Style.RESET_ALL} Test to {recipient}")
             except Exception as exc:
                 print(f"    {Fore.RED}[FAIL]{Style.RESET_ALL} Test to {recipient}: {exc}")
 
