@@ -18,7 +18,11 @@ class MIMEBuilder:
 
     @staticmethod
     def _encode_header_value(value: str) -> str:
-        return Header(value, "utf-8").encode()
+        try:
+            value.encode("ascii")
+            return value
+        except UnicodeEncodeError:
+            return Header(value, "utf-8").encode()
 
     @staticmethod
     def _fold_header(name: str, value: str) -> str:
@@ -41,9 +45,9 @@ class MIMEBuilder:
             raise ValueError(
                 f"Invalid sender domain for Message-ID: {sender_domain!r}"
             )
-        now = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+        ts_hex = format(int(time.time() * 1000), "x")
         rand_hex = secrets.token_hex(16)
-        return f"<{now}.{rand_hex}@{sender_domain}>"
+        return f"<{ts_hex}.{rand_hex}@{sender_domain}>"
 
     @staticmethod
     def generate_boundary() -> str:
@@ -80,6 +84,10 @@ class MIMEBuilder:
         if not sender_domain or "." not in sender_domain:
             raise ValueError(
                 f"Cannot extract valid domain from From address: {from_email!r}"
+            )
+        if "@" not in to_email or "." not in to_email.split("@")[-1]:
+            raise ValueError(
+                f"Invalid To address: {to_email!r}"
             )
 
         message_id = cls.generate_message_id(sender_domain)
