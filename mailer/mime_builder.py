@@ -1,6 +1,5 @@
 import mimetypes
 import secrets
-import string
 import time
 import quopri
 import base64
@@ -9,7 +8,6 @@ from email.header import Header
 from typing import Optional, Tuple
 
 _CRLF_RE_CHARS = str.maketrans("", "", "\r\n")
-_BASE36 = string.ascii_uppercase + string.digits
 
 
 class MIMEBuilder:
@@ -20,11 +18,7 @@ class MIMEBuilder:
 
     @staticmethod
     def _encode_header_value(value: str) -> str:
-        try:
-            value.encode("ascii")
-            return value
-        except UnicodeEncodeError:
-            return Header(value, "utf-8").encode()
+        return Header(value, "utf-8").encode()
 
     @staticmethod
     def _fold_header(name: str, value: str) -> str:
@@ -42,18 +36,14 @@ class MIMEBuilder:
         return "\r\n".join(chunks)
 
     @staticmethod
-    def _generate_queue_id() -> str:
-        return "".join(secrets.choice(_BASE36) for _ in range(10))
-
-    @classmethod
-    def generate_message_id(cls, sender_domain: str) -> tuple:
+    def generate_message_id(sender_domain: str) -> str:
         if not sender_domain or "." not in sender_domain:
             raise ValueError(
                 f"Invalid sender domain for Message-ID: {sender_domain!r}"
             )
-        now = time.strftime("%Y%m%d%H%M%S", time.gmtime())
-        queue_id = cls._generate_queue_id()
-        return f"<{now}.{queue_id}@{sender_domain}>", queue_id
+        now = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
+        rand_hex = secrets.token_hex(16)
+        return f"<{now}.{rand_hex}@{sender_domain}>"
 
     @staticmethod
     def generate_boundary() -> str:
@@ -62,19 +52,13 @@ class MIMEBuilder:
         return f"----=_Part_{ts}_{rand_hex}"
 
     @staticmethod
-    def _is_ascii(text: str) -> bool:
+    def _get_best_encoding(text: str) -> tuple:
         try:
             text.encode("ascii")
-            return True
-        except UnicodeEncodeError:
-            return False
-
-    @classmethod
-    def _encode_body(cls, text: str) -> tuple:
-        if cls._is_ascii(text):
             return "7bit", text
-        encoded = quopri.encodestring(text.encode("utf-8"), quotetabs=True)
-        return "quoted-printable", encoded.decode("ascii").replace("\n", "\r\n")
+        except UnicodeEncodeError:
+            encoded = quopri.encodestring(text.encode("utf-8"), quotetabs=True)
+            return "quoted-printable", encoded.decode("ascii").replace("\n", "\r\n")
 
     @classmethod
     def build_email(
@@ -98,36 +82,29 @@ class MIMEBuilder:
                 f"Cannot extract valid domain from From address: {from_email!r}"
             )
 
-        message_id, queue_id = cls.generate_message_id(sender_domain)
+        message_id = cls.generate_message_id(sender_domain)
         date_str = formatdate(usegmt=True)
-        from_header = formataddr((from_name, from_email))
-        subject_encoded = cls._encode_header_value(subject)
-
-        received = (
-            f"from localhost (localhost [127.0.0.1])\r\n"
-            f"\tby {sender_domain} (Postfix) with ESMTP id {queue_id}\r\n"
-            f"\tfor <{to_email}>; {date_str}"
+        from_header = formataddr(
+            (cls._encode_header_value(from_name), from_email)
         )
+        subject_encoded = cls._encode_header_value(subject)
 
         if attachment:
             return cls._build_mixed(
                 date_str, from_header, to_email, message_id,
                 subject_encoded, html_body, plain_body, attachment,
-                received,
             )
         return cls._build_alternative(
             date_str, from_header, to_email, message_id,
-            subject_encoded, html_body, plain_body, received,
+            subject_encoded, html_body, plain_body,
         )
 
     @classmethod
     def _header_block(
         cls, date_str: str, from_header: str, to_email: str,
         message_id: str, subject: str, content_type: str,
-        received: str,
     ) -> list:
-        lines = [
-            f"Received: {received}",
+        return [
             f"Date: {date_str}",
             cls._fold_header("From", from_header),
             f"To: {to_email}",
@@ -137,22 +114,19 @@ class MIMEBuilder:
             "MIME-Version: 1.0",
             f"Content-Type: {content_type}",
         ]
-        return lines
 
     @classmethod
     def _build_alternative(
         cls, date_str: str, from_header: str, to_email: str,
         message_id: str, subject: str, html_body: str, plain_body: str,
-        received: str,
     ) -> str:
         boundary = cls.generate_boundary()
         headers = cls._header_block(
             date_str, from_header, to_email, message_id, subject,
             f'multipart/alternative; boundary="{boundary}"',
-            received,
         )
-        plain_enc, plain_data = cls._encode_body(plain_body)
-        html_enc, html_data = cls._encode_body(html_body)
+        plain_enc, plain_data = cls._get_best_encoding(plain_body)
+        html_enc, html_data = cls._get_best_encoding(html_body)
 
         lines = headers + [
             "",
@@ -179,7 +153,7 @@ class MIMEBuilder:
     def _build_mixed(
         cls, date_str: str, from_header: str, to_email: str,
         message_id: str, subject: str, html_body: str, plain_body: str,
-        attachment: Tuple[str, bytes], received: str,
+        attachment: Tuple[str, bytes],
     ) -> str:
         mixed_boundary = cls.generate_boundary()
         alt_boundary = cls.generate_boundary()
@@ -202,13 +176,12 @@ class MIMEBuilder:
             att_b64[i : i + 76] for i in range(0, len(att_b64), 76)
         )
 
-        plain_enc, plain_data = cls._encode_body(plain_body)
-        html_enc, html_data = cls._encode_body(html_body)
+        plain_enc, plain_data = cls._get_best_encoding(plain_body)
+        html_enc, html_data = cls._get_best_encoding(html_body)
 
         headers = cls._header_block(
             date_str, from_header, to_email, message_id, subject,
             f'multipart/mixed; boundary="{mixed_boundary}"',
-            received,
         )
         lines = headers + [
             "",
