@@ -77,7 +77,7 @@ class ImageManager:
 
     @property
     def logo_width(self) -> int:
-        return self._logo_width
+        return min(self._logo_width, 220)
 
     @property
     def pool_size(self) -> int:
