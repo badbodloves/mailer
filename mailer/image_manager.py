@@ -99,12 +99,20 @@ class ImageManager:
         x = w - 1 - random.randint(0, min(4, w - 1))
         y = h - 1 - random.randint(0, min(4, h - 1))
         pixel = pixels[x, y]
-        ch = random.randint(0, 2)
-        p = list(pixel[:3])
-        p[ch] = min(255, max(0, p[ch] + random.choice([-2, -1, 1, 2])))
-        if img.mode == "RGBA" and len(pixel) == 4:
+
+        if img.mode == "P":
+            idx = pixel if isinstance(pixel, int) else pixel[0]
+            delta = random.choice([-1, 1])
+            pixels[x, y] = max(0, min(255, idx + delta))
+        elif img.mode == "RGBA" and isinstance(pixel, tuple) and len(pixel) == 4:
+            p = list(pixel[:3])
+            ch = random.randint(0, 2)
+            p[ch] = min(255, max(0, p[ch] + random.choice([-2, -1, 1, 2])))
             pixels[x, y] = (p[0], p[1], p[2], pixel[3])
         else:
+            p = list(pixel[:3])
+            ch = random.randint(0, 2)
+            p[ch] = min(255, max(0, p[ch] + random.choice([-2, -1, 1, 2])))
             pixels[x, y] = (p[0], p[1], p[2])
 
         buf = io.BytesIO()
@@ -114,8 +122,11 @@ class ImageManager:
             meta = PngInfo()
             meta.add_text("uid", secrets.token_hex(8))
             save_kw["pnginfo"] = meta
+            save_kw["optimize"] = True
+            save_kw["compress_level"] = 9
         else:
             save_kw["quality"] = 95
+            save_kw["optimize"] = True
         img.save(buf, format=self._fmt, **save_kw)
         raw = buf.getvalue()
 
@@ -159,8 +170,17 @@ class ImageManager:
         elif base_img.mode not in ("RGB", "RGBA"):
             base_img = base_img.convert("RGB")
 
+        has_transparency = False
+        if base_img.mode == "RGBA":
+            alpha = base_img.getchannel("A")
+            has_transparency = alpha.getextrema()[0] < 255
+            if not has_transparency:
+                base_img = base_img.convert("RGB")
+
         w, h = base_img.size
-        print(f"  CID logos: generating {NUM_TEMPLATES} base templates from {os.path.basename(base_path)} ...")
+        trans_str = "RGBA" if has_transparency else "P (palette)"
+        print(f"  CID logos: generating {NUM_TEMPLATES} templates from "
+              f"{os.path.basename(base_path)} [{trans_str}] ...")
 
         for i in range(NUM_TEMPLATES):
             rng = random.Random(i)
@@ -171,7 +191,10 @@ class ImageManager:
             if sx or sy:
                 from PIL import ImageChops
                 variant = ImageChops.offset(variant, sx, sy)
+            if self._fmt == "PNG" and not has_transparency:
+                variant = variant.quantize(colors=256, method=Image.Quantize.MEDIANCUT)
             self._templates.append(variant)
+
 
         print(f"  CID logos: {len(self._templates)} templates ready")
 
