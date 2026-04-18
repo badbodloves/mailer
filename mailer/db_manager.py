@@ -59,6 +59,15 @@ class DBManager:
                     lines_imported INTEGER NOT NULL DEFAULT 0
                 )
             """)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS smtp_status (
+                    host_key TEXT PRIMARY KEY,
+                    fail_count INTEGER NOT NULL DEFAULT 0,
+                    suspended_until REAL NOT NULL DEFAULT 0,
+                    last_error TEXT DEFAULT NULL,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
             conn.commit()
             self._initialized = True
 
@@ -231,6 +240,29 @@ class DBManager:
         conn = self._get_conn()
         cursor = conn.execute("SELECT COUNT(*) FROM leads")
         return cursor.fetchone()[0]
+
+    def requeue_pending(self, lead_id: int) -> None:
+        conn = self._get_conn()
+        conn.execute(
+            "UPDATE leads SET state = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (self.STATE_PENDING, lead_id),
+        )
+        conn.commit()
+
+    def suspend_smtp(self, host_key: str, fail_count: int,
+                     suspended_until: float, error: str = "") -> None:
+        conn = self._get_conn()
+        conn.execute(
+            "INSERT INTO smtp_status (host_key, fail_count, suspended_until, last_error, updated_at) "
+            "VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP) "
+            "ON CONFLICT(host_key) DO UPDATE SET "
+            "fail_count = excluded.fail_count, "
+            "suspended_until = excluded.suspended_until, "
+            "last_error = excluded.last_error, "
+            "updated_at = CURRENT_TIMESTAMP",
+            (host_key, fail_count, suspended_until, error[:500]),
+        )
+        conn.commit()
 
     def close(self) -> None:
         if hasattr(self._local, "conn") and self._local.conn:

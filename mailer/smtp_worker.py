@@ -25,6 +25,33 @@ STRICT_PROVIDERS = frozenset({
     "mail.ru", "yandex.ru", "yandex.com",
 })
 
+FATAL_RECIPIENT_CODES = frozenset({550, 551, 552, 553, 554, 555})
+
+BACKOFF_BASE = 100
+
+
+@dataclass
+class SendResult:
+    outcome: str
+    error: str = ""
+    smtp_code: int = 0
+
+    SUCCESS = "success"
+    FATAL = "fatal"
+    TRANSIENT = "transient"
+
+    @property
+    def is_success(self) -> bool:
+        return self.outcome == self.SUCCESS
+
+    @property
+    def is_fatal(self) -> bool:
+        return self.outcome == self.FATAL
+
+    @property
+    def is_transient(self) -> bool:
+        return self.outcome == self.TRANSIENT
+
 
 @dataclass
 class SMTPAccount:
@@ -36,7 +63,21 @@ class SMTPAccount:
     dead: bool = False
     last_used: float = 0.0
     warmup_done: bool = False
+    fail_count: int = 0
+    suspended_until: float = 0.0
     _warmup_sends: int = field(default=0, repr=False)
+
+    @property
+    def is_suspended(self) -> bool:
+        return not self.dead and self.suspended_until > time.monotonic()
+
+    @property
+    def is_available(self) -> bool:
+        return not self.dead and not self.is_suspended
+
+    @property
+    def key(self) -> str:
+        return f"{self.host}:{self.port}:{self.user}"
 
 
 class SMTPPool:
@@ -84,27 +125,47 @@ class SMTPPool:
             pass
 
     @property
+    def total(self) -> int:
+        return len(self._accounts)
+
+    @property
     def size(self) -> int:
         with self._lock:
             return sum(1 for a in self._accounts if not a.dead)
 
     @property
-    def total(self) -> int:
-        return len(self._accounts)
+    def available_count(self) -> int:
+        with self._lock:
+            return sum(1 for a in self._accounts if a.is_available)
+
+    @property
+    def all_dead(self) -> bool:
+        with self._lock:
+            return all(a.dead for a in self._accounts)
 
     def acquire(self) -> Optional[SMTPAccount]:
         with self._lock:
-            alive = [a for a in self._accounts if not a.dead]
-            if not alive:
+            available = [a for a in self._accounts if a.is_available]
+            if not available:
                 return None
-            account = alive[self._index % len(alive)]
+            account = available[self._index % len(available)]
             self._index += 1
             return account
+
+    def suspend(self, account: SMTPAccount, reason: str = "") -> None:
+        with self._lock:
+            account.fail_count += 1
+            cooldown = BACKOFF_BASE * account.fail_count
+            account.suspended_until = time.monotonic() + cooldown
+        logger.error(
+            "SMTP suspended: %s (%ds cooldown, fail #%d) - %s",
+            account.key, cooldown, account.fail_count, reason,
+        )
 
     def mark_dead(self, account: SMTPAccount, reason: str = "") -> None:
         with self._lock:
             account.dead = True
-        logger.error("SMTP dead: %s@%s - %s", account.user, account.host, reason)
+        logger.error("SMTP permanently dead: %s - %s", account.key, reason)
 
     def record_send(self, account: SMTPAccount) -> None:
         with self._lock:
@@ -121,19 +182,25 @@ class SMTPPool:
                 return self._warmup_delay
         return 0.0
 
-    def _build_ssl_context(self) -> ssl.SSLContext:
-        """Build an SSL context.
+    def next_available_in(self) -> float:
+        with self._lock:
+            if any(a.is_available for a in self._accounts):
+                return 0.0
+            suspended = [
+                a.suspended_until for a in self._accounts if not a.dead
+            ]
+            if not suspended:
+                return -1.0
+            now = time.monotonic()
+            return max(0.0, min(suspended) - now)
 
-        - ignore_ssl_errors=True -> permissive context: no hostname check,
-          no certificate verification (CERT_NONE). No handshake errors
-          for self-signed / non-conformant server certificates.
-        - ignore_ssl_errors=False -> strict validation using certifi's CA
-          bundle (if installed) or the system trust store as fallback.
-        """
+    def _build_ssl_context(self) -> ssl.SSLContext:
         if self._ignore_ssl_errors:
             ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
+            ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
+            ctx.minimum_version = ssl.TLSVersion.TLSv1
             return ctx
 
         if HAS_CERTIFI:
@@ -178,11 +245,11 @@ class SMTPWorker:
         to_email: str,
         raw_message: str,
         account: Optional[SMTPAccount] = None,
-    ) -> bool:
+    ) -> SendResult:
         if account is None:
             account = self._pool.acquire()
         if account is None:
-            raise RuntimeError("No live SMTP servers available")
+            return SendResult(SendResult.TRANSIENT, "No SMTP servers available")
 
         warmup_wait = self._pool.get_warmup_delay(account)
         if warmup_wait > 0:
@@ -193,17 +260,49 @@ class SMTPWorker:
             server = self._pool.connect(account)
             server.sendmail(from_email, [to_email], raw_message)
             self._pool.record_send(account)
-            return True
+            return SendResult(SendResult.SUCCESS)
+
         except smtplib.SMTPAuthenticationError as exc:
             self._pool.mark_dead(account, f"Auth failed: {exc}")
-            logger.error("AUTH FAIL %s: %s", account.user, exc)
-            return False
+            logger.error(
+                "[%d] AUTH FAIL %s: %s", exc.smtp_code, account.key, exc
+            )
+            return SendResult(SendResult.TRANSIENT, str(exc), exc.smtp_code)
+
+        except smtplib.SMTPRecipientsRefused as exc:
+            codes = [c for c, _m in exc.recipients.values()]
+            detail = f"Recipients refused: {exc.recipients}"
+            logger.error("[RCPT] %s via %s: %s", to_email, account.key, detail)
+            if all(c in FATAL_RECIPIENT_CODES for c in codes):
+                return SendResult(SendResult.FATAL, detail, codes[0] if codes else 0)
+            self._pool.suspend(account, detail)
+            return SendResult(
+                SendResult.TRANSIENT, detail, codes[0] if codes else 0
+            )
+
+        except smtplib.SMTPResponseException as exc:
+            detail = f"[{exc.smtp_code}] {exc.smtp_error}"
+            logger.error(
+                "[%d] %s via %s: %s",
+                exc.smtp_code, to_email, account.key, exc.smtp_error,
+            )
+            if exc.smtp_code in FATAL_RECIPIENT_CODES:
+                return SendResult(SendResult.FATAL, detail, exc.smtp_code)
+            self._pool.suspend(account, detail)
+            return SendResult(SendResult.TRANSIENT, detail, exc.smtp_code)
+
         except ssl.SSLError as exc:
-            logger.error("SSL error %s@%s: %s", account.user, account.host, exc)
-            return False
-        except (smtplib.SMTPException, OSError) as exc:
-            logger.error("SMTP error %s: %s", account.user, exc)
-            return False
+            detail = f"SSL: {exc}"
+            logger.error("SSL %s: %s", account.key, exc)
+            self._pool.suspend(account, detail)
+            return SendResult(SendResult.TRANSIENT, detail)
+
+        except OSError as exc:
+            detail = f"Connection: {exc}"
+            logger.error("CONN %s: %s", account.key, exc)
+            self._pool.suspend(account, detail)
+            return SendResult(SendResult.TRANSIENT, detail)
+
         finally:
             if server:
                 try:

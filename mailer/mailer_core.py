@@ -9,7 +9,7 @@ from .config_manager import ConfigManager
 from .db_manager import DBManager
 from .content_engine import ContentEngine
 from .mime_builder import MIMEBuilder
-from .smtp_worker import SMTPPool, SMTPWorker
+from .smtp_worker import SMTPPool, SMTPWorker, SendResult
 from .ui_console import UIConsole
 
 try:
@@ -129,9 +129,29 @@ class MailerCore:
             self._db.reset_in_progress()
             self._db.close()
 
+    def _wait_for_smtp(self) -> bool:
+        """Wait until at least one SMTP server is available.
+
+        Returns False if all SMTPs are permanently dead or shutdown requested.
+        """
+        while not self._shutdown.is_set():
+            if self._smtp_pool.available_count > 0:
+                return True
+            if self._smtp_pool.all_dead:
+                return False
+            wait = self._smtp_pool.next_available_in()
+            if wait < 0:
+                return False
+            self._shutdown.wait(timeout=min(wait, 5.0))
+        return False
+
     def _process_loop(self, thread_count: int) -> None:
         with ThreadPoolExecutor(max_workers=thread_count) as executor:
             while not self._shutdown.is_set():
+                if not self._wait_for_smtp():
+                    print(f"\n{Fore.RED}[!] All SMTP servers permanently dead. Stopping.{Style.RESET_ALL}")
+                    break
+
                 batch = self._db.fetch_pending_batch(self.BATCH_SIZE)
                 if not batch:
                     break
@@ -151,16 +171,23 @@ class MailerCore:
                         break
                     lead_id, email = futures[future]
                     try:
-                        success = future.result(timeout=120)
-                        if success:
-                            self._db.mark_sent(lead_id)
-                            self._ui.record_sent()
-                        else:
-                            self._db.mark_failed(lead_id, "send returned False")
-                            self._ui.record_failed()
+                        result = future.result(timeout=120)
                     except Exception as exc:
-                        self._db.mark_failed(lead_id, str(exc)[:500])
-                        self._ui.record_failed()
+                        result = SendResult(SendResult.TRANSIENT, str(exc)[:500])
+
+                    self._handle_result(lead_id, result)
+
+    def _handle_result(self, lead_id: int, result: SendResult) -> None:
+        if result.is_success:
+            self._db.mark_sent(lead_id)
+            self._ui.record_sent()
+
+        elif result.is_fatal:
+            self._db.mark_failed(lead_id, result.error)
+            self._ui.record_failed()
+
+        else:
+            self._db.requeue_pending(lead_id)
 
     def _pick_from_name_template(self) -> str:
         if self._content.has_names:
@@ -172,13 +199,13 @@ class MailerCore:
             return self._content.get_random_subject()
         return self._config.subject
 
-    def _send_one(self, lead_id: int, email: str) -> bool:
+    def _send_one(self, lead_id: int, email: str) -> SendResult:
         if self._shutdown.is_set():
-            return False
+            return SendResult(SendResult.TRANSIENT, "Shutdown")
 
         account = self._smtp_pool.acquire()
         if account is None:
-            return False
+            return SendResult(SendResult.TRANSIENT, "No SMTP available")
 
         from_email = self._config.from_email or account.user
 
@@ -205,13 +232,20 @@ class MailerCore:
             attachment=attachment,
         )
 
-        success = self._worker.send(from_email, email, raw_msg, account=account)
+        result = self._worker.send(from_email, email, raw_msg, account=account)
 
-        delay = self._worker.get_delay(email)
-        if delay > 0 and not self._shutdown.is_set():
-            time.sleep(delay)
+        if result.is_transient and not result.is_success:
+            self._db.suspend_smtp(
+                account.key, account.fail_count,
+                account.suspended_until, result.error,
+            )
 
-        return success
+        if result.is_success:
+            delay = self._worker.get_delay(email)
+            if delay > 0 and not self._shutdown.is_set():
+                time.sleep(delay)
+
+        return result
 
     def _send_test_emails(self, recipients: list) -> None:
         for recipient in recipients:
@@ -219,11 +253,11 @@ class MailerCore:
             if not recipient:
                 continue
             try:
-                success = self._send_one(-1, recipient)
-                if success:
+                result = self._send_one(-1, recipient)
+                if result.is_success:
                     print(f"    {Fore.GREEN}[OK]{Style.RESET_ALL} Test sent to {recipient}")
                 else:
-                    print(f"    {Fore.RED}[FAIL]{Style.RESET_ALL} Test to {recipient}")
+                    print(f"    {Fore.RED}[FAIL]{Style.RESET_ALL} Test to {recipient}: {result.error}")
             except Exception as exc:
                 print(f"    {Fore.RED}[FAIL]{Style.RESET_ALL} Test to {recipient}: {exc}")
 
