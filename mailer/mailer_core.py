@@ -83,6 +83,7 @@ class MailerCore:
             logos_dir=self._config.logos_dir,
             mode=self._config.image_mode,
             quantize=self._config.image_quantize,
+            downscale=self._config.image_downscale,
         )
         self._redirect_mgr = RedirectManager(
             target_url=self._config.redirect_target_url,

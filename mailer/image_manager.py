@@ -40,6 +40,7 @@ class ImageManager:
         logos_dir: str = "logos",
         mode: str = "cloudinary",
         quantize: bool = True,
+        downscale: bool = True,
     ):
         self._cloud_name = cloud_name
         self._api_key = api_key
@@ -52,6 +53,7 @@ class ImageManager:
         self._fmt: str = "PNG"
         self._logo_width: int = 0
         self._quantize: bool = quantize
+        self._downscale: bool = downscale
 
         if self._mode == "cloudinary":
             self._enabled = enabled and bool(cloud_name and api_key and api_secret)
@@ -177,10 +179,9 @@ class ImageManager:
         elif base_img.mode not in ("RGB", "RGBA"):
             base_img = base_img.convert("RGB")
 
-        MAX_WIDTH = 220
-        if base_img.width > MAX_WIDTH:
-            ratio = MAX_WIDTH / base_img.width
-            new_size = (MAX_WIDTH, max(1, round(base_img.height * ratio)))
+        if self._downscale and base_img.width > 220:
+            ratio = 220 / base_img.width
+            new_size = (220, max(1, round(base_img.height * ratio)))
             base_img = base_img.resize(new_size, Image.LANCZOS)
 
         has_transparency = False
