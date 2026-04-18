@@ -179,9 +179,18 @@ class SMTPPool:
 
     def get_warmup_delay(self, account: SMTPAccount) -> float:
         with self._lock:
-            if not account.warmup_done:
-                return self._warmup_delay
-        return 0.0
+            if account.warmup_done:
+                return 0.0
+            now = time.monotonic()
+            if account.last_used == 0.0:
+                account.last_used = now
+                return 0.0
+            ready_at = account.last_used + self._warmup_delay
+            if now >= ready_at:
+                account.last_used = now
+                return 0.0
+            account.last_used = ready_at
+            return ready_at - now
 
     def next_available_in(self) -> float:
         with self._lock:

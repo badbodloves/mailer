@@ -168,7 +168,7 @@ class MailerCore:
             self._redirect_mgr.wait_ready()
             print(f"  Redirect pool:    {Fore.GREEN}{self._redirect_mgr.pool_size} links (rotate every 10){Style.RESET_ALL}")
 
-        thread_count = min(self._config.thread_count, self._smtp_pool.size * 5)
+        thread_count = min(self._config.thread_count, self._smtp_pool.size * 2)
         thread_count = max(thread_count, 1)
         print(f"  Threads: {Fore.GREEN}{thread_count}{Style.RESET_ALL}")
 
