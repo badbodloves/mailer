@@ -284,7 +284,9 @@ class MailerCore:
         if self._image_mgr.enabled and self._image_mgr.mode == "cid" and "{Logo}" in html_body:
             cid_result = self._image_mgr.get_cid_logo()
             if cid_result:
-                img_bytes, cid, mime_type = cid_result
+                img_bytes, cid_local, mime_type = cid_result
+                domain = from_email.split("@")[1] if "@" in from_email else "mail"
+                cid = f"{cid_local}@{domain}"
                 html_body = self._content.resolve_logo_tag(
                     html_body, f"cid:{cid}", self._image_mgr.logo_width,
                 )
