@@ -22,22 +22,7 @@ class MIMEBuilder:
             value.encode("ascii")
             return value
         except UnicodeEncodeError:
-            return Header(value, "utf-8").encode()
-
-    @staticmethod
-    def _fold_header(name: str, value: str) -> str:
-        line = f"{name}: {value}"
-        if len(line) <= 78:
-            return line
-        chunks = []
-        while len(line) > 78:
-            split = line.rfind(" ", 0, 78)
-            if split <= len(name) + 2:
-                split = 78
-            chunks.append(line[:split])
-            line = " " + line[split:].lstrip()
-        chunks.append(line)
-        return "\r\n".join(chunks)
+            return Header(value, "utf-8", maxlinelen=998).encode()
 
     @staticmethod
     def generate_message_id(sender_domain: str) -> str:
@@ -114,10 +99,10 @@ class MIMEBuilder:
     ) -> list:
         return [
             f"Date: {date_str}",
-            cls._fold_header("From", from_header),
+            f"From: {from_header}",
             f"To: {to_email}",
             f"Message-ID: {message_id}",
-            cls._fold_header("Subject", subject),
+            f"Subject: {subject}",
             "Auto-Submitted: auto-generated",
             "MIME-Version: 1.0",
             f"Content-Type: {content_type}",
