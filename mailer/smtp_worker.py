@@ -373,4 +373,4 @@ class SMTPWorker:
             base = self._provider_delay
         else:
             base = self._normal_delay
-        return max(0.0, base + random.uniform(-0.1, 0.2))
+        return max(0.05, random.gauss(base, base * 0.3))

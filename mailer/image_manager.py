@@ -134,10 +134,24 @@ class ImageManager:
             if img.mode not in ("RGB", "RGBA"):
                 img = img.convert("RGB")
 
+            rng = random.Random(variant_id)
+
+            w, h = img.size
+            scale = rng.uniform(0.98, 1.02)
+            new_w = max(1, round(w * scale))
+            new_h = max(1, round(h * scale))
+            if (new_w, new_h) != (w, h):
+                img = img.resize((new_w, new_h), Image.LANCZOS)
+
+            shift_x = rng.choice([-1, 0, 1])
+            shift_y = rng.choice([-1, 0, 1])
+            if shift_x or shift_y:
+                from PIL import ImageChops
+                img = ImageChops.offset(img, shift_x, shift_y)
+
             pixels = img.load()
             w, h = img.size
             is_rgba = img.mode == "RGBA"
-            rng = random.Random(variant_id)
 
             n_mods = rng.randint(3, 6)
             for _ in range(n_mods):
