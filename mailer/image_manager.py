@@ -170,6 +170,12 @@ class ImageManager:
         elif base_img.mode not in ("RGB", "RGBA"):
             base_img = base_img.convert("RGB")
 
+        MAX_WIDTH = 220
+        if base_img.width > MAX_WIDTH:
+            ratio = MAX_WIDTH / base_img.width
+            new_size = (MAX_WIDTH, max(1, round(base_img.height * ratio)))
+            base_img = base_img.resize(new_size, Image.LANCZOS)
+
         has_transparency = False
         if base_img.mode == "RGBA":
             alpha = base_img.getchannel("A")
@@ -178,9 +184,16 @@ class ImageManager:
                 base_img = base_img.convert("RGB")
 
         w, h = base_img.size
-        trans_str = "RGBA" if has_transparency else "P (palette)"
-        print(f"  CID logos: generating {NUM_TEMPLATES} templates from "
-              f"{os.path.basename(base_path)} [{trans_str}] ...")
+        if self._fmt == "PNG":
+            if has_transparency:
+                mode_str = "P+alpha (quantized)"
+            else:
+                mode_str = "P (palette)"
+        else:
+            mode_str = base_img.mode
+
+        print(f"  CID logos: {w}x{h}px, mode={mode_str}, "
+              f"generating {NUM_TEMPLATES} templates ...")
 
         for i in range(NUM_TEMPLATES):
             rng = random.Random(i)
@@ -191,9 +204,16 @@ class ImageManager:
             if sx or sy:
                 from PIL import ImageChops
                 variant = ImageChops.offset(variant, sx, sy)
-            if self._fmt == "PNG" and not has_transparency:
-                variant = variant.quantize(colors=256, method=Image.Quantize.MEDIANCUT)
+            if self._fmt == "PNG":
+                try:
+                    variant = variant.quantize(
+                        colors=256,
+                        method=Image.Quantize.MEDIANCUT,
+                    )
+                except Exception:
+                    pass
             self._templates.append(variant)
+
 
 
         print(f"  CID logos: {len(self._templates)} templates ready")
