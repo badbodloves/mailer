@@ -22,7 +22,7 @@ class MIMEBuilder:
             value.encode("ascii")
             return value
         except UnicodeEncodeError:
-            return Header(value, "utf-8", maxlinelen=76).encode()
+            return Header(value, "utf-8", maxlinelen=998).encode()
 
     @staticmethod
     def generate_message_id(sender_domain: str) -> str:
