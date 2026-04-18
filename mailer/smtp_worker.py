@@ -229,6 +229,9 @@ class SMTPPool:
 
 
 class SMTPWorker:
+    MAX_CONN_SENDS = 50
+    MAX_CONN_AGE = 300.0
+
     def __init__(
         self,
         pool: SMTPPool,
@@ -238,6 +241,56 @@ class SMTPWorker:
         self._pool = pool
         self._normal_delay = normal_delay
         self._provider_delay = provider_delay
+        self._local = threading.local()
+
+    def _get_connection(self, account: SMTPAccount) -> Optional[smtplib.SMTP]:
+        lc = self._local
+        if not hasattr(lc, "server") or lc.server is None:
+            return None
+        if lc.account_key != account.key:
+            self._drop_connection()
+            return None
+        if lc.send_count >= self.MAX_CONN_SENDS:
+            self._drop_connection()
+            return None
+        if time.monotonic() - lc.conn_time > self.MAX_CONN_AGE:
+            self._drop_connection()
+            return None
+        try:
+            code, _ = lc.server.noop()
+            if code != 250:
+                self._drop_connection()
+                return None
+            return lc.server
+        except Exception:
+            self._drop_connection()
+            return None
+
+    def _store_connection(
+        self, server: smtplib.SMTP, account: SMTPAccount
+    ) -> None:
+        lc = self._local
+        lc.server = server
+        lc.account_key = account.key
+        lc.send_count = 0
+        lc.conn_time = time.monotonic()
+
+    def _drop_connection(self) -> None:
+        lc = self._local
+        if hasattr(lc, "server") and lc.server:
+            try:
+                lc.server.quit()
+            except Exception:
+                try:
+                    lc.server.close()
+                except Exception:
+                    pass
+            lc.server = None
+
+    def _bump_send_count(self) -> None:
+        lc = self._local
+        if hasattr(lc, "send_count"):
+            lc.send_count += 1
 
     def send(
         self,
@@ -255,18 +308,22 @@ class SMTPWorker:
         if warmup_wait > 0:
             time.sleep(warmup_wait)
 
-        server: Optional[smtplib.SMTP] = None
+        server = self._get_connection(account)
+
         try:
-            server = self._pool.connect(account)
+            if server is None:
+                server = self._pool.connect(account)
+                self._store_connection(server, account)
+
             server.sendmail(from_email, [to_email], raw_message)
+            self._bump_send_count()
             self._pool.record_send(account)
             return SendResult(SendResult.SUCCESS)
 
         except smtplib.SMTPAuthenticationError as exc:
+            self._drop_connection()
             self._pool.mark_dead(account, f"Auth failed: {exc}")
-            logger.error(
-                "[%d] AUTH FAIL %s: %s", exc.smtp_code, account.key, exc
-            )
+            logger.error("[%d] AUTH FAIL %s: %s", exc.smtp_code, account.key, exc)
             return SendResult(SendResult.TRANSIENT, str(exc), exc.smtp_code)
 
         except smtplib.SMTPRecipientsRefused as exc:
@@ -275,40 +332,39 @@ class SMTPWorker:
             logger.error("[RCPT] %s via %s: %s", to_email, account.key, detail)
             if all(c in FATAL_RECIPIENT_CODES for c in codes):
                 return SendResult(SendResult.FATAL, detail, codes[0] if codes else 0)
+            self._drop_connection()
             self._pool.suspend(account, detail)
-            return SendResult(
-                SendResult.TRANSIENT, detail, codes[0] if codes else 0
-            )
+            return SendResult(SendResult.TRANSIENT, detail, codes[0] if codes else 0)
+
+        except smtplib.SMTPServerDisconnected as exc:
+            self._drop_connection()
+            detail = f"Disconnected: {exc}"
+            logger.error("DISCONN %s: %s", account.key, exc)
+            self._pool.suspend(account, detail)
+            return SendResult(SendResult.TRANSIENT, detail)
 
         except smtplib.SMTPResponseException as exc:
+            self._drop_connection()
             detail = f"[{exc.smtp_code}] {exc.smtp_error}"
-            logger.error(
-                "[%d] %s via %s: %s",
-                exc.smtp_code, to_email, account.key, exc.smtp_error,
-            )
+            logger.error("[%d] %s via %s: %s", exc.smtp_code, to_email, account.key, exc.smtp_error)
             if exc.smtp_code in FATAL_RECIPIENT_CODES:
                 return SendResult(SendResult.FATAL, detail, exc.smtp_code)
             self._pool.suspend(account, detail)
             return SendResult(SendResult.TRANSIENT, detail, exc.smtp_code)
 
         except ssl.SSLError as exc:
+            self._drop_connection()
             detail = f"SSL: {exc}"
             logger.error("SSL %s: %s", account.key, exc)
             self._pool.suspend(account, detail)
             return SendResult(SendResult.TRANSIENT, detail)
 
         except OSError as exc:
+            self._drop_connection()
             detail = f"Connection: {exc}"
             logger.error("CONN %s: %s", account.key, exc)
             self._pool.suspend(account, detail)
             return SendResult(SendResult.TRANSIENT, detail)
-
-        finally:
-            if server:
-                try:
-                    server.quit()
-                except Exception:
-                    pass
 
     def get_delay(self, to_email: str) -> float:
         domain = to_email.split("@")[1].lower() if "@" in to_email else ""

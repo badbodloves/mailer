@@ -6,20 +6,11 @@ import html as html_module
 from typing import Optional, List
 
 
+_INNER_PIPE_RE = re.compile(r"\{([^{}]*\|[^{}]*)\}")
+_BARE_GROUP_RE = re.compile(r"\{([^{}|]*\s[^{}|]*)\}")
+
+
 class ContentEngine:
-    """Pragmatic content processor.
-
-    Tag resolution order (applied in process()):
-      1. OR-spintax: {A|B|C} -> random choice
-      2. Placeholders: {email}, {email_user}, {domain}
-      3. Special file tags: {subject} -> subjects.txt, {from_name} -> names.txt
-      4. Generic file injection: {anyword} -> spintaxes/anyword.txt (random line)
-      5. RANDSTR macro: [RANDSTR:len:charset:case]
-
-    If a tag has no corresponding file or spec, it is left untouched.
-    """
-
-    _SPINTAX_RE = re.compile(r"\{([^{}]*\|[^{}]*)\}")
     _RANDSTR_RE = re.compile(r"\[RANDSTR:(\d+):([a-zA-Z0-9\-]+):(\w+)\]")
     _TAG_RE = re.compile(r"\{([A-Za-z0-9_\-]+)\}")
 
@@ -51,6 +42,7 @@ class ContentEngine:
         self._html_files: List[str] = []
         self._attachment_files: List[str] = []
         self._file_cache: dict = {}
+        self._logo_urls: List[str] = []
         self._load_html_and_attachments()
 
     def _load_html_and_attachments(self) -> None:
@@ -66,6 +58,9 @@ class ContentEngine:
                 for f in os.listdir(self._attachments_dir)
                 if os.path.isfile(os.path.join(self._attachments_dir, f))
             ]
+
+    def set_logo_urls(self, urls: List[str]) -> None:
+        self._logo_urls = list(urls)
 
     @property
     def has_attachments(self) -> bool:
@@ -109,21 +104,24 @@ class ContentEngine:
         return random.choice(lines) if lines else ""
 
     def process(self, template: str, email: str) -> str:
-        text = self._resolve_or_spintax(template)
+        text = self._resolve_spintax(template)
         text = self._resolve_placeholders(text, email)
+        text = self._resolve_spintax(text)
         text = self._resolve_special(text)
         text = self._resolve_file_injection(text)
         text = self._resolve_randstr(text)
         return text
 
-    def _resolve_or_spintax(self, text: str) -> str:
-        for _ in range(10):
-            new_text = self._SPINTAX_RE.sub(
+    @staticmethod
+    def _resolve_spintax(text: str) -> str:
+        for _ in range(50):
+            new_text = _INNER_PIPE_RE.sub(
                 lambda m: random.choice(m.group(1).split("|")), text
             )
             if new_text == text:
                 break
             text = new_text
+        text = _BARE_GROUP_RE.sub(r"\1", text)
         return text
 
     @staticmethod
@@ -140,14 +138,11 @@ class ContentEngine:
             text = text.replace("{subject}", self.get_random_subject())
         if "{from_name}" in text:
             text = text.replace("{from_name}", self.get_random_name())
+        if "{Logo}" in text and self._logo_urls:
+            text = text.replace("{Logo}", random.choice(self._logo_urls))
         return text
 
     def _resolve_file_injection(self, text: str) -> str:
-        """Replace every {tag} with a random line from spintaxes/tag.txt.
-
-        Reserved tags ({email}, {email_user}, {domain}) are left to the
-        placeholder resolver. Tags without a matching file stay untouched.
-        """
         def replacer(match: re.Match) -> str:
             tag = match.group(1)
             if tag in self._RESERVED:

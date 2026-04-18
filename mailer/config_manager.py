@@ -111,5 +111,26 @@ class ConfigManager:
         return raw.lower() in ("true", "1", "yes")
 
     @property
+    def image_api_enabled(self) -> bool:
+        raw = self.get("IMAGE_API", "enabled", fallback="false")
+        return raw.lower() in ("true", "1", "yes")
+
+    @property
+    def cloudinary_cloud_name(self) -> str:
+        return self.get("CLOUDINARY", "cloud_name")
+
+    @property
+    def cloudinary_api_key(self) -> str:
+        return self.get("CLOUDINARY", "api_key")
+
+    @property
+    def cloudinary_api_secret(self) -> str:
+        return self.get("CLOUDINARY", "api_secret")
+
+    @property
+    def logos_dir(self) -> str:
+        return self.get("paths", "logos_dir", fallback="logos")
+
+    @property
     def db_path(self) -> str:
         return self.get("database", "db_path", fallback="mailer.db")

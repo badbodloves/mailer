@@ -11,6 +11,7 @@ from .content_engine import ContentEngine
 from .mime_builder import MIMEBuilder
 from .smtp_worker import SMTPPool, SMTPWorker, SendResult
 from .antifingerprint import AntiFingerprintEngine
+from .image_manager import ImageManager
 from .ui_console import UIConsole
 
 try:
@@ -53,6 +54,13 @@ class MailerCore:
         )
         self._antifingerprint = AntiFingerprintEngine(
             enable_classes=self._config.antifingerprint_classes,
+        )
+        self._image_mgr = ImageManager(
+            enabled=self._config.image_api_enabled,
+            cloud_name=self._config.cloudinary_cloud_name,
+            api_key=self._config.cloudinary_api_key,
+            api_secret=self._config.cloudinary_api_secret,
+            logos_dir=self._config.logos_dir,
         )
         self._ui = UIConsole()
 
@@ -112,6 +120,11 @@ class MailerCore:
         if total_pending == 0:
             print(f"\n{Fore.YELLOW}[*] No pending leads. Delete {self._config.db_path} to restart.{Style.RESET_ALL}")
             return
+
+        if self._image_mgr.enabled:
+            self._image_mgr.prepare(total_pending)
+            self._content.set_logo_urls(self._image_mgr.urls)
+            print(f"  Image pool:       {Fore.GREEN}{self._image_mgr.pool_size} URLs{Style.RESET_ALL}")
 
         thread_count = min(self._config.thread_count, self._smtp_pool.size * 5)
         thread_count = max(thread_count, 1)

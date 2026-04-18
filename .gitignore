@@ -12,3 +12,6 @@ attachments/*
 !attachments/.gitkeep
 spintaxes/*
 !spintaxes/.gitkeep
+logos/*
+!logos/.gitkeep
+image_pool.json
