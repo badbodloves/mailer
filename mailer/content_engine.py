@@ -149,7 +149,8 @@ class ContentEngine:
         alt = self._get_random_alt()
         tag = (
             f'<img src="{src}" width="{width}" '
-            f'alt="{alt}" style="display:block;border:0;">'
+            f'alt="{alt}" style="display:block;border:0;'
+            f'max-height:80px;width:auto;">'
         )
         return text.replace("{Logo}", tag)
 
