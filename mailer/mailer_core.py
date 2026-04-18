@@ -82,6 +82,7 @@ class MailerCore:
             api_secret=self._config.cloudinary_api_secret,
             logos_dir=self._config.logos_dir,
             mode=self._config.image_mode,
+            quantize=self._config.image_quantize,
         )
         self._redirect_mgr = RedirectManager(
             target_url=self._config.redirect_target_url,

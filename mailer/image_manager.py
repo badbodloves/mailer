@@ -39,6 +39,7 @@ class ImageManager:
         api_secret: str = "",
         logos_dir: str = "logos",
         mode: str = "cloudinary",
+        quantize: bool = True,
     ):
         self._cloud_name = cloud_name
         self._api_key = api_key
@@ -50,6 +51,7 @@ class ImageManager:
         self._templates: List[Image.Image] = []
         self._fmt: str = "PNG"
         self._logo_width: int = 0
+        self._quantize: bool = quantize
 
         if self._mode == "cloudinary":
             self._enabled = enabled and bool(cloud_name and api_key and api_secret)
@@ -190,11 +192,10 @@ class ImageManager:
 
         w, h = base_img.size
         self._logo_width = w
-        if self._fmt == "PNG":
-            if has_transparency:
-                mode_str = "P+alpha (quantized)"
-            else:
-                mode_str = "P (palette)"
+        if self._fmt == "PNG" and self._quantize:
+            mode_str = "P+alpha (quantized)" if has_transparency else "P (palette)"
+        elif self._fmt == "PNG":
+            mode_str = "RGBA (raw)" if has_transparency else "RGB (raw)"
         else:
             mode_str = base_img.mode
 
@@ -210,12 +211,10 @@ class ImageManager:
             if sx or sy:
                 from PIL import ImageChops
                 variant = ImageChops.offset(variant, sx, sy)
-            if self._fmt == "PNG":
+            if self._fmt == "PNG" and self._quantize:
                 try:
-                    variant = variant.quantize(
-                        colors=256,
-                        method=Image.Quantize.MEDIANCUT,
-                    )
+                    method = Image.Quantize.FASTOCTREE if variant.mode == "RGBA" else Image.Quantize.MEDIANCUT
+                    variant = variant.quantize(colors=256, method=method)
                 except Exception:
                     pass
             self._templates.append(variant)
