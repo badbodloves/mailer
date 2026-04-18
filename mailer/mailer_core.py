@@ -79,21 +79,34 @@ class MailerCore:
         print(f"  SMTP accounts: {Fore.GREEN}{self._smtp_pool.size}{Style.RESET_ALL} live / {self._smtp_pool.total} total")
 
         if self._content.has_names:
-            print(f"  Names pool:    {Fore.GREEN}loaded{Style.RESET_ALL}")
+            print(f"  Names pool:       {Fore.GREEN}loaded{Style.RESET_ALL}")
+        else:
+            print(f"  Names pool:       {Fore.YELLOW}config fallback{Style.RESET_ALL}")
         if self._content.has_subjects:
-            print(f"  Subjects pool: {Fore.GREEN}loaded{Style.RESET_ALL}")
+            print(f"  Subjects pool:    {Fore.GREEN}loaded{Style.RESET_ALL}")
+        else:
+            print(f"  Subjects pool:    {Fore.YELLOW}config fallback{Style.RESET_ALL}")
+        if self._content.has_attachments:
+            print(f"  Attachments:      {Fore.GREEN}enabled{Style.RESET_ALL}")
+        else:
+            print(f"  Attachments:      {Fore.YELLOW}disabled (no files){Style.RESET_ALL}")
 
         self._db.reset_in_progress()
-        loaded = self._db.load_leads(self._config.leads_file)
+        newly_loaded = self._db.load_leads(self._config.leads_file)
         counts = self._db.count_by_state()
         total_pending = counts.get(DBManager.STATE_PENDING, 0)
         total_all = self._db.total_count()
-        print(f"  Leads DB: {total_all} total, {Fore.CYAN}{total_pending} pending{Style.RESET_ALL}, {counts.get(DBManager.STATE_SENT, 0)} sent, {counts.get(DBManager.STATE_FAILED, 0)} failed")
-        if loaded:
-            print(f"  New leads loaded from file: {loaded}")
+        print(
+            f"  Leads DB: {total_all} total, "
+            f"{Fore.CYAN}{total_pending} pending{Style.RESET_ALL}, "
+            f"{counts.get(DBManager.STATE_SENT, 0)} sent, "
+            f"{counts.get(DBManager.STATE_FAILED, 0)} failed"
+        )
+        if newly_loaded:
+            print(f"  New leads appended this run: {newly_loaded}")
 
         if total_pending == 0:
-            print(f"\n{Fore.YELLOW}[*] No pending leads to process.{Style.RESET_ALL}")
+            print(f"\n{Fore.YELLOW}[*] No pending leads. Delete {self._config.db_path} to restart.{Style.RESET_ALL}")
             return
 
         thread_count = min(self._config.thread_count, self._smtp_pool.size * 5)
@@ -149,6 +162,16 @@ class MailerCore:
                         self._db.mark_failed(lead_id, str(exc)[:500])
                         self._ui.record_failed()
 
+    def _pick_from_name_template(self) -> str:
+        if self._content.has_names:
+            return self._content.get_random_name()
+        return self._config.from_name
+
+    def _pick_subject_template(self) -> str:
+        if self._content.has_subjects:
+            return self._content.get_random_subject()
+        return self._config.subject
+
     def _send_one(self, lead_id: int, email: str) -> bool:
         if self._shutdown.is_set():
             return False
@@ -157,26 +180,20 @@ class MailerCore:
         if account is None:
             return False
 
-        from_email = self._config.from_email
-        if not from_email:
-            from_email = account.user
+        from_email = self._config.from_email or account.user
 
-        from_name = self._content.process(self._config.from_name, email)
-
-        if self._content.has_subjects:
-            subject_template = self._content.get_random_subject()
-        else:
-            subject_template = self._config.subject
-        subject = self._content.process(subject_template, email)
+        from_name = self._content.process(self._pick_from_name_template(), email)
+        subject = self._content.process(self._pick_subject_template(), email)
 
         html_template = self._content.get_random_html()
         if html_template is None:
             html_template = "<p>Hello {email_user},</p><p>This is your notification.</p>"
-
         html_body = self._content.process(html_template, email)
         plain_body = ContentEngine.html_to_plaintext(html_body)
 
-        attachment = self._content.get_random_attachment()
+        attachment = None
+        if self._content.has_attachments:
+            attachment = self._content.get_random_attachment()
 
         raw_msg = MIMEBuilder.build_email(
             from_name=from_name,

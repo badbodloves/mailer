@@ -9,6 +9,12 @@ from typing import List, Optional
 from .dns_cache import DNSCache
 from .utils import resolve_txt_paths
 
+try:
+    import certifi
+    HAS_CERTIFI = True
+except ImportError:
+    HAS_CERTIFI = False
+
 logger = logging.getLogger("mailer.smtp")
 
 STRICT_PROVIDERS = frozenset({
@@ -53,8 +59,7 @@ class SMTPPool:
         self._load(smtp_path)
 
     def _load(self, path: str) -> None:
-        file_paths = resolve_txt_paths(path)
-        for fpath in file_paths:
+        for fpath in resolve_txt_paths(path):
             self._parse_smtp_file(fpath)
 
     def _parse_smtp_file(self, path: str) -> None:
@@ -117,22 +122,41 @@ class SMTPPool:
         return 0.0
 
     def _build_ssl_context(self) -> ssl.SSLContext:
-        ctx = ssl.create_default_context()
+        """Build an SSL context.
+
+        - ignore_ssl_errors=True -> permissive context: no hostname check,
+          no certificate verification (CERT_NONE). No handshake errors
+          for self-signed / non-conformant server certificates.
+        - ignore_ssl_errors=False -> strict validation using certifi's CA
+          bundle (if installed) or the system trust store as fallback.
+        """
         if self._ignore_ssl_errors:
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
             ctx.check_hostname = False
             ctx.verify_mode = ssl.CERT_NONE
-        return ctx
+            return ctx
+
+        if HAS_CERTIFI:
+            return ssl.create_default_context(cafile=certifi.where())
+        return ssl.create_default_context()
 
     def connect(self, account: SMTPAccount) -> smtplib.SMTP:
         self._dns_cache.resolve_a(account.host)
         ctx = self._build_ssl_context()
+
         if account.port == 465:
-            server = smtplib.SMTP_SSL(account.host, account.port, timeout=self._timeout, context=ctx)
+            server = smtplib.SMTP_SSL(
+                account.host, account.port,
+                timeout=self._timeout, context=ctx,
+            )
+            server.ehlo()
         else:
             server = smtplib.SMTP(account.host, account.port, timeout=self._timeout)
             server.ehlo()
-            server.starttls(context=ctx)
-            server.ehlo()
+            if server.has_extn("starttls"):
+                server.starttls(context=ctx)
+                server.ehlo()
+
         server.login(account.user, account.password)
         return server
 
@@ -173,6 +197,9 @@ class SMTPWorker:
         except smtplib.SMTPAuthenticationError as exc:
             self._pool.mark_dead(account, f"Auth failed: {exc}")
             logger.error("AUTH FAIL %s: %s", account.user, exc)
+            return False
+        except ssl.SSLError as exc:
+            logger.error("SSL error %s@%s: %s", account.user, account.host, exc)
             return False
         except (smtplib.SMTPException, OSError) as exc:
             logger.error("SMTP error %s: %s", account.user, exc)
