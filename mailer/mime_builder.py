@@ -1,9 +1,9 @@
-import os
-import random
+import mimetypes
+import secrets
 import time
 import quopri
 import base64
-from email.utils import formatdate, formataddr
+from email.utils import formatdate, formataddr, encode_rfc2231
 from email.header import Header
 from typing import Optional, Tuple
 
@@ -26,14 +26,18 @@ class MIMEBuilder:
 
     @staticmethod
     def generate_message_id(sender_domain: str) -> str:
+        if not sender_domain or "." not in sender_domain:
+            raise ValueError(
+                f"Invalid sender domain for Message-ID: {sender_domain!r}"
+            )
         now = time.strftime("%Y%m%dT%H%M%S", time.gmtime())
-        rand_hex = "%032x" % random.getrandbits(128)
+        rand_hex = secrets.token_hex(16)
         return f"<{now}.Z.{rand_hex}@{sender_domain}>"
 
     @staticmethod
     def generate_boundary() -> str:
         ts = int(time.time() * 1000)
-        rand_hex = "%016x" % random.getrandbits(64)
+        rand_hex = secrets.token_hex(8)
         return f"----=_Part_{ts}_{rand_hex}"
 
     @classmethod
@@ -52,9 +56,14 @@ class MIMEBuilder:
         to_email = cls._sanitize(to_email)
         subject = cls._sanitize(subject)
 
-        sender_domain = from_email.split("@")[1] if "@" in from_email else "localhost"
+        sender_domain = from_email.split("@")[1] if "@" in from_email else ""
+        if not sender_domain or "." not in sender_domain:
+            raise ValueError(
+                f"Cannot extract valid domain from From address: {from_email!r}"
+            )
+
         message_id = cls.generate_message_id(sender_domain)
-        date_str = formatdate(localtime=True)
+        date_str = formatdate(usegmt=True)
         from_header = formataddr((from_name, from_email))
         subject_encoded = cls._encode_header_value(subject)
 
@@ -124,6 +133,17 @@ class MIMEBuilder:
         att_filename, att_data = attachment
         att_filename = cls._sanitize(att_filename)
 
+        mime_type = mimetypes.guess_type(att_filename)[0] or "application/octet-stream"
+
+        try:
+            att_filename.encode("ascii")
+            name_param = f'name="{att_filename}"'
+            disp_param = f'filename="{att_filename}"'
+        except UnicodeEncodeError:
+            encoded = encode_rfc2231(att_filename, "utf-8")
+            name_param = f"name*={encoded}"
+            disp_param = f"filename*={encoded}"
+
         att_b64 = base64.b64encode(att_data).decode("ascii")
         att_b64_lines = "\r\n".join(
             att_b64[i : i + 76] for i in range(0, len(att_b64), 76)
@@ -153,8 +173,8 @@ class MIMEBuilder:
             f"--{alt_boundary}--",
             "",
             f"--{mixed_boundary}",
-            f'Content-Type: application/octet-stream; name="{att_filename}"',
-            f'Content-Disposition: attachment; filename="{att_filename}"',
+            f"Content-Type: {mime_type}; {name_param}",
+            f"Content-Disposition: attachment; {disp_param}",
             "Content-Transfer-Encoding: base64",
             "",
             att_b64_lines,

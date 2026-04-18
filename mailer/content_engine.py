@@ -14,7 +14,7 @@ class ContentEngine:
     _RANDSTR_RE = re.compile(r"\[RANDSTR:(\d+):([a-zA-Z0-9\-]+):(\w+)\]")
     _TAG_RE = re.compile(r"\{([A-Za-z0-9_\-]+)\}")
 
-    _RESERVED = frozenset({"email", "email_user", "domain"})
+    _RESERVED = frozenset({"email", "email_user", "domain", "RedirectLink"})
 
     CHARSET_MAP = {
         "a-z": string.ascii_lowercase,

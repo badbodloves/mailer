@@ -136,5 +136,18 @@ class ConfigManager:
         return self.get("paths", "alt_texts_file")
 
     @property
+    def redirect_enabled(self) -> bool:
+        raw = self.get("redirect", "enabled", fallback="false")
+        return raw.lower() in ("true", "1", "yes")
+
+    @property
+    def redirect_target_url(self) -> str:
+        return self.get("redirect", "target_url")
+
+    @property
+    def redirect_db_path(self) -> str:
+        return self.get("redirect", "db_path", fallback="redirects.db")
+
+    @property
     def db_path(self) -> str:
         return self.get("database", "db_path", fallback="mailer.db")

@@ -12,6 +12,7 @@ from .mime_builder import MIMEBuilder
 from .smtp_worker import SMTPPool, SMTPWorker, SendResult
 from .antifingerprint import AntiFingerprintEngine
 from .image_manager import ImageManager
+from .redirect_manager import RedirectManager
 from .ui_console import UIConsole
 
 try:
@@ -22,6 +23,18 @@ except ImportError:
             return ""
     Fore = _D()
     Style = _D()
+
+
+class _AtomicCounter:
+    def __init__(self):
+        self._value = 0
+        self._lock = threading.Lock()
+
+    def next(self) -> int:
+        with self._lock:
+            v = self._value
+            self._value += 1
+            return v
 
 
 class MailerCore:
@@ -63,6 +76,12 @@ class MailerCore:
             api_secret=self._config.cloudinary_api_secret,
             logos_dir=self._config.logos_dir,
         )
+        self._redirect_mgr = RedirectManager(
+            target_url=self._config.redirect_target_url,
+            db_path=self._config.redirect_db_path,
+            enabled=self._config.redirect_enabled,
+        )
+        self._send_counter = _AtomicCounter()
         self._ui = UIConsole()
 
         signal.signal(signal.SIGINT, self._handle_signal)
@@ -127,6 +146,11 @@ class MailerCore:
             self._content.set_logo_urls(self._image_mgr.urls)
             print(f"  Image pool:       {Fore.GREEN}{self._image_mgr.pool_size} URLs{Style.RESET_ALL}")
 
+        if self._redirect_mgr.enabled:
+            self._redirect_mgr.prepare(total_pending)
+            self._redirect_mgr.wait_ready()
+            print(f"  Redirect pool:    {Fore.GREEN}{self._redirect_mgr.pool_size} links (rotate every 10){Style.RESET_ALL}")
+
         thread_count = min(self._config.thread_count, self._smtp_pool.size * 5)
         thread_count = max(thread_count, 1)
         print(f"  Threads: {Fore.GREEN}{thread_count}{Style.RESET_ALL}")
@@ -148,10 +172,6 @@ class MailerCore:
             self._db.close()
 
     def _wait_for_smtp(self) -> bool:
-        """Wait until at least one SMTP server is available.
-
-        Returns False if all SMTPs are permanently dead or shutdown requested.
-        """
         while not self._shutdown.is_set():
             if self._smtp_pool.available_count > 0:
                 return True
@@ -199,11 +219,9 @@ class MailerCore:
         if result.is_success:
             self._db.mark_sent(lead_id)
             self._ui.record_sent()
-
         elif result.is_fatal:
             self._db.mark_failed(lead_id, result.error)
             self._ui.record_failed()
-
         else:
             self._db.requeue_pending(lead_id)
 
@@ -234,6 +252,13 @@ class MailerCore:
         if html_template is None:
             html_template = "<p>Hello {email_user},</p><p>This is your notification.</p>"
         html_body = self._content.process(html_template, email)
+
+        send_idx = self._send_counter.next()
+        if self._redirect_mgr.enabled:
+            link = self._redirect_mgr.get_link(send_idx)
+            html_body = html_body.replace("{RedirectLink}", link)
+            subject = subject.replace("{RedirectLink}", link)
+
         html_body = self._antifingerprint.transform(html_body)
         plain_body = ContentEngine.html_to_plaintext(html_body)
 
