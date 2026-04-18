@@ -154,7 +154,9 @@ class ImageManager:
         base_path = logos[0]
         self._fmt = "PNG" if base_path.lower().endswith(".png") else "JPEG"
         base_img = Image.open(base_path)
-        if base_img.mode not in ("RGB", "RGBA"):
+        if base_img.mode == "P":
+            base_img = base_img.convert("RGBA")
+        elif base_img.mode not in ("RGB", "RGBA"):
             base_img = base_img.convert("RGB")
 
         w, h = base_img.size
@@ -224,7 +226,9 @@ class ImageManager:
     def _obfuscate_for_upload(image_path: str, variant_id: int) -> Optional[bytes]:
         try:
             img = Image.open(image_path)
-            if img.mode not in ("RGB", "RGBA"):
+            if img.mode == "P":
+                img = img.convert("RGBA")
+            elif img.mode not in ("RGB", "RGBA"):
                 img = img.convert("RGB")
             rng = random.Random(variant_id)
             w, h = img.size
