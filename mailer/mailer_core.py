@@ -97,6 +97,14 @@ class MailerCore:
     def stop(self) -> None:
         self._shutdown.set()
 
+    def force_stop(self) -> None:
+        self._shutdown.set()
+        self._db.reset_in_progress()
+
+    @property
+    def is_running(self) -> bool:
+        return not self._shutdown.is_set()
+
     @staticmethod
     def _setup_logging() -> None:
         handler = logging.FileHandler("smtp_errors.log", encoding="utf-8")
