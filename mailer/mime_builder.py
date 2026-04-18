@@ -134,12 +134,11 @@ class MIMEBuilder:
         for img_data, cid, mime_type in inline_images:
             b64 = base64.b64encode(img_data).decode("ascii")
             b64_lines = "\r\n".join(b64[i:i+76] for i in range(0, len(b64), 76))
-            ext = mime_type.split("/")[-1]
             lines += [
-                f'Content-Type: {mime_type}; name="logo.{ext}"',
+                f"Content-Type: {mime_type}",
                 "Content-Transfer-Encoding: base64",
                 f"Content-ID: <{cid}>",
-                f'Content-Disposition: inline; filename="logo.{ext}"',
+                "Content-Disposition: inline",
                 "", b64_lines, "",
             ]
         return lines

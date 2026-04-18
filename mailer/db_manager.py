@@ -241,6 +241,21 @@ class DBManager:
         cursor = conn.execute("SELECT COUNT(*) FROM leads")
         return cursor.fetchone()[0]
 
+    def retry_failed(self) -> int:
+        conn = self._get_conn()
+        cursor = conn.execute(
+            "SELECT COUNT(*) FROM leads WHERE state = ?", (self.STATE_FAILED,)
+        )
+        count = cursor.fetchone()[0]
+        if count > 0:
+            conn.execute(
+                "UPDATE leads SET state = ?, error_msg = NULL, "
+                "updated_at = CURRENT_TIMESTAMP WHERE state = ?",
+                (self.STATE_PENDING, self.STATE_FAILED),
+            )
+            conn.commit()
+        return count
+
     def requeue_pending(self, lead_id: int) -> None:
         conn = self._get_conn()
         conn.execute(

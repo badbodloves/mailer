@@ -182,12 +182,26 @@ class MailerCore:
         if test_recipients:
             print(f"\n{Fore.CYAN}[*] Sending test emails to {len(test_recipients)} recipients...{Style.RESET_ALL}")
             self._send_test_emails(test_recipients)
+            try:
+                answer = input(f"\n{Fore.YELLOW}[?] Test emails sent. Start mass send? [y/n]: {Style.RESET_ALL}").strip().lower()
+            except EOFError:
+                answer = "y"
+            if answer != "y":
+                print(f"{Fore.YELLOW}[*] Aborted by user.{Style.RESET_ALL}")
+                return
 
         print(f"\n{Fore.GREEN}[>] Starting mass send...{Style.RESET_ALL}\n")
         self._ui.start(total_pending)
 
         try:
             self._process_loop(thread_count)
+
+            retried = self._db.retry_failed()
+            if retried > 0 and not self._shutdown.is_set():
+                print(f"\n{Fore.CYAN}[*] Retrying {retried} failed leads...{Style.RESET_ALL}")
+                self._ui.stop()
+                self._ui.start(retried)
+                self._process_loop(thread_count)
         finally:
             self._ui.stop()
             self._ui.print_summary()
@@ -242,11 +256,26 @@ class MailerCore:
         if result.is_success:
             self._db.mark_sent(lead_id)
             self._ui.record_sent()
+            self._maybe_send_interval_test()
         elif result.is_fatal:
             self._db.mark_failed(lead_id, result.error)
             self._ui.record_failed()
         else:
             self._db.requeue_pending(lead_id)
+
+    def _maybe_send_interval_test(self) -> None:
+        interval = self._config.test_interval
+        if interval <= 0:
+            return
+        recipients = self._config.test_recipients
+        if not recipients:
+            return
+        count = self._send_counter._value
+        if count > 0 and count % interval == 0:
+            for r in recipients:
+                r = r.strip()
+                if r:
+                    self._send_one(-1, r)
 
     def _pick_from_name_template(self) -> str:
         if self._content.has_names:

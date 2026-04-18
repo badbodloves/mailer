@@ -106,6 +106,10 @@ class ConfigManager:
         return [r.strip() for r in raw.split(",") if r.strip()]
 
     @property
+    def test_interval(self) -> int:
+        return self.getint("test", "test_interval", fallback=0)
+
+    @property
     def antifingerprint_classes(self) -> bool:
         raw = self.get("content", "antifingerprint_classes", fallback="true")
         return raw.lower() in ("true", "1", "yes")
