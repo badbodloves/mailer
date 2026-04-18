@@ -81,6 +81,7 @@ class MailerCore:
             api_key=self._config.cloudinary_api_key,
             api_secret=self._config.cloudinary_api_secret,
             logos_dir=self._config.logos_dir,
+            mode=self._config.image_mode,
         )
         self._redirect_mgr = RedirectManager(
             target_url=self._config.redirect_target_url,
@@ -160,8 +161,11 @@ class MailerCore:
 
         if self._image_mgr.enabled:
             self._image_mgr.prepare(total_pending)
-            self._content.set_logo_urls(self._image_mgr.urls)
-            print(f"  Image pool:       {Fore.GREEN}{self._image_mgr.pool_size} URLs{Style.RESET_ALL}")
+            if self._image_mgr.mode == "cloudinary":
+                self._content.set_logo_urls(self._image_mgr.urls)
+                print(f"  Image pool:       {Fore.GREEN}{self._image_mgr.pool_size} URLs (cloudinary){Style.RESET_ALL}")
+            else:
+                print(f"  Image pool:       {Fore.GREEN}{self._image_mgr.pool_size} templates (CID inline){Style.RESET_ALL}")
 
         if self._redirect_mgr.enabled:
             self._redirect_mgr.prepare(total_pending)
@@ -276,6 +280,14 @@ class MailerCore:
             html_body = html_body.replace("{RedirectLink}", link)
             subject = subject.replace("{RedirectLink}", link)
 
+        inline_images = None
+        if self._image_mgr.enabled and self._image_mgr.mode == "cid" and "{Logo}" in html_body:
+            cid_result = self._image_mgr.get_cid_logo()
+            if cid_result:
+                img_bytes, cid, mime_type = cid_result
+                html_body = self._content.resolve_logo_tag(html_body, f"cid:{cid}")
+                inline_images = [(img_bytes, cid, mime_type)]
+
         html_body = self._antifingerprint.transform(html_body)
         plain_body = ContentEngine.html_to_plaintext(html_body)
 
@@ -291,6 +303,7 @@ class MailerCore:
             html_body=html_body,
             plain_body=plain_body,
             attachment=attachment,
+            inline_images=inline_images,
         )
 
         result = self._worker.send(from_email, email, raw_msg, account=account)

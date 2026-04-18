@@ -141,20 +141,24 @@ class ContentEngine:
             return random.choice(lines)
         return random.choice(["Logo", "Image", "Service", "Info", "Banner"])
 
+    def resolve_logo_tag(self, text: str, src: str) -> str:
+        if "{Logo}" not in text:
+            return text
+        width = random.randint(200, 220)
+        alt = self._get_random_alt()
+        tag = (
+            f'<img src="{src}" width="{width}" '
+            f'alt="{alt}" style="display:block;border:0;">'
+        )
+        return text.replace("{Logo}", tag)
+
     def _resolve_special(self, text: str) -> str:
         if "{subject}" in text:
             text = text.replace("{subject}", self.get_random_subject())
         if "{from_name}" in text:
             text = text.replace("{from_name}", self.get_random_name())
         if "{Logo}" in text and self._logo_urls:
-            url = random.choice(self._logo_urls)
-            width = random.randint(200, 220)
-            alt = self._get_random_alt()
-            tag = (
-                f'<img src="{url}" width="{width}" '
-                f'alt="{alt}" style="display:block;border:0;">'
-            )
-            text = text.replace("{Logo}", tag)
+            text = self.resolve_logo_tag(text, random.choice(self._logo_urls))
         return text
 
     def _resolve_file_injection(self, text: str) -> str:

@@ -111,6 +111,10 @@ class ConfigManager:
         return raw.lower() in ("true", "1", "yes")
 
     @property
+    def image_mode(self) -> str:
+        return self.get("IMAGE_API", "mode", fallback="cloudinary")
+
+    @property
     def image_api_enabled(self) -> bool:
         raw = self.get("IMAGE_API", "enabled", fallback="false")
         return raw.lower() in ("true", "1", "yes")
