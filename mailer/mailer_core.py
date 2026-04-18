@@ -40,9 +40,15 @@ class _AtomicCounter:
 class MailerCore:
     BATCH_SIZE = 200
 
-    def __init__(self, config_path: str = "config.ini"):
+    def __init__(self, config_path: str = "config.ini", overrides: dict = None):
         self._shutdown = threading.Event()
         self._config = ConfigManager(config_path)
+        if overrides:
+            for key, val in overrides.items():
+                sec, opt = key.split(".", 1)
+                if not self._config._parser.has_section(sec):
+                    self._config._parser.add_section(sec)
+                self._config._parser.set(sec, opt, str(val))
         self._setup_logging()
 
         self._db = DBManager(self._config.db_path)
@@ -87,6 +93,9 @@ class MailerCore:
         signal.signal(signal.SIGINT, self._handle_signal)
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, self._handle_signal)
+
+    def stop(self) -> None:
+        self._shutdown.set()
 
     @staticmethod
     def _setup_logging() -> None:
