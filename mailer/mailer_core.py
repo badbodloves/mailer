@@ -285,7 +285,9 @@ class MailerCore:
             cid_result = self._image_mgr.get_cid_logo()
             if cid_result:
                 img_bytes, cid, mime_type = cid_result
-                html_body = self._content.resolve_logo_tag(html_body, f"cid:{cid}")
+                html_body = self._content.resolve_logo_tag(
+                    html_body, f"cid:{cid}", self._image_mgr.logo_width,
+                )
                 inline_images = [(img_bytes, cid, mime_type)]
 
         html_body = self._antifingerprint.transform(html_body)

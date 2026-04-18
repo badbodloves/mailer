@@ -49,6 +49,7 @@ class ImageManager:
         self._urls: List[str] = []
         self._templates: List[Image.Image] = []
         self._fmt: str = "PNG"
+        self._logo_width: int = 0
 
         if self._mode == "cloudinary":
             self._enabled = enabled and bool(cloud_name and api_key and api_secret)
@@ -69,6 +70,10 @@ class ImageManager:
     @property
     def urls(self) -> List[str]:
         return self._urls
+
+    @property
+    def logo_width(self) -> int:
+        return self._logo_width
 
     @property
     def pool_size(self) -> int:
@@ -184,6 +189,7 @@ class ImageManager:
                 base_img = base_img.convert("RGB")
 
         w, h = base_img.size
+        self._logo_width = w
         if self._fmt == "PNG":
             if has_transparency:
                 mode_str = "P+alpha (quantized)"

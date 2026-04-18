@@ -141,10 +141,11 @@ class ContentEngine:
             return random.choice(lines)
         return random.choice(["Logo", "Image", "Service", "Info", "Banner"])
 
-    def resolve_logo_tag(self, text: str, src: str) -> str:
+    def resolve_logo_tag(self, text: str, src: str, width: int = 0) -> str:
         if "{Logo}" not in text:
             return text
-        width = random.randint(200, 220)
+        if width <= 0:
+            width = 200
         alt = self._get_random_alt()
         tag = (
             f'<img src="{src}" width="{width}" '
