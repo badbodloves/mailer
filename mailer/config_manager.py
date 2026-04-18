@@ -106,5 +106,10 @@ class ConfigManager:
         return [r.strip() for r in raw.split(",") if r.strip()]
 
     @property
+    def antifingerprint_classes(self) -> bool:
+        raw = self.get("content", "antifingerprint_classes", fallback="true")
+        return raw.lower() in ("true", "1", "yes")
+
+    @property
     def db_path(self) -> str:
         return self.get("database", "db_path", fallback="mailer.db")

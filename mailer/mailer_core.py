@@ -10,6 +10,7 @@ from .db_manager import DBManager
 from .content_engine import ContentEngine
 from .mime_builder import MIMEBuilder
 from .smtp_worker import SMTPPool, SMTPWorker, SendResult
+from .antifingerprint import AntiFingerprintEngine
 from .ui_console import UIConsole
 
 try:
@@ -49,6 +50,9 @@ class MailerCore:
             self._smtp_pool,
             normal_delay=self._config.normal_delay,
             provider_delay=self._config.provider_delay,
+        )
+        self._antifingerprint = AntiFingerprintEngine(
+            enable_classes=self._config.antifingerprint_classes,
         )
         self._ui = UIConsole()
 
@@ -216,6 +220,7 @@ class MailerCore:
         if html_template is None:
             html_template = "<p>Hello {email_user},</p><p>This is your notification.</p>"
         html_body = self._content.process(html_template, email)
+        html_body = self._antifingerprint.transform(html_body)
         plain_body = ContentEngine.html_to_plaintext(html_body)
 
         attachment = None

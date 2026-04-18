@@ -1,0 +1,180 @@
+import re
+import random
+
+
+_STYLE_ATTR_RE = re.compile(r'(style\s*=\s*")([^"]*?)(")', re.IGNORECASE)
+_PX_VALUE_RE = re.compile(
+    r"((?:padding|margin)(?:-(?:top|right|bottom|left))?:\s*)(\d+)(px)",
+    re.IGNORECASE,
+)
+_TAG_WITH_STYLE_RE = re.compile(
+    r"(<(?:div|p|table|td|span|a|hr)\b)([^>]*?)(style\s*=\s*\"[^\"]*?\")([^>]*?>)",
+    re.IGNORECASE,
+)
+_ELIGIBLE_TAG_RE = re.compile(
+    r"(<(?:div|p|table|td|span|a|hr)\b)([^>]*?>)",
+    re.IGNORECASE,
+)
+
+PREFIXES = [
+    "content", "main", "info", "msg", "block", "section", "wrapper",
+    "container", "box", "panel", "area", "module", "item", "group",
+    "row", "cell", "txt", "hdr", "ftr", "notice",
+]
+SUFFIXES = [
+    "primary", "inner", "top", "base", "core", "data", "body", "head",
+    "sub", "alt", "new", "ext", "wrap", "layout", "frame", "view",
+    "col", "set", "part", "line",
+]
+
+
+class AntiFingerprintEngine:
+    def __init__(self, enable_classes: bool = True):
+        self._enable_classes = enable_classes
+
+    def transform(self, html: str) -> str:
+        html = _swap_tags(html)
+        html = _vary_pixels(html)
+        html = _shuffle_css_properties(html)
+        if self._enable_classes:
+            html = _inject_classes(html)
+        return html
+
+
+def _swap_tags(html: str) -> str:
+    pairs = [
+        ("strong", "b"),
+        ("em", "i"),
+    ]
+    for tag_a, tag_b in pairs:
+        html = _swap_one_pair(html, tag_a, tag_b)
+    return html
+
+
+def _swap_one_pair(html: str, tag_a: str, tag_b: str) -> str:
+    tokens = re.split(
+        rf"(</?(?:{tag_a}|{tag_b})\b[^>]*>)", html, flags=re.IGNORECASE
+    )
+    stack: list = []
+    out = []
+    for token in tokens:
+        m = re.match(rf"<(/?)(?:{tag_a}|{tag_b})\b", token, re.IGNORECASE)
+        if not m:
+            out.append(token)
+            continue
+        is_close = m.group(1) == "/"
+        if not is_close:
+            do_swap = random.random() < 0.5
+            stack.append(do_swap)
+            if do_swap:
+                token = _flip_tag(token, tag_a, tag_b)
+        else:
+            do_swap = stack.pop() if stack else False
+            if do_swap:
+                token = _flip_tag(token, tag_a, tag_b)
+        out.append(token)
+    return "".join(out)
+
+
+def _flip_tag(token: str, tag_a: str, tag_b: str) -> str:
+    lo = token.lower()
+    if tag_a in lo:
+        return re.sub(tag_a, tag_b, token, count=1, flags=re.IGNORECASE)
+    return re.sub(tag_b, tag_a, token, count=1, flags=re.IGNORECASE)
+
+
+def _vary_pixels(html: str) -> str:
+    def _vary_style(match: re.Match) -> str:
+        prefix, css, suffix = match.group(1), match.group(2), match.group(3)
+        css = _PX_VALUE_RE.sub(_vary_one_px, css)
+        return prefix + css + suffix
+
+    return _STYLE_ATTR_RE.sub(_vary_style, html)
+
+
+def _vary_one_px(match: re.Match) -> str:
+    prop, val_str, unit = match.group(1), match.group(2), match.group(3)
+    val = int(val_str)
+    if val <= 4:
+        return match.group(0)
+    if random.random() < 0.3:
+        delta = random.choice([-2, -1, 1, 2])
+        val = max(0, val + delta)
+    return f"{prop}{val}{unit}"
+
+
+def _shuffle_css_properties(html: str) -> str:
+    def _shuffle_one(match: re.Match) -> str:
+        prefix, css, suffix = match.group(1), match.group(2), match.group(3)
+        parts = [p.strip() for p in css.split(";") if p.strip()]
+        if len(parts) > 1:
+            random.shuffle(parts)
+        return prefix + ";".join(parts) + suffix
+
+    return _STYLE_ATTR_RE.sub(_shuffle_one, html)
+
+
+def _inject_classes(html: str) -> str:
+    inject_rate = random.uniform(0.25, 0.50)
+    style_to_class: dict = {}
+    injections: list = []
+
+    def _maybe_inject(match: re.Match) -> str:
+        full = match.group(0)
+        if re.search(r'\bclass\s*=', full, re.IGNORECASE):
+            return full
+
+        style_match = re.search(r'style\s*=\s*"([^"]*?)"', full, re.IGNORECASE)
+        if not style_match:
+            return full
+
+        if random.random() > inject_rate:
+            return full
+
+        style_val = style_match.group(1).strip()
+        if not style_val:
+            return full
+
+        if style_val in style_to_class:
+            cls_name = style_to_class[style_val]
+        else:
+            cls_name = _make_class_name()
+            style_to_class[style_val] = cls_name
+            injections.append((cls_name, style_val))
+
+        insert_pos = match.end(1)
+        offset = insert_pos - match.start()
+        before = full[:offset]
+        after = full[offset:]
+        return before + f' class="{cls_name}"' + after
+
+    html = _ELIGIBLE_TAG_RE.sub(_maybe_inject, html)
+
+    if injections:
+        style_block = "\n<style>\n"
+        for cls_name, css in injections:
+            style_block += f"  .{cls_name} {{ {css} }}\n"
+        style_block += "</style>\n"
+
+        meta_match = re.search(
+            r'(<meta\s+charset\s*=\s*"[^"]*"\s*/?>)', html, re.IGNORECASE
+        )
+        if meta_match:
+            pos = meta_match.end()
+            html = html[:pos] + style_block + html[pos:]
+        else:
+            head_close = re.search(r"</head>", html, re.IGNORECASE)
+            if head_close:
+                html = html[: head_close.start()] + style_block + html[head_close.start() :]
+            else:
+                html = style_block + html
+
+    return html
+
+
+def _make_class_name() -> str:
+    return (
+        f"{random.choice(PREFIXES)}-"
+        f"{random.choice(SUFFIXES)}-"
+        f"{random.randint(10, 99)}"
+    )
