@@ -15,6 +15,8 @@ _ELIGIBLE_TAG_RE = re.compile(
     r"(<(?:div|p|table|td|span|a|hr)\b)([^>]*?>)",
     re.IGNORECASE,
 )
+_IMG_TAG_RE = re.compile(r"(<img\b)(\s[^>]*?)(/?>)", re.IGNORECASE)
+_ATTR_RE = re.compile(r"""(\w[\w-]*)\s*=\s*(?:"[^"]*"|'[^']*'|\S+)""", re.IGNORECASE)
 
 PREFIXES = [
     "content", "main", "info", "msg", "block", "section", "wrapper",
@@ -36,6 +38,7 @@ class AntiFingerprintEngine:
         html = _swap_tags(html)
         html = _vary_pixels(html)
         html = _shuffle_css_properties(html)
+        html = _shuffle_image_attributes(html)
         if self._enable_classes:
             html = _inject_classes(html)
         return html
@@ -112,6 +115,23 @@ def _shuffle_css_properties(html: str) -> str:
         return prefix + ";".join(parts) + suffix
 
     return _STYLE_ATTR_RE.sub(_shuffle_one, html)
+
+
+def _shuffle_image_attributes(html: str) -> str:
+    def _shuffle_one(match: re.Match) -> str:
+        tag_open = match.group(1)
+        attrs_str = match.group(2)
+        tag_close = match.group(3)
+
+        attr_spans = list(_ATTR_RE.finditer(attrs_str))
+        if len(attr_spans) <= 1:
+            return match.group(0)
+
+        attr_strings = [attrs_str[m.start():m.end()] for m in attr_spans]
+        random.shuffle(attr_strings)
+        return tag_open + " " + " ".join(attr_strings) + " " + tag_close
+
+    return _IMG_TAG_RE.sub(_shuffle_one, html)
 
 
 def _inject_classes(html: str) -> str:

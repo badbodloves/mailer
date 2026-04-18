@@ -132,5 +132,9 @@ class ConfigManager:
         return self.get("paths", "logos_dir", fallback="logos")
 
     @property
+    def alt_texts_file(self) -> str:
+        return self.get("paths", "alt_texts_file")
+
+    @property
     def db_path(self) -> str:
         return self.get("database", "db_path", fallback="mailer.db")

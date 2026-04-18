@@ -39,6 +39,7 @@ class MailerCore:
             spintax_dir=self._config.spintax_dir,
             names_file=self._config.names_file,
             subjects_file=self._config.subjects_file,
+            alt_texts_file=self._config.alt_texts_file,
         )
         self._smtp_pool = SMTPPool(
             self._config.smtp_file,

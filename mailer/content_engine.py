@@ -33,12 +33,14 @@ class ContentEngine:
         spintax_dir: str,
         names_file: str = "",
         subjects_file: str = "",
+        alt_texts_file: str = "",
     ):
         self._html_dir = html_dir
         self._attachments_dir = attachments_dir
         self._spintax_dir = spintax_dir
         self._names_file = names_file
         self._subjects_file = subjects_file
+        self._alt_texts_file = alt_texts_file
         self._html_files: List[str] = []
         self._attachment_files: List[str] = []
         self._file_cache: dict = {}
@@ -133,13 +135,26 @@ class ContentEngine:
         text = text.replace("{domain}", domain)
         return text
 
+    def _get_random_alt(self) -> str:
+        lines = self._read_lines(self._alt_texts_file)
+        if lines:
+            return random.choice(lines)
+        return random.choice(["Logo", "Image", "Service", "Info", "Banner"])
+
     def _resolve_special(self, text: str) -> str:
         if "{subject}" in text:
             text = text.replace("{subject}", self.get_random_subject())
         if "{from_name}" in text:
             text = text.replace("{from_name}", self.get_random_name())
         if "{Logo}" in text and self._logo_urls:
-            text = text.replace("{Logo}", random.choice(self._logo_urls))
+            url = random.choice(self._logo_urls)
+            width = random.randint(200, 220)
+            alt = self._get_random_alt()
+            tag = (
+                f'<img src="{url}" width="{width}" '
+                f'alt="{alt}" style="display:block;border:0;">'
+            )
+            text = text.replace("{Logo}", tag)
         return text
 
     def _resolve_file_injection(self, text: str) -> str:

@@ -1,6 +1,7 @@
 import smtplib
 import ssl
 import time
+import random
 import threading
 import logging
 from dataclasses import dataclass, field
@@ -369,5 +370,7 @@ class SMTPWorker:
     def get_delay(self, to_email: str) -> float:
         domain = to_email.split("@")[1].lower() if "@" in to_email else ""
         if domain in STRICT_PROVIDERS:
-            return self._provider_delay
-        return self._normal_delay
+            base = self._provider_delay
+        else:
+            base = self._normal_delay
+        return max(0.0, base + random.uniform(-0.1, 0.2))
