@@ -2,6 +2,8 @@
 
 Includes all transforms from the base AntiFingerprintEngine plus
 structural HTML transforms that alter the DOM tree itself.
+Only single-cell table rows are converted to divs (multi-cell rows
+are left as tables to avoid display:flex which breaks in Outlook/Gmail).
 """
 import re
 import random
@@ -35,32 +37,31 @@ class AdvancedAntiFingerprintEngine(AntiFingerprintEngine):
             table_attrs = match.group(1).strip()
             table_content = match.group(2)
 
-            style = _extract_style(table_attrs)
+            if "<table" in table_content.lower():
+                return match.group(0)
+
             rows = _TR_RE.findall(table_content)
             if not rows:
                 return match.group(0)
 
+            for row_content in rows:
+                cells = _TD_RE.findall(row_content)
+                if len(cells) > 1:
+                    return match.group(0)
+
+            style = _extract_style(table_attrs)
             wrapper_style = style if style else "width:100%"
             parts = [f'<div style="{wrapper_style}">']
 
             for row_content in rows:
                 cells = _TD_RE.findall(row_content)
-                if not cells:
-                    parts.append(f"<div>{row_content}</div>")
-                    continue
-
-                if len(cells) == 1:
+                if cells:
                     cell_attrs, cell_content = cells[0]
                     cell_style = _extract_style(cell_attrs)
                     s = f' style="{cell_style}"' if cell_style else ""
                     parts.append(f"<div{s}>{cell_content}</div>")
                 else:
-                    parts.append('<div style="display:flex">')
-                    for cell_attrs, cell_content in cells:
-                        cell_style = _extract_style(cell_attrs)
-                        s = f' style="{cell_style}"' if cell_style else ""
-                        parts.append(f"<div{s}>{cell_content}</div>")
-                    parts.append("</div>")
+                    parts.append(f"<div>{row_content}</div>")
 
             parts.append("</div>")
             return "\n".join(parts)

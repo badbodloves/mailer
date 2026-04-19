@@ -236,13 +236,14 @@ class MailerCore:
         if test_recipients:
             print(f"\n{Fore.CYAN}[*] Sending test emails to {len(test_recipients)} recipients...{Style.RESET_ALL}")
             self._send_test_emails(test_recipients)
-            try:
-                answer = input(f"\n{Fore.YELLOW}[?] Test emails sent. Start mass send? [y/n]: {Style.RESET_ALL}").strip().lower()
-            except EOFError:
-                answer = "y"
-            if answer != "y":
-                print(f"{Fore.YELLOW}[*] Aborted by user.{Style.RESET_ALL}")
-                return
+            if not self._config.schedule_time:
+                try:
+                    answer = input(f"\n{Fore.YELLOW}[?] Test emails sent. Start mass send? [y/n]: {Style.RESET_ALL}").strip().lower()
+                except EOFError:
+                    answer = "y"
+                if answer != "y":
+                    print(f"{Fore.YELLOW}[*] Aborted by user.{Style.RESET_ALL}")
+                    return
 
         print(f"\n{Fore.GREEN}[>] Starting mass send...{Style.RESET_ALL}\n")
         self._ui.start(total_pending)

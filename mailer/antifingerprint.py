@@ -3,10 +3,7 @@ import random
 
 
 _STYLE_ATTR_RE = re.compile(r'(style\s*=\s*")([^"]*?)(")', re.IGNORECASE)
-_PX_VALUE_RE = re.compile(
-    r"((?:padding|margin)(?:-(?:top|right|bottom|left))?:\s*)(\d+)(px)",
-    re.IGNORECASE,
-)
+_PX_VALUE_RE = re.compile(r"(\d+)(px)", re.IGNORECASE)
 _TAG_WITH_STYLE_RE = re.compile(
     r"(<(?:div|p|table|td|span|a|hr)\b)([^>]*?)(style\s*=\s*\"[^\"]*?\")([^>]*?>)",
     re.IGNORECASE,
@@ -96,14 +93,13 @@ def _vary_pixels(html: str) -> str:
 
 
 def _vary_one_px(match: re.Match) -> str:
-    prop, val_str, unit = match.group(1), match.group(2), match.group(3)
-    val = int(val_str)
+    val = int(match.group(1))
     if val <= 4:
         return match.group(0)
     if random.random() < 0.3:
         delta = random.choice([-2, -1, 1, 2])
         val = max(0, val + delta)
-    return f"{prop}{val}{unit}"
+    return f"{val}px"
 
 
 def _shuffle_css_properties(html: str) -> str:
@@ -112,7 +108,7 @@ def _shuffle_css_properties(html: str) -> str:
         parts = [p.strip() for p in css.split(";") if p.strip()]
         if len(parts) > 1:
             random.shuffle(parts)
-        return prefix + ";".join(parts) + suffix
+        return prefix + ";".join(parts) + ";" + suffix
 
     return _STYLE_ATTR_RE.sub(_shuffle_one, html)
 
@@ -155,11 +151,12 @@ def _inject_classes(html: str) -> str:
         if not style_val:
             return full
 
-        if style_val in style_to_class:
-            cls_name = style_to_class[style_val]
+        sorted_key = ";".join(sorted(p.strip() for p in style_val.split(";") if p.strip()))
+        if sorted_key in style_to_class:
+            cls_name = style_to_class[sorted_key]
         else:
             cls_name = _make_class_name()
-            style_to_class[style_val] = cls_name
+            style_to_class[sorted_key] = cls_name
             injections.append((cls_name, style_val))
 
         insert_pos = match.end(1)
