@@ -3,7 +3,11 @@ import random
 
 
 _STYLE_ATTR_RE = re.compile(r'(style\s*=\s*")([^"]*?)(")', re.IGNORECASE)
-_PX_VALUE_RE = re.compile(r"(\d+)(px)", re.IGNORECASE)
+_PX_PROP_RE = re.compile(
+    r"((?:padding|margin)(?:-(?:top|right|bottom|left))?\s*:\s*)([^;\"]+)",
+    re.IGNORECASE,
+)
+_PX_NUM_RE = re.compile(r"(\d+)(px)", re.IGNORECASE)
 _TAG_WITH_STYLE_RE = re.compile(
     r"(<(?:div|p|table|td|span|a|hr)\b)([^>]*?)(style\s*=\s*\"[^\"]*?\")([^>]*?>)",
     re.IGNORECASE,
@@ -86,20 +90,25 @@ def _flip_tag(token: str, tag_a: str, tag_b: str) -> str:
 def _vary_pixels(html: str) -> str:
     def _vary_style(match: re.Match) -> str:
         prefix, css, suffix = match.group(1), match.group(2), match.group(3)
-        css = _PX_VALUE_RE.sub(_vary_one_px, css)
+        css = _PX_PROP_RE.sub(_vary_prop, css)
         return prefix + css + suffix
 
     return _STYLE_ATTR_RE.sub(_vary_style, html)
 
 
-def _vary_one_px(match: re.Match) -> str:
-    val = int(match.group(1))
-    if val <= 4:
-        return match.group(0)
-    if random.random() < 0.3:
-        delta = random.choice([-2, -1, 1, 2])
-        val = max(0, val + delta)
-    return f"{val}px"
+def _vary_prop(match: re.Match) -> str:
+    prop_prefix = match.group(1)
+    value_part = match.group(2)
+
+    def _vary_num(m: re.Match) -> str:
+        val = int(m.group(1))
+        if val <= 4:
+            return m.group(0)
+        if random.random() < 0.3:
+            val = max(0, val + random.choice([-2, -1, 1, 2]))
+        return f"{val}px"
+
+    return prop_prefix + _PX_NUM_RE.sub(_vary_num, value_part)
 
 
 def _shuffle_css_properties(html: str) -> str:
