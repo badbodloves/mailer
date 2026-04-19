@@ -71,7 +71,7 @@ class MIMEBuilder:
             raise ValueError(f"Invalid To address: {to_email!r}")
 
         message_id = cls.generate_message_id(sender_domain)
-        date_str = formatdate(usegmt=True)
+        date_str = formatdate(localtime=True)
         from_header = formataddr((cls._encode_header_value(from_name), from_email))
         subject_encoded = cls._encode_header_value(subject)
 
