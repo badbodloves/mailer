@@ -110,6 +110,18 @@ class ConfigManager:
         return self.getint("test", "test_interval", fallback=0)
 
     @property
+    def proxy_file(self) -> str:
+        return self.get("sending", "proxy_file")
+
+    @property
+    def proxy_rotate_every(self) -> int:
+        return self.getint("sending", "proxy_rotate_every", fallback=0)
+
+    @property
+    def mxtoolbox_api_key(self) -> str:
+        return self.get("sending", "mxtoolbox_api_key")
+
+    @property
     def schedule_time(self) -> str:
         return self.get("sending", "schedule_time")
 

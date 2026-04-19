@@ -69,6 +69,17 @@ class CampaignTab(ttk.Frame):
 
         ttk.Button(ctrl, text="Pre-Generate Logos", command=self._pregen_logos).pack(side="left", padx=3)
         ttk.Button(ctrl, text="Pre-Generate Redirects", command=self._pregen_redirects).pack(side="left", padx=3)
+        ttk.Button(ctrl, text="Blacklist Check", command=self._blacklist_check).pack(side="left", padx=3)
+
+        # Scheduler
+        sched = ttk.LabelFrame(left, text="Scheduler", padding=8)
+        sched.pack(fill="x", pady=3)
+        ttk.Label(sched, text="Start at (HH:MM):").pack(side="left")
+        self._sched_var = tk.StringVar(value=read_config().get("sending", "schedule_time", fallback=""))
+        ttk.Entry(sched, textvariable=self._sched_var, width=8).pack(side="left", padx=5)
+        ttk.Button(sched, text="Schedule", command=self._schedule).pack(side="left", padx=5)
+        self._sched_status = tk.StringVar(value="")
+        ttk.Label(sched, textvariable=self._sched_status, foreground="blue").pack(side="left", padx=10)
 
         self._status_var = tk.StringVar(value="Idle")
         ttk.Label(ctrl, textvariable=self._status_var, font=("", 10, "bold")).pack(side="right", padx=10)
@@ -342,6 +353,68 @@ class CampaignTab(ttk.Frame):
         self._events_text.config(state="disabled")
 
         self.after(2000, self._poll)
+
+    def _schedule(self):
+        time_str = self._sched_var.get().strip()
+        if not time_str:
+            messagebox.showwarning("Schedule", "Enter time in HH:MM format")
+            return
+        cp = read_config()
+        if not cp.has_section("sending"):
+            cp.add_section("sending")
+        cp.set("sending", "schedule_time", time_str)
+        save_config(cp)
+        from datetime import datetime, timedelta
+        try:
+            target_time = datetime.strptime(time_str, "%H:%M").time()
+            target = datetime.combine(datetime.now().date(), target_time)
+            if target <= datetime.now():
+                target += timedelta(days=1)
+            diff = (target - datetime.now()).total_seconds()
+            h, m = int(diff // 3600), int(diff % 3600 // 60)
+            self._sched_status.set(f"Scheduled for {target.strftime('%Y-%m-%d %H:%M')} ({h}h {m}m)")
+            log_event(f"Scheduled for {time_str}")
+        except ValueError:
+            messagebox.showerror("Schedule", "Invalid format. Use HH:MM")
+
+    def _blacklist_check(self):
+        log_event("Running blacklist check...")
+        self._status_var.set("Checking blacklists...")
+
+        def check():
+            cp = read_config()
+            api_key = cp.get("sending", "mxtoolbox_api_key", fallback="")
+            if not api_key:
+                self._status_var.set("No MXToolbox API key in config")
+                log_event("Blacklist check: no API key")
+                return
+            from mailer.blacklist_checker import BlacklistChecker
+            checker = BlacklistChecker(api_key)
+            smtp_file = self._smtp_var.get()
+            hosts = set()
+            dirs = ["SMTPs", "smtps", ""]
+            for d in dirs:
+                full = os.path.join(d, smtp_file) if d else smtp_file
+                if os.path.isfile(full):
+                    with open(full, "r") as f:
+                        for line in f:
+                            parts = line.strip().split(",")
+                            if len(parts) >= 4:
+                                hosts.add(parts[0].strip())
+                    break
+            if not hosts:
+                self._status_var.set("No SMTP hosts found")
+                return
+            for host in hosts:
+                clean, details = checker.check(host)
+                if clean:
+                    log_event(f"Blacklist: {host} — CLEAN")
+                else:
+                    names = ", ".join(d.get("name", "") for d in details[:3])
+                    log_event(f"Blacklist: {host} — LISTED on {len(details)} lists ({names})")
+            self._status_var.set("Blacklist check done")
+
+        threading.Thread(target=check, daemon=True).start()
 
 
 import os

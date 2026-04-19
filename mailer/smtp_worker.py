@@ -16,6 +16,12 @@ try:
 except ImportError:
     HAS_CERTIFI = False
 
+try:
+    import socks
+    HAS_SOCKS = True
+except ImportError:
+    HAS_SOCKS = False
+
 logger = logging.getLogger("mailer.smtp")
 
 STRICT_PROVIDERS = frozenset({
@@ -55,11 +61,38 @@ class SendResult:
 
 
 @dataclass
+class ProxyConfig:
+    host: str
+    port: int
+    username: str = ""
+    password: str = ""
+
+    @staticmethod
+    def parse(text: str) -> Optional["ProxyConfig"]:
+        text = text.strip()
+        if not text:
+            return None
+        text = text.replace("socks5://", "").replace("socks://", "")
+        user, pwd = "", ""
+        if "@" in text:
+            auth, text = text.rsplit("@", 1)
+            if ":" in auth:
+                user, pwd = auth.split(":", 1)
+        parts = text.split(":")
+        if len(parts) < 2:
+            return None
+        if len(parts) == 4:
+            return ProxyConfig(parts[0], int(parts[1]), parts[2], parts[3])
+        return ProxyConfig(parts[0], int(parts[1]), user, pwd)
+
+
+@dataclass
 class SMTPAccount:
     host: str
     port: int
     user: str
     password: str
+    proxy: Optional[ProxyConfig] = None
     send_count: int = 0
     dead: bool = False
     last_used: float = 0.0
@@ -89,6 +122,8 @@ class SMTPPool:
         warmup_delay: float = 30.0,
         warmup_count: int = 5,
         ignore_ssl_errors: bool = True,
+        proxy_file: str = "",
+        proxy_rotate_every: int = 0,
     ):
         self._accounts: List[SMTPAccount] = []
         self._lock = threading.Lock()
@@ -98,7 +133,12 @@ class SMTPPool:
         self._warmup_count = warmup_count
         self._ignore_ssl_errors = ignore_ssl_errors
         self._dns_cache = DNSCache()
+        self._proxies: List[ProxyConfig] = []
+        self._proxy_index = 0
+        self._proxy_rotate_every = proxy_rotate_every
+        self._proxy_send_count = 0
         self._load(smtp_path)
+        self._load_proxies(proxy_file)
 
     def _load(self, path: str) -> None:
         for fpath in resolve_txt_paths(path):
@@ -121,9 +161,41 @@ class SMTPPool:
                         continue
                     user = parts[2].strip()
                     password = parts[3].strip()
-                    self._accounts.append(SMTPAccount(host, port, user, password))
+                    proxy = ProxyConfig.parse(parts[4]) if len(parts) >= 5 else None
+                    self._accounts.append(SMTPAccount(host, port, user, password, proxy=proxy))
         except OSError:
             pass
+
+    def _load_proxies(self, path: str) -> None:
+        if not path:
+            return
+        for fpath in resolve_txt_paths(path):
+            try:
+                with open(fpath, "r", encoding="utf-8") as fh:
+                    for line in fh:
+                        line = line.strip()
+                        if not line or line.startswith("#"):
+                            continue
+                        p = ProxyConfig.parse(line)
+                        if p:
+                            self._proxies.append(p)
+            except OSError:
+                pass
+
+    def get_current_proxy(self) -> Optional[ProxyConfig]:
+        with self._lock:
+            if not self._proxies:
+                return None
+            if self._proxy_rotate_every > 0:
+                self._proxy_send_count += 1
+                if self._proxy_send_count >= self._proxy_rotate_every:
+                    self._proxy_send_count = 0
+                    self._proxy_index = (self._proxy_index + 1) % len(self._proxies)
+            return self._proxies[self._proxy_index % len(self._proxies)]
+
+    @property
+    def proxy_count(self) -> int:
+        return len(self._proxies)
 
     @property
     def total(self) -> int:
@@ -215,18 +287,42 @@ class SMTPPool:
             return ssl.create_default_context(cafile=certifi.where())
         return ssl.create_default_context()
 
+    def _make_socket(self, account: SMTPAccount):
+        if account.proxy and HAS_SOCKS:
+            p = account.proxy
+            s = socks.socksocket()
+            s.set_proxy(socks.SOCKS5, p.host, p.port,
+                        username=p.username or None, password=p.password or None)
+            s.settimeout(self._timeout)
+            s.connect((account.host, account.port))
+            return s
+        return None
+
     def connect(self, account: SMTPAccount) -> smtplib.SMTP:
         self._dns_cache.resolve_a(account.host)
         ctx = self._build_ssl_context()
+        if not account.proxy and self._proxies:
+            account.proxy = self.get_current_proxy()
+        proxy_sock = self._make_socket(account)
 
         if account.port == 465:
-            server = smtplib.SMTP_SSL(
-                account.host, account.port,
-                timeout=self._timeout, context=ctx,
-            )
+            if proxy_sock:
+                server = smtplib.SMTP_SSL(context=ctx)
+                server.sock = ctx.wrap_socket(proxy_sock, server_hostname=account.host)
+                server._host = account.host
+            else:
+                server = smtplib.SMTP_SSL(
+                    account.host, account.port,
+                    timeout=self._timeout, context=ctx,
+                )
             server.ehlo()
         else:
-            server = smtplib.SMTP(account.host, account.port, timeout=self._timeout)
+            if proxy_sock:
+                server = smtplib.SMTP()
+                server.sock = proxy_sock
+                server._host = account.host
+            else:
+                server = smtplib.SMTP(account.host, account.port, timeout=self._timeout)
             server.ehlo()
             if server.has_extn("starttls"):
                 server.starttls(context=ctx)

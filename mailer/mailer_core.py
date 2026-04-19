@@ -68,6 +68,8 @@ class MailerCore:
             warmup_delay=self._config.warmup_delay,
             warmup_count=self._config.warmup_count,
             ignore_ssl_errors=self._config.ignore_ssl_errors,
+            proxy_file=self._config.proxy_file,
+            proxy_rotate_every=self._config.proxy_rotate_every,
         )
         self._worker = SMTPWorker(
             self._smtp_pool,
@@ -101,9 +103,12 @@ class MailerCore:
         self._send_counter = _AtomicCounter()
         self._ui = UIConsole()
 
-        signal.signal(signal.SIGINT, self._handle_signal)
-        if hasattr(signal, "SIGTERM"):
-            signal.signal(signal.SIGTERM, self._handle_signal)
+        try:
+            signal.signal(signal.SIGINT, self._handle_signal)
+            if hasattr(signal, "SIGTERM"):
+                signal.signal(signal.SIGTERM, self._handle_signal)
+        except ValueError:
+            pass
 
     def stop(self) -> None:
         self._shutdown.set()
@@ -157,6 +162,26 @@ class MailerCore:
             print(f"{Fore.RED}[!] No SMTP accounts loaded. Check {self._config.smtp_file}{Style.RESET_ALL}")
             sys.exit(1)
         print(f"  SMTP accounts: {Fore.GREEN}{self._smtp_pool.size}{Style.RESET_ALL} live / {self._smtp_pool.total} total")
+        if self._smtp_pool.proxy_count > 0:
+            print(f"  Proxies:          {Fore.GREEN}{self._smtp_pool.proxy_count}{Style.RESET_ALL} loaded"
+                  + (f" (rotate every {self._config.proxy_rotate_every})" if self._config.proxy_rotate_every else ""))
+
+        api_key = self._config.mxtoolbox_api_key
+        if api_key:
+            from .blacklist_checker import BlacklistChecker
+            checker = BlacklistChecker(api_key)
+            print(f"  Blacklist check:  ", end="")
+            results = checker.check_smtp_accounts(self._smtp_pool._accounts)
+            all_clean = True
+            for host, info in results.items():
+                if info["clean"]:
+                    print(f"{Fore.GREEN}{host} OK{Style.RESET_ALL}  ", end="")
+                else:
+                    all_clean = False
+                    print(f"{Fore.RED}{host} LISTED ({len(info['details'])} lists){Style.RESET_ALL}  ", end="")
+            print()
+            if not all_clean:
+                print(f"  {Fore.RED}[!] Some IPs are blacklisted. Continue anyway? Deliverability may suffer.{Style.RESET_ALL}")
 
         if self._content.has_names:
             print(f"  Names pool:       {Fore.GREEN}loaded{Style.RESET_ALL}")
