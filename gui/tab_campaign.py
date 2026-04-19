@@ -186,6 +186,10 @@ class CampaignTab(ttk.Frame):
             for attempt in range(1, max_retries + 1):
                 try:
                     core = MailerCore(config_path="config.ini")
+                    if core._image_mgr.enabled:
+                        core._image_mgr.prepare(10)
+                        if core._image_mgr.mode == "cloudinary":
+                            core._content.set_logo_urls(core._image_mgr.urls)
                     result = core._send_one(-1, addr.split(",")[0].strip())
                     if result.is_success:
                         log_event(f"Test OK to {addr}")

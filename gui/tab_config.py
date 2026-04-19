@@ -1,10 +1,40 @@
 import os
 import tkinter as tk
-from tkinter import ttk, messagebox
+from tkinter import ttk, messagebox, filedialog
 
 from .helpers import read_config, save_config
 
 SPINTAX_DIR = "spintaxes"
+
+HELP = {
+    ("sending", "threads"): "Number of parallel threads (1-200). More = faster but more server load.",
+    ("sending", "normal_delay"): "Seconds between emails for normal domains. Gaussian jitter applied.",
+    ("sending", "provider_delay"): "Seconds between emails for Gmail/Yahoo/Outlook (strict providers).",
+    ("sending", "warmup_delay"): "Seconds between first N emails per SMTP (warmup phase).",
+    ("sending", "warmup_count"): "How many emails until warmup is done per SMTP.",
+    ("sending", "smtp_timeout"): "Connection timeout in seconds.",
+    ("sending", "ignore_ssl_errors"): "true = accept self-signed certs. false = strict SSL validation.",
+    ("sending", "schedule_time"): "Auto-start at this time (HH:MM). Empty = start immediately.",
+    ("sending", "proxy_file"): "Path to proxies.txt. Format: ip:port:user:pass (one per line). Empty = no proxy.",
+    ("sending", "proxy_rotate_every"): "Rotate to next proxy every N emails. 0 = stick to one proxy.",
+    ("sending", "mxtoolbox_api_key"): "MXToolbox API key for blacklist checks. Empty = skip check.",
+    ("sender", "from_name"): "Sender name. Use {from_name} to load from names.txt.",
+    ("sender", "from_email"): "Sender email. Empty = uses SMTP account email.",
+    ("sender", "subject"): "Subject line. Supports spintax, {tags}, [RANDSTR:...].",
+    ("test", "test_recipients"): "Comma-separated test emails. Sent before mass mailing.",
+    ("test", "test_interval"): "Send test mail every N successful sends. 0 = disabled.",
+    ("content", "antifingerprint_classes"): "true = inject random CSS classes into HTML.",
+    ("content", "advanced_antifingerprint"): "true = enable table-to-div structure transformation.",
+    ("content", "structure_variation"): "0.0-1.0: probability of converting each table to divs.",
+    ("IMAGE_API", "enabled"): "true = enable logo processing (CID or Cloudinary).",
+    ("IMAGE_API", "mode"): "cid = embed logo in email. cloudinary = external URL.",
+    ("IMAGE_API", "quantize"): "true = palette-compress logos (smaller). false = raw RGBA.",
+    ("IMAGE_API", "downscale"): "true = resize to 220px. false = keep original pixels.",
+    ("redirect", "enabled"): "true = enable redirect link rotation.",
+    ("redirect", "target_url"): "The landing page URL for redirect generation.",
+    ("redirect", "db_path"): "SQLite file for cached redirect links.",
+    ("database", "db_path"): "SQLite file for lead tracking (delete to restart).",
+}
 
 
 class ConfigTab(ttk.Frame):
@@ -17,25 +47,65 @@ class ConfigTab(ttk.Frame):
         canvas = tk.Canvas(self)
         scrollbar = ttk.Scrollbar(self, orient="vertical", command=canvas.yview)
         scroll_frame = ttk.Frame(canvas)
-
         scroll_frame.bind("<Configure>", lambda e: canvas.configure(scrollregion=canvas.bbox("all")))
         canvas.create_window((0, 0), window=scroll_frame, anchor="nw")
         canvas.configure(yscrollcommand=scrollbar.set)
+
+        # Mousewheel scrolling
+        def _on_mousewheel(event):
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+        canvas.bind_all("<MouseWheel>", _on_mousewheel)
 
         self._inner = scroll_frame
 
         cp = read_config()
         row = 0
+
+        # Proxy section at top
+        proxy_lf = ttk.LabelFrame(scroll_frame, text="Proxy Settings", padding=8)
+        proxy_lf.grid(row=row, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
+        row += 1
+
+        ttk.Label(proxy_lf, text="Mode:").grid(row=0, column=0, sticky="w", padx=5)
+        self._proxy_mode = tk.StringVar(value=self._detect_proxy_mode(cp))
+        modes = ttk.Frame(proxy_lf)
+        modes.grid(row=0, column=1, sticky="w", padx=5)
+        ttk.Radiobutton(modes, text="Off", variable=self._proxy_mode, value="off").pack(side="left", padx=5)
+        ttk.Radiobutton(modes, text="Single Proxy", variable=self._proxy_mode, value="single").pack(side="left", padx=5)
+        ttk.Radiobutton(modes, text="Proxy List", variable=self._proxy_mode, value="list").pack(side="left", padx=5)
+
+        ttk.Label(proxy_lf, text="Proxy/File:").grid(row=1, column=0, sticky="w", padx=5)
+        self._proxy_val = tk.StringVar(value=cp.get("sending", "proxy_file", fallback=""))
+        ttk.Entry(proxy_lf, textvariable=self._proxy_val, width=45).grid(row=1, column=1, sticky="w", padx=5, pady=2)
+        ttk.Button(proxy_lf, text="Browse", command=self._browse_proxy).grid(row=1, column=2, padx=5)
+
+        ttk.Label(proxy_lf, text="Rotate every:").grid(row=2, column=0, sticky="w", padx=5)
+        self._proxy_rotate = tk.StringVar(value=cp.get("sending", "proxy_rotate_every", fallback="0"))
+        rf = ttk.Frame(proxy_lf)
+        rf.grid(row=2, column=1, sticky="w", padx=5)
+        ttk.Entry(rf, textvariable=self._proxy_rotate, width=8).pack(side="left")
+        ttk.Label(rf, text="emails (0 = no rotation)", foreground="gray").pack(side="left", padx=5)
+
+        ttk.Label(proxy_lf, text="Formats: ip:port:user:pass  |  user:pass@ip:port  |  socks5://ip:port  |  ip:port",
+                  foreground="gray", font=("", 8)).grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=2)
+
         for section in cp.sections():
+            if section in ("DEFAULT",):
+                continue
             lf = ttk.LabelFrame(scroll_frame, text=f"[{section}]", padding=8)
             lf.grid(row=row, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
             row += 1
             for i, (key, val) in enumerate(cp.items(section)):
-                ttk.Label(lf, text=key, width=25, anchor="w").grid(row=i, column=0, sticky="w", padx=5, pady=1)
+                ttk.Label(lf, text=key, width=25, anchor="w").grid(row=i*2, column=0, sticky="w", padx=5, pady=1)
                 var = tk.StringVar(value=val)
                 entry = ttk.Entry(lf, textvariable=var, width=50)
-                entry.grid(row=i, column=1, sticky="ew", padx=5, pady=1)
+                entry.grid(row=i*2, column=1, sticky="ew", padx=5, pady=1)
                 self._entries[(section, key)] = var
+
+                help_text = HELP.get((section, key), "")
+                if help_text:
+                    ttk.Label(lf, text=help_text, foreground="gray", font=("", 8),
+                              wraplength=400).grid(row=i*2+1, column=1, sticky="w", padx=5)
 
         btn_frame = ttk.Frame(scroll_frame)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=10)
@@ -43,7 +113,6 @@ class ConfigTab(ttk.Frame):
         ttk.Button(btn_frame, text="Reload", command=self._reload).pack(side="left", padx=5)
         row += 1
 
-        # Spintax editor
         sf = ttk.LabelFrame(scroll_frame, text="Spintax Files", padding=8)
         sf.grid(row=row, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
 
@@ -65,12 +134,39 @@ class ConfigTab(ttk.Frame):
         scrollbar.pack(side="right", fill="y")
         canvas.pack(side="left", fill="both", expand=True)
 
+    def _detect_proxy_mode(self, cp) -> str:
+        val = cp.get("sending", "proxy_file", fallback="").strip()
+        if not val:
+            return "off"
+        if os.path.isfile(val):
+            return "list"
+        if ":" in val:
+            return "single"
+        return "off"
+
+    def _browse_proxy(self):
+        path = filedialog.askopenfilename(filetypes=[("Text", "*.txt"), ("All", "*.*")])
+        if path:
+            self._proxy_val.set(path)
+            self._proxy_mode.set("list")
+
     def _save(self):
         cp = read_config()
         for (sec, key), var in self._entries.items():
             if not cp.has_section(sec):
                 cp.add_section(sec)
             cp.set(sec, key, var.get())
+
+        mode = self._proxy_mode.get()
+        if not cp.has_section("sending"):
+            cp.add_section("sending")
+        if mode == "off":
+            cp.set("sending", "proxy_file", "")
+            cp.set("sending", "proxy_rotate_every", "0")
+        else:
+            cp.set("sending", "proxy_file", self._proxy_val.get())
+            cp.set("sending", "proxy_rotate_every", self._proxy_rotate.get())
+
         save_config(cp)
         messagebox.showinfo("Config", "Saved!")
 
@@ -81,6 +177,9 @@ class ConfigTab(ttk.Frame):
                 var.set(cp.get(sec, key, fallback=""))
             except Exception:
                 pass
+        self._proxy_val.set(cp.get("sending", "proxy_file", fallback=""))
+        self._proxy_rotate.set(cp.get("sending", "proxy_rotate_every", fallback="0"))
+        self._proxy_mode.set(self._detect_proxy_mode(cp))
 
     def _refresh_spintax(self):
         os.makedirs(SPINTAX_DIR, exist_ok=True)
@@ -94,9 +193,8 @@ class ConfigTab(ttk.Frame):
         name = self._spin_var.get()
         if not name:
             return
-        path = os.path.join(SPINTAX_DIR, name)
         try:
-            with open(path, "r", encoding="utf-8") as f:
+            with open(os.path.join(SPINTAX_DIR, name), "r", encoding="utf-8") as f:
                 self._spin_editor.delete("1.0", "end")
                 self._spin_editor.insert("1.0", f.read())
         except OSError:
@@ -106,8 +204,7 @@ class ConfigTab(ttk.Frame):
         name = self._spin_var.get()
         if not name:
             return
-        path = os.path.join(SPINTAX_DIR, name)
-        with open(path, "w", encoding="utf-8") as f:
+        with open(os.path.join(SPINTAX_DIR, name), "w", encoding="utf-8") as f:
             f.write(self._spin_editor.get("1.0", "end-1c"))
         messagebox.showinfo("Spintax", f"Saved {name}")
 
@@ -122,8 +219,7 @@ class ConfigTab(ttk.Frame):
         def create():
             name = var.get().strip()
             if name:
-                path = os.path.join(SPINTAX_DIR, f"{name}.txt")
-                open(path, "w").close()
+                open(os.path.join(SPINTAX_DIR, f"{name}.txt"), "w").close()
                 win.destroy()
                 self._refresh_spintax()
                 self._spin_var.set(f"{name}.txt")
