@@ -5,6 +5,7 @@ from .tab_campaign import CampaignTab
 from .tab_editor import EditorTab
 from .tab_config import ConfigTab
 from .tab_files import FilesTab
+from .tab_logo import LogoTab
 from .tab_redirect import RedirectTab
 from .tab_logs import LogsTab
 
@@ -28,6 +29,7 @@ class MailerApp(tk.Tk):
         nb.add(CampaignTab(nb), text="  Campaign  ")
         nb.add(EditorTab(nb), text="  HTML Editor  ")
         nb.add(FilesTab(nb), text="  Files  ")
+        nb.add(LogoTab(nb), text="  Logos  ")
         nb.add(RedirectTab(nb), text="  Redirects  ")
         nb.add(ConfigTab(nb), text="  Config  ")
         nb.add(LogsTab(nb), text="  Logs  ")

@@ -60,8 +60,9 @@ class ConfigTab(ttk.Frame):
 
         cp = read_config()
         row = 0
+        scroll_frame.columnconfigure(0, weight=1)
+        scroll_frame.columnconfigure(1, weight=1)
 
-        # Proxy section at top
         proxy_lf = ttk.LabelFrame(scroll_frame, text="Proxy Settings", padding=8)
         proxy_lf.grid(row=row, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
         row += 1
@@ -89,23 +90,27 @@ class ConfigTab(ttk.Frame):
         ttk.Label(proxy_lf, text="Formats: ip:port:user:pass  |  user:pass@ip:port  |  socks5://ip:port  |  ip:port",
                   foreground="gray", font=("", 8)).grid(row=3, column=0, columnspan=3, sticky="w", padx=5, pady=2)
 
-        for section in cp.sections():
-            if section in ("DEFAULT",):
-                continue
+        sections = [s for s in cp.sections() if s != "DEFAULT"]
+        col = 0
+        for si, section in enumerate(sections):
             lf = ttk.LabelFrame(scroll_frame, text=f"[{section}]", padding=8)
-            lf.grid(row=row, column=0, columnspan=2, sticky="ew", padx=10, pady=5)
-            row += 1
+            lf.grid(row=row, column=col, sticky="nsew", padx=5, pady=5)
+            col += 1
+            if col >= 2:
+                col = 0
+                row += 1
             for i, (key, val) in enumerate(cp.items(section)):
-                ttk.Label(lf, text=key, width=25, anchor="w").grid(row=i*2, column=0, sticky="w", padx=5, pady=1)
+                ttk.Label(lf, text=key, width=22, anchor="w").grid(row=i*2, column=0, sticky="w", padx=3, pady=1)
                 var = tk.StringVar(value=val)
-                entry = ttk.Entry(lf, textvariable=var, width=50)
-                entry.grid(row=i*2, column=1, sticky="ew", padx=5, pady=1)
+                entry = ttk.Entry(lf, textvariable=var, width=30)
+                entry.grid(row=i*2, column=1, sticky="ew", padx=3, pady=1)
                 self._entries[(section, key)] = var
-
                 help_text = HELP.get((section, key), "")
                 if help_text:
-                    ttk.Label(lf, text=help_text, foreground="gray", font=("", 8),
-                              wraplength=400).grid(row=i*2+1, column=1, sticky="w", padx=5)
+                    ttk.Label(lf, text=help_text, foreground="gray", font=("", 7),
+                              wraplength=280).grid(row=i*2+1, column=0, columnspan=2, sticky="w", padx=3)
+        if col == 1:
+            row += 1
 
         btn_frame = ttk.Frame(scroll_frame)
         btn_frame.grid(row=row, column=0, columnspan=2, pady=10)

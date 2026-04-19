@@ -78,6 +78,7 @@ class CampaignTab(ttk.Frame):
         self._sched_var = tk.StringVar(value=read_config().get("sending", "schedule_time", fallback=""))
         ttk.Entry(sched, textvariable=self._sched_var, width=8).pack(side="left", padx=5)
         ttk.Button(sched, text="Schedule", command=self._schedule).pack(side="left", padx=5)
+        ttk.Button(sched, text="Cancel", command=self._cancel_schedule).pack(side="left", padx=3)
         self._sched_status = tk.StringVar(value="")
         ttk.Label(sched, textvariable=self._sched_status, foreground="blue").pack(side="left", padx=10)
 
@@ -120,14 +121,36 @@ class CampaignTab(ttk.Frame):
         self._refresh_files()
 
     def _refresh_files(self):
-        leads = scan_files("Leads") + scan_files("leads")
-        smtps = scan_files("SMTPs") + scan_files("smtps")
+        leads = []
+        smtps = []
+        for d in ["Leads", "leads", "."]:
+            if os.path.isdir(d):
+                for f in scan_files(d):
+                    path = os.path.join(d, f)
+                    if path not in leads:
+                        leads.append(path)
+        for d in ["SMTPs", "smtps", "."]:
+            if os.path.isdir(d):
+                for f in scan_files(d):
+                    path = os.path.join(d, f)
+                    if path not in smtps:
+                        smtps.append(path)
         cp = read_config()
         lf = cp.get("paths", "leads_file", fallback="leads.txt")
         sf = cp.get("paths", "smtp_file", fallback="smtps.txt")
-        if lf not in leads and os.path.isfile(lf):
+        if os.path.isdir(lf):
+            for f in scan_files(lf):
+                path = os.path.join(lf, f)
+                if path not in leads:
+                    leads.append(path)
+        elif os.path.isfile(lf) and lf not in leads:
             leads.insert(0, lf)
-        if sf not in smtps and os.path.isfile(sf):
+        if os.path.isdir(sf):
+            for f in scan_files(sf):
+                path = os.path.join(sf, f)
+                if path not in smtps:
+                    smtps.append(path)
+        elif os.path.isfile(sf) and sf not in smtps:
             smtps.insert(0, sf)
         self._leads_cb["values"] = leads
         self._smtp_cb["values"] = smtps
@@ -140,29 +163,23 @@ class CampaignTab(ttk.Frame):
 
     def _on_leads_change(self, event=None):
         path = self._leads_var.get()
-        dirs = ["Leads", "leads", ""]
-        for d in dirs:
-            full = os.path.join(d, path) if d else path
-            if os.path.isfile(full):
-                n = count_lines(full)
-                self._leads_info.config(text=f"({n:,} leads)")
-                self._preview_text.config(state="normal")
-                self._preview_text.delete("1.0", "end")
-                self._preview_text.insert("1.0", preview_lines(full, 8))
-                self._preview_text.config(state="disabled")
-                return
-        self._leads_info.config(text="(not found)")
+        if os.path.isfile(path):
+            n = count_lines(path)
+            self._leads_info.config(text=f"({n:,} leads)")
+            self._preview_text.config(state="normal")
+            self._preview_text.delete("1.0", "end")
+            self._preview_text.insert("1.0", preview_lines(path, 8))
+            self._preview_text.config(state="disabled")
+        else:
+            self._leads_info.config(text="(not found)")
 
     def _on_smtp_change(self, event=None):
         path = self._smtp_var.get()
-        dirs = ["SMTPs", "smtps", ""]
-        for d in dirs:
-            full = os.path.join(d, path) if d else path
-            if os.path.isfile(full):
-                n = count_lines(full)
-                self._smtp_info.config(text=f"({n} accounts)")
-                return
-        self._smtp_info.config(text="(not found)")
+        if os.path.isfile(path):
+            n = count_lines(path)
+            self._smtp_info.config(text=f"({n} accounts)")
+        else:
+            self._smtp_info.config(text="(not found)")
 
     def _save_test_addr(self):
         cp = read_config()
@@ -380,6 +397,15 @@ class CampaignTab(ttk.Frame):
             log_event(f"Scheduled for {time_str}")
         except ValueError:
             messagebox.showerror("Schedule", "Invalid format. Use HH:MM")
+
+    def _cancel_schedule(self):
+        cp = read_config()
+        if cp.has_section("sending"):
+            cp.set("sending", "schedule_time", "")
+            save_config(cp)
+        self._sched_status.set("Cancelled")
+        self._sched_var.set("")
+        log_event("Schedule cancelled")
 
     def _blacklist_check(self):
         log_event("Running blacklist check on sending IPs...")

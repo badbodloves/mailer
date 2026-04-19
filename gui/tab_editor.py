@@ -34,7 +34,8 @@ class EditorTab(ttk.Frame):
                           ("Preview + AF", self._preview_af),
                           ("Preview + Advanced AF", self._preview_advanced),
                           ("3-Way Diff", self._three_way_diff),
-                          ("Raw MIME", self._show_mime)]:
+                          ("Raw MIME", self._show_mime),
+                          ("Text:Image Ratio", self._check_ratio)]:
             ttk.Button(toolbar, text=text, command=cmd).pack(side="left", padx=2)
 
         self._editor = tk.Text(self, font=("Consolas", 11), wrap="none", undo=True)
@@ -199,5 +200,52 @@ class EditorTab(ttk.Frame):
                 html_body=html, plain_body=plain,
             )
             open_raw_in_browser(raw)
+        except Exception as e:
+            messagebox.showerror("Error", str(e))
+
+    def _check_ratio(self):
+        try:
+            _, html = self._process(2)
+            html = self._inject_logo_base64(html)
+            import re as _re
+            from mailer.content_engine import ContentEngine
+            plain = ContentEngine.html_to_plaintext(html)
+            text_bytes = len(plain.encode("utf-8"))
+
+            img_bytes = 0
+            cp = read_config()
+            logos_dir = cp.get("paths", "logos_dir", fallback="logos")
+            if os.path.isdir(logos_dir):
+                imgs = [f for f in os.listdir(logos_dir) if f.lower().endswith((".png",".jpg",".jpeg"))]
+                if imgs:
+                    img_bytes = os.path.getsize(os.path.join(logos_dir, imgs[0]))
+
+            img_b64 = int(img_bytes * 1.37) if img_bytes else 0
+            total = text_bytes + img_b64
+            text_pct = text_bytes / total * 100 if total else 100
+            img_pct = img_b64 / total * 100 if total else 0
+
+            if text_pct >= 70:
+                verdict = "GOOD — text-heavy, looks transactional"
+                color = "#00aa00"
+            elif text_pct >= 40:
+                verdict = "OK — balanced, monitor deliverability"
+                color = "#cc8800"
+            else:
+                verdict = "WARNING — image-heavy, spam filters may flag"
+                color = "#cc0000"
+
+            ratio_html = f"""<html><body style="font-family:Arial;padding:30px">
+            <h2>Text-to-Image Ratio Analysis</h2>
+            <table style="border-collapse:collapse;font-size:16px">
+            <tr><td style="padding:8px;font-weight:bold">Plain text:</td><td style="padding:8px">{text_bytes:,} bytes ({text_pct:.0f}%)</td></tr>
+            <tr><td style="padding:8px;font-weight:bold">Logo (base64):</td><td style="padding:8px">{img_b64:,} bytes ({img_pct:.0f}%)</td></tr>
+            <tr><td style="padding:8px;font-weight:bold">Total:</td><td style="padding:8px">{total:,} bytes</td></tr>
+            <tr><td style="padding:8px;font-weight:bold">Logo raw:</td><td style="padding:8px">{img_bytes/1024:.1f} KB</td></tr>
+            </table>
+            <h3 style="color:{color};margin-top:20px">{verdict}</h3>
+            <p style="color:#666">Target: 60-80% text, 20-40% images for optimal deliverability.</p>
+            </body></html>"""
+            open_html_in_browser(ratio_html)
         except Exception as e:
             messagebox.showerror("Error", str(e))
