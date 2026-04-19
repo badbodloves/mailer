@@ -3,6 +3,7 @@ import sys
 import time
 import signal
 import threading
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from .config_manager import ConfigManager
@@ -11,6 +12,7 @@ from .content_engine import ContentEngine
 from .mime_builder import MIMEBuilder
 from .smtp_worker import SMTPPool, SMTPWorker, SendResult
 from .antifingerprint import AntiFingerprintEngine
+from .advanced_antifingerprint import AdvancedAntiFingerprintEngine
 from .image_manager import ImageManager
 from .redirect_manager import RedirectManager
 from .ui_console import UIConsole
@@ -72,9 +74,15 @@ class MailerCore:
             normal_delay=self._config.normal_delay,
             provider_delay=self._config.provider_delay,
         )
-        self._antifingerprint = AntiFingerprintEngine(
-            enable_classes=self._config.antifingerprint_classes,
-        )
+        if self._config.advanced_antifingerprint:
+            self._antifingerprint = AdvancedAntiFingerprintEngine(
+                enable_classes=self._config.antifingerprint_classes,
+                structure_variation=self._config.structure_variation,
+            )
+        else:
+            self._antifingerprint = AntiFingerprintEngine(
+                enable_classes=self._config.antifingerprint_classes,
+            )
         self._image_mgr = ImageManager(
             enabled=self._config.image_api_enabled,
             cloud_name=self._config.cloudinary_cloud_name,
@@ -122,8 +130,28 @@ class MailerCore:
         print(f"\n{Fore.YELLOW}[!] Shutdown signal received. Finishing current batch...{Style.RESET_ALL}")
         self._shutdown.set()
 
+    def _wait_for_schedule(self) -> None:
+        schedule = self._config.schedule_time
+        if not schedule:
+            return
+        try:
+            target_time = datetime.strptime(schedule, "%H:%M").time()
+        except ValueError:
+            print(f"{Fore.RED}[!] Invalid schedule_time: {schedule} (use HH:MM){Style.RESET_ALL}")
+            return
+        now = datetime.now()
+        target = datetime.combine(now.date(), target_time)
+        if target <= now:
+            target += timedelta(days=1)
+        wait = (target - now).total_seconds()
+        print(f"  Scheduled:        {Fore.CYAN}{target.strftime('%Y-%m-%d %H:%M')}{Style.RESET_ALL} (in {int(wait//3600)}h {int(wait%3600//60)}m)")
+        while wait > 0 and not self._shutdown.is_set():
+            self._shutdown.wait(timeout=min(wait, 10))
+            wait = (target - datetime.now()).total_seconds()
+
     def run(self) -> None:
         self._print_banner()
+        self._wait_for_schedule()
 
         if self._smtp_pool.total == 0:
             print(f"{Fore.RED}[!] No SMTP accounts loaded. Check {self._config.smtp_file}{Style.RESET_ALL}")

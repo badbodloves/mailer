@@ -149,9 +149,7 @@ class SMTPPool:
             available = [a for a in self._accounts if a.is_available]
             if not available:
                 return None
-            account = available[self._index % len(available)]
-            self._index += 1
-            return account
+            return random.choice(available)
 
     def suspend(self, account: SMTPAccount, reason: str = "") -> None:
         with self._lock:

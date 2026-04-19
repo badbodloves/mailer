@@ -110,6 +110,19 @@ class ConfigManager:
         return self.getint("test", "test_interval", fallback=0)
 
     @property
+    def schedule_time(self) -> str:
+        return self.get("sending", "schedule_time")
+
+    @property
+    def advanced_antifingerprint(self) -> bool:
+        raw = self.get("content", "advanced_antifingerprint", fallback="false")
+        return raw.lower() in ("true", "1", "yes")
+
+    @property
+    def structure_variation(self) -> float:
+        return self.getfloat("content", "structure_variation", fallback=0.5)
+
+    @property
     def antifingerprint_classes(self) -> bool:
         raw = self.get("content", "antifingerprint_classes", fallback="true")
         return raw.lower() in ("true", "1", "yes")
