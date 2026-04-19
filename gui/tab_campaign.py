@@ -378,7 +378,7 @@ class CampaignTab(ttk.Frame):
             messagebox.showerror("Schedule", "Invalid format. Use HH:MM")
 
     def _blacklist_check(self):
-        log_event("Running blacklist check...")
+        log_event("Running blacklist check on sending IPs...")
         self._status_var.set("Checking blacklists...")
 
         def check():
@@ -389,29 +389,25 @@ class CampaignTab(ttk.Frame):
                 log_event("Blacklist check: no API key")
                 return
             from mailer.blacklist_checker import BlacklistChecker
+            from mailer.smtp_worker import ProxyConfig
             checker = BlacklistChecker(api_key)
-            smtp_file = self._smtp_var.get()
-            hosts = set()
-            dirs = ["SMTPs", "smtps", ""]
-            for d in dirs:
-                full = os.path.join(d, smtp_file) if d else smtp_file
-                if os.path.isfile(full):
-                    with open(full, "r") as f:
-                        for line in f:
-                            parts = line.strip().split(",")
-                            if len(parts) >= 4:
-                                hosts.add(parts[0].strip())
-                    break
-            if not hosts:
-                self._status_var.set("No SMTP hosts found")
-                return
-            for host in hosts:
-                clean, details = checker.check(host)
-                if clean:
-                    log_event(f"Blacklist: {host} — CLEAN")
+
+            proxy_file = cp.get("sending", "proxy_file", fallback="")
+            proxies = []
+            if proxy_file and os.path.isfile(proxy_file):
+                with open(proxy_file, "r") as f:
+                    for line in f:
+                        p = ProxyConfig.parse(line.strip())
+                        if p:
+                            proxies.append(p)
+
+            results = checker.check_sending_ips(proxies if proxies else None)
+            for label, info in results.items():
+                if info["clean"]:
+                    log_event(f"Blacklist: {label} — CLEAN")
                 else:
-                    names = ", ".join(d.get("name", "") for d in details[:3])
-                    log_event(f"Blacklist: {host} — LISTED on {len(details)} lists ({names})")
+                    names = ", ".join(d.get("name", "") for d in info["details"][:3])
+                    log_event(f"Blacklist: {label} — LISTED on {len(info['details'])} lists ({names})")
             self._status_var.set("Blacklist check done")
 
         threading.Thread(target=check, daemon=True).start()

@@ -170,18 +170,19 @@ class MailerCore:
         if api_key:
             from .blacklist_checker import BlacklistChecker
             checker = BlacklistChecker(api_key)
+            proxies = self._smtp_pool._proxies if self._smtp_pool.proxy_count > 0 else None
             print(f"  Blacklist check:  ", end="")
-            results = checker.check_smtp_accounts(self._smtp_pool._accounts)
+            results = checker.check_sending_ips(proxies)
             all_clean = True
-            for host, info in results.items():
+            for label, info in results.items():
                 if info["clean"]:
-                    print(f"{Fore.GREEN}{host} OK{Style.RESET_ALL}  ", end="")
+                    print(f"{Fore.GREEN}{label} OK{Style.RESET_ALL}  ", end="")
                 else:
                     all_clean = False
-                    print(f"{Fore.RED}{host} LISTED ({len(info['details'])} lists){Style.RESET_ALL}  ", end="")
+                    print(f"{Fore.RED}{label} LISTED ({len(info['details'])} lists){Style.RESET_ALL}  ", end="")
             print()
             if not all_clean:
-                print(f"  {Fore.RED}[!] Some IPs are blacklisted. Continue anyway? Deliverability may suffer.{Style.RESET_ALL}")
+                print(f"  {Fore.RED}[!] Some IPs are blacklisted. Deliverability may suffer.{Style.RESET_ALL}")
 
         if self._content.has_names:
             print(f"  Names pool:       {Fore.GREEN}loaded{Style.RESET_ALL}")
