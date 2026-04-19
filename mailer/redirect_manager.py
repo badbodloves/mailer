@@ -3,7 +3,9 @@ import random
 import sqlite3
 import threading
 import logging
+import time
 from typing import List, Optional
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 try:
     import requests as _requests
@@ -17,21 +19,19 @@ API_URL = (
     "https://www.google.com/httpservice/retry/"
     "SearchApiService/GetShortenedKpSharingUrl"
 )
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) "
-    "Gecko/20100101 Firefox/120.0"
-)
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
+    "Accept": "*/*",
+    "Accept-Language": "de,en-US;q=0.7,en;q=0.3",
+    "Referer": "https://www.google.com/",
+}
 
 
 class RedirectManager:
     LINKS_PER_GROUP = 10
 
-    def __init__(
-        self,
-        target_url: str = "",
-        db_path: str = "redirects.db",
-        enabled: bool = False,
-    ):
+    def __init__(self, target_url: str = "", db_path: str = "redirects.db",
+                 enabled: bool = False):
         self._target_url = target_url
         self._db_path = db_path
         self._enabled = enabled and bool(target_url)
@@ -51,34 +51,28 @@ class RedirectManager:
         with self._lock:
             return len(self._links)
 
-    def _ensure_schema(self) -> None:
+    def _ensure_schema(self):
         conn = sqlite3.connect(self._db_path, timeout=10)
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS redirect_links (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                short_url TEXT NOT NULL,
-                target_url TEXT NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-            )
-        """)
+        conn.execute("""CREATE TABLE IF NOT EXISTS redirect_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            short_url TEXT NOT NULL,
+            target_url TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )""")
         conn.commit()
         conn.close()
 
-    def _load_from_db(self) -> None:
+    def _load_from_db(self):
         conn = sqlite3.connect(self._db_path, timeout=10)
-        rows = conn.execute(
-            "SELECT short_url FROM redirect_links ORDER BY id"
-        ).fetchall()
+        rows = conn.execute("SELECT short_url FROM redirect_links ORDER BY id").fetchall()
         conn.close()
         with self._lock:
             self._links = [r[0] for r in rows]
 
-    def _save_link(self, short_url: str) -> None:
+    def _save_link(self, short_url: str, target: str = ""):
         conn = sqlite3.connect(self._db_path, timeout=10)
-        conn.execute(
-            "INSERT INTO redirect_links (short_url, target_url) VALUES (?, ?)",
-            (short_url, self._target_url),
-        )
+        conn.execute("INSERT INTO redirect_links (short_url, target_url) VALUES (?, ?)",
+                     (short_url, target or self._target_url))
         conn.commit()
         conn.close()
 
@@ -86,23 +80,18 @@ class RedirectManager:
         if not self._enabled:
             return
         if not HAS_REQUESTS:
-            logger.error("requests not installed — redirect generation unavailable")
+            logger.error("requests not installed")
             return
-
         needed = max(1, lead_count // self.LINKS_PER_GROUP)
         current = self.pool_size
         if current >= needed:
             return
-
         missing = needed - current
-        self._gen_thread = threading.Thread(
-            target=self._generate_batch,
-            args=(missing,),
-            daemon=True,
-        )
+        self._gen_thread = threading.Thread(target=self._generate_batch,
+                                            args=(missing,), daemon=True)
         self._gen_thread.start()
 
-    def wait_ready(self) -> None:
+    def wait_ready(self):
         if self._gen_thread and self._gen_thread.is_alive():
             self._gen_thread.join()
 
@@ -111,64 +100,68 @@ class RedirectManager:
             if not self._links:
                 return self._target_url
             group = send_index // self.LINKS_PER_GROUP
-            idx = group % len(self._links)
-            return self._links[idx]
+            return self._links[group % len(self._links)]
 
-    def _generate_batch(self, count: int) -> None:
+    def _generate_batch(self, count: int):
         print(f"  Redirect links: generating {count} ...")
         generated = 0
         for i in range(count):
-            url = self._generate_one()
+            url = self._generate_one(self._target_url)
             if url:
                 with self._lock:
                     self._links.append(url)
                 self._save_link(url)
                 generated += 1
             if (i + 1) % 10 == 0 or (i + 1) == count:
-                print(f"    [{i + 1}/{count}] generated")
-        print(f"  Redirect pool ready: {self.pool_size} links")
+                print(f"    [{i + 1}/{count}] ({generated} ok)")
+            time.sleep(0.5)
+        print(f"  Redirect pool: {self.pool_size} links")
 
-    def _generate_one(self) -> Optional[str]:
-        rand_param = random.randint(100000, 999999)
-        target = f"{self._target_url}?_r={rand_param}"
-        payload = json.dumps([target])
-
+    @staticmethod
+    def _generate_one(target_url: str) -> Optional[str]:
+        reqpld = json.dumps([[[target_url], 1, None, None, None, None, 35]])
+        params = {
+            "sca_esv": "2f77f72a12157cd0",
+            "client": "firefox-b-d",
+            "hs": "VrYp",
+            "reqpld": reqpld,
+            "msc": "gwsrpc",
+            "opi": "89978449",
+        }
         try:
-            resp = _requests.post(
-                API_URL,
-                params={
-                    "reqpld": payload,
-                    "msc": "gwsrpc",
-                    "client": "firefox-b-d",
-                },
-                headers={
-                    "Content-Type": "application/x-www-form-urlencoded",
-                    "User-Agent": USER_AGENT,
-                    "Accept": "*/*",
-                },
-                timeout=15,
-            )
-            if resp.status_code != 200:
-                logger.error("Redirect API %d: %s", resp.status_code, resp.text[:200])
-                return None
-
-            body = resp.text
-            if "share.google" in body:
-                for token in body.replace('"', " ").replace("'", " ").split():
-                    if "share.google" in token and token.startswith("http"):
-                        return token.strip()
-
-            try:
-                data = resp.json()
-                if isinstance(data, list) and data:
-                    return str(data[0])
-                if isinstance(data, str):
-                    return data
-            except (ValueError, KeyError):
-                pass
-
-            logger.error("Redirect API: unexpected response format: %s", body[:300])
-            return None
+            resp = _requests.get(API_URL, params=params, headers=HEADERS, timeout=15)
+            resp.raise_for_status()
+            raw = resp.text
+            if raw.startswith(")]}'"):
+                raw = raw[4:].strip()
+            data = json.loads(raw)
+            return data[0][0][0]
         except Exception as exc:
             logger.error("Redirect API error: %s", exc)
             return None
+
+    @staticmethod
+    def generate_batch_threaded(target_url: str, count: int, threads: int = 5,
+                                 callback=None) -> List[str]:
+        results: List[str] = []
+        lock = threading.Lock()
+        done = [0]
+
+        def worker():
+            url = RedirectManager._generate_one(target_url)
+            with lock:
+                if url:
+                    results.append(url)
+                done[0] += 1
+                if callback:
+                    callback(done[0], count, url)
+
+        with ThreadPoolExecutor(max_workers=threads) as executor:
+            futures = [executor.submit(worker) for _ in range(count)]
+            for f in as_completed(futures):
+                try:
+                    f.result()
+                except Exception:
+                    pass
+                time.sleep(0.3)
+        return results

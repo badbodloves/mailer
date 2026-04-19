@@ -2,7 +2,7 @@ import os
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
-from .helpers import scan_files
+from .helpers import scan_files, count_lines, preview_lines
 
 LEADS_DIR = "Leads"
 SMTPS_DIR = "SMTPs"
@@ -22,62 +22,87 @@ class FilesTab(ttk.Frame):
         paned.pack(fill="both", expand=True, padx=10, pady=5)
 
         # Leads
-        lf_leads = ttk.LabelFrame(paned, text="Leads", padding=5)
-        paned.add(lf_leads, weight=1)
-        self._leads_list = tk.Listbox(lf_leads, height=15)
-        self._leads_list.pack(fill="both", expand=True)
-        bf1 = ttk.Frame(lf_leads)
-        bf1.pack(fill="x", pady=3)
-        ttk.Button(bf1, text="Add", command=lambda: self._add(LEADS_DIR, self._leads_list, ".txt")).pack(side="left", padx=2)
-        ttk.Button(bf1, text="Delete", command=lambda: self._delete(LEADS_DIR, self._leads_list)).pack(side="left", padx=2)
-        ttk.Button(bf1, text="View", command=lambda: self._view(LEADS_DIR, self._leads_list)).pack(side="left", padx=2)
+        self._leads_frame, self._leads_list, self._leads_count = self._make_panel(
+            paned, "Leads", LEADS_DIR, (".txt",))
 
         # SMTPs
-        lf_smtp = ttk.LabelFrame(paned, text="SMTPs", padding=5)
-        paned.add(lf_smtp, weight=1)
-        self._smtp_list = tk.Listbox(lf_smtp, height=15)
-        self._smtp_list.pack(fill="both", expand=True)
-        bf2 = ttk.Frame(lf_smtp)
-        bf2.pack(fill="x", pady=3)
-        ttk.Button(bf2, text="Add", command=lambda: self._add(SMTPS_DIR, self._smtp_list, ".txt")).pack(side="left", padx=2)
-        ttk.Button(bf2, text="Delete", command=lambda: self._delete(SMTPS_DIR, self._smtp_list)).pack(side="left", padx=2)
-        ttk.Button(bf2, text="View", command=lambda: self._view(SMTPS_DIR, self._smtp_list)).pack(side="left", padx=2)
+        self._smtp_frame, self._smtp_list, self._smtp_count = self._make_panel(
+            paned, "SMTPs", SMTPS_DIR, (".txt",))
 
         # Logos
-        lf_logos = ttk.LabelFrame(paned, text="Logos", padding=5)
-        paned.add(lf_logos, weight=1)
-        self._logo_list = tk.Listbox(lf_logos, height=15)
-        self._logo_list.pack(fill="both", expand=True)
-        bf3 = ttk.Frame(lf_logos)
-        bf3.pack(fill="x", pady=3)
-        ttk.Button(bf3, text="Add", command=lambda: self._add(LOGOS_DIR, self._logo_list, (".png", ".jpg", ".jpeg"))).pack(side="left", padx=2)
-        ttk.Button(bf3, text="Delete", command=lambda: self._delete(LOGOS_DIR, self._logo_list)).pack(side="left", padx=2)
+        self._logo_frame, self._logo_list, self._logo_count = self._make_panel(
+            paned, "Logos", LOGOS_DIR, (".png", ".jpg", ".jpeg", ".gif", ".webp"),
+            show_preview=True)
 
-        self._logo_preview = ttk.Label(lf_logos, text="(select to preview)")
-        self._logo_preview.pack(pady=5)
-        self._logo_list.bind("<<ListboxSelect>>", self._preview_logo)
+        # Preview area
+        pv = ttk.LabelFrame(self, text="File Preview", padding=5)
+        pv.pack(fill="x", padx=10, pady=5)
+        self._preview = tk.Text(pv, height=6, font=("Consolas", 9), state="disabled", bg="#f5f5f5")
+        self._preview.pack(fill="x")
 
         self._refresh_all()
 
+    def _make_panel(self, paned, title, folder, exts, show_preview=False):
+        lf = ttk.LabelFrame(paned, text=title, padding=5)
+        paned.add(lf, weight=1)
+
+        count_var = tk.StringVar(value="0 files")
+        ttk.Label(lf, textvariable=count_var, font=("", 9, "bold")).pack(anchor="w")
+
+        listbox = tk.Listbox(lf, height=12, font=("Consolas", 9))
+        listbox.pack(fill="both", expand=True)
+        listbox.bind("<<ListboxSelect>>", lambda e: self._on_select(folder, listbox))
+
+        bf = ttk.Frame(lf)
+        bf.pack(fill="x", pady=3)
+        ttk.Button(bf, text="Add", command=lambda: self._add(folder, exts)).pack(side="left", padx=2)
+        ttk.Button(bf, text="Delete", command=lambda: self._delete(folder, listbox)).pack(side="left", padx=2)
+        ttk.Button(bf, text="View", command=lambda: self._view(folder, listbox)).pack(side="left", padx=2)
+
+        if show_preview:
+            self._logo_preview = ttk.Label(lf, text="")
+            self._logo_preview.pack(pady=3)
+            listbox.bind("<<ListboxSelect>>", lambda e: self._preview_logo(folder, listbox))
+
+        return lf, listbox, count_var
+
     def _refresh_all(self):
-        self._refresh_list(LEADS_DIR, self._leads_list, (".txt",))
-        self._refresh_list(SMTPS_DIR, self._smtp_list, (".txt",))
-        self._refresh_list(LOGOS_DIR, self._logo_list, (".png", ".jpg", ".jpeg", ".gif", ".webp"))
+        self._refresh_one(LEADS_DIR, self._leads_list, self._leads_count, (".txt",))
+        self._refresh_one(SMTPS_DIR, self._smtp_list, self._smtp_count, (".txt",))
+        self._refresh_one(LOGOS_DIR, self._logo_list, self._logo_count,
+                          (".png", ".jpg", ".jpeg", ".gif", ".webp"))
 
-    def _refresh_list(self, folder, listbox, exts):
+    def _refresh_one(self, folder, listbox, count_var, exts):
         listbox.delete(0, "end")
-        for f in scan_files(folder, exts):
-            size = os.path.getsize(os.path.join(folder, f))
-            listbox.insert("end", f"{f}  ({size:,} bytes)")
+        files = scan_files(folder, exts)
+        for f in files:
+            path = os.path.join(folder, f)
+            if f.lower().endswith(".txt"):
+                n = count_lines(path)
+                listbox.insert("end", f"{f}  ({n:,} lines)")
+            else:
+                sz = os.path.getsize(path)
+                listbox.insert("end", f"{f}  ({sz:,} bytes)")
+        count_var.set(f"{len(files)} files")
 
-    def _add(self, folder, listbox, exts):
+    def _on_select(self, folder, listbox):
+        sel = listbox.curselection()
+        if not sel:
+            return
+        name = listbox.get(sel[0]).split("  (")[0]
+        path = os.path.join(folder, name)
+        self._preview.config(state="normal")
+        self._preview.delete("1.0", "end")
+        self._preview.insert("1.0", preview_lines(path, 10))
+        self._preview.config(state="disabled")
+
+    def _add(self, folder, exts):
         if isinstance(exts, str):
             exts = (exts,)
         ftypes = [("Files", " ".join(f"*{e}" for e in exts))]
         paths = filedialog.askopenfilenames(filetypes=ftypes)
         for src in paths:
-            name = os.path.basename(src)
-            dest = os.path.join(folder, name)
+            dest = os.path.join(folder, os.path.basename(src))
             with open(src, "rb") as fi, open(dest, "wb") as fo:
                 fo.write(fi.read())
         self._refresh_all()
@@ -86,8 +111,7 @@ class FilesTab(ttk.Frame):
         sel = listbox.curselection()
         if not sel:
             return
-        entry = listbox.get(sel[0])
-        name = entry.split("  (")[0]
+        name = listbox.get(sel[0]).split("  (")[0]
         if messagebox.askyesno("Delete", f"Delete {name}?"):
             os.unlink(os.path.join(folder, name))
             self._refresh_all()
@@ -96,12 +120,11 @@ class FilesTab(ttk.Frame):
         sel = listbox.curselection()
         if not sel:
             return
-        entry = listbox.get(sel[0])
-        name = entry.split("  (")[0]
+        name = listbox.get(sel[0]).split("  (")[0]
         path = os.path.join(folder, name)
         win = tk.Toplevel(self)
         win.title(name)
-        win.geometry("600x400")
+        win.geometry("700x500")
         txt = tk.Text(win, font=("Consolas", 10), wrap="word")
         txt.pack(fill="both", expand=True)
         try:
@@ -110,19 +133,19 @@ class FilesTab(ttk.Frame):
         except OSError:
             txt.insert("1.0", "(cannot read)")
 
-    def _preview_logo(self, event=None):
-        sel = self._logo_list.curselection()
+    def _preview_logo(self, folder, listbox):
+        sel = listbox.curselection()
         if not sel:
             return
-        entry = self._logo_list.get(sel[0])
-        name = entry.split("  (")[0]
-        path = os.path.join(LOGOS_DIR, name)
+        name = listbox.get(sel[0]).split("  (")[0]
+        path = os.path.join(folder, name)
+        self._on_select(folder, listbox)
         try:
             from PIL import Image, ImageTk
             img = Image.open(path)
-            img.thumbnail((200, 150))
+            img.thumbnail((180, 120))
             photo = ImageTk.PhotoImage(img)
             self._logo_preview.config(image=photo, text="")
             self._logo_preview._photo = photo
         except Exception:
-            self._logo_preview.config(text=f"(cannot preview {name})", image="")
+            self._logo_preview.config(text=f"({name})", image="")

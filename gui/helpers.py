@@ -3,9 +3,11 @@ import sqlite3
 import configparser
 import tempfile
 import webbrowser
+import time
 
 CONFIG_PATH = "config.ini"
 LOG_FILE = "smtp_errors.log"
+_events: list = []
 
 
 def read_config() -> configparser.ConfigParser:
@@ -21,8 +23,7 @@ def save_config(cp: configparser.ConfigParser):
 
 
 def db_path() -> str:
-    cp = read_config()
-    return cp.get("database", "db_path", fallback="mailer.db")
+    return read_config().get("database", "db_path", fallback="mailer.db")
 
 
 def db_stats() -> dict:
@@ -47,8 +48,7 @@ def log_tail(n: int = 80) -> str:
         return "(no log file)"
     try:
         with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-            lines = f.readlines()
-        return "".join(lines[-n:]) or "(empty)"
+            return "".join(f.readlines()[-n:]) or "(empty)"
     except OSError:
         return "(error)"
 
@@ -59,16 +59,48 @@ def scan_files(folder: str, exts: tuple = (".txt",)) -> list:
     return sorted(f for f in os.listdir(folder) if f.lower().endswith(exts))
 
 
-def open_html_in_browser(html: str, title: str = "Preview"):
+def count_lines(filepath: str) -> int:
+    if not os.path.isfile(filepath):
+        return 0
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            return sum(1 for line in f if line.strip())
+    except OSError:
+        return 0
+
+
+def preview_lines(filepath: str, n: int = 5) -> str:
+    if not os.path.isfile(filepath):
+        return "(file not found)"
+    try:
+        with open(filepath, "r", encoding="utf-8", errors="replace") as f:
+            lines = [l.rstrip() for l in f if l.strip()][:n]
+        return "\n".join(lines) + (f"\n... ({count_lines(filepath)} total)" if len(lines) >= n else "")
+    except OSError:
+        return "(error)"
+
+
+def open_html_in_browser(html: str):
     with tempfile.NamedTemporaryFile("w", suffix=".html", delete=False, encoding="utf-8") as f:
         f.write(html)
         webbrowser.open(f"file://{f.name}")
 
 
 def open_raw_in_browser(raw: str):
-    html = f"<html><body><pre style='font-family:monospace;font-size:13px;white-space:pre-wrap'>{_escape(raw)}</pre></body></html>"
-    open_html_in_browser(html, "Raw MIME")
+    html = f"<html><body><pre style='font-family:Consolas,monospace;font-size:13px;white-space:pre-wrap;background:#1e1e1e;color:#d4d4d4;padding:20px'>{_esc(raw)}</pre></body></html>"
+    open_html_in_browser(html)
 
 
-def _escape(text: str) -> str:
-    return text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+def log_event(msg: str):
+    ts = time.strftime("%Y-%m-%d %H:%M:%S")
+    _events.append(f"{ts}  {msg}")
+    if len(_events) > 200:
+        _events.pop(0)
+
+
+def get_events() -> list:
+    return list(_events)
+
+
+def _esc(t: str) -> str:
+    return t.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
