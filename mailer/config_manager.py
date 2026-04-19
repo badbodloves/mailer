@@ -154,6 +154,10 @@ class ConfigManager:
         return raw.lower() in ("true", "1", "yes")
 
     @property
+    def logo_max_colors(self) -> int:
+        return self.getint("IMAGE_API", "logo_max_colors", fallback=256)
+
+    @property
     def image_api_enabled(self) -> bool:
         raw = self.get("IMAGE_API", "enabled", fallback="false")
         return raw.lower() in ("true", "1", "yes")

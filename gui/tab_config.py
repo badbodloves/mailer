@@ -30,6 +30,7 @@ HELP = {
     ("IMAGE_API", "mode"): "cid = embed logo in email. cloudinary = external URL.",
     ("IMAGE_API", "quantize"): "true = palette-compress logos (smaller). false = raw RGBA.",
     ("IMAGE_API", "downscale"): "true = resize to 220px. false = keep original pixels.",
+    ("IMAGE_API", "logo_max_colors"): "Max palette colors (2-256). Lower = smaller file. 32 is good for flat logos.",
     ("redirect", "enabled"): "true = enable redirect link rotation.",
     ("redirect", "target_url"): "The landing page URL for redirect generation.",
     ("redirect", "db_path"): "SQLite file for cached redirect links.",

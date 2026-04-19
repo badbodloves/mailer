@@ -104,6 +104,7 @@ class LogoTab(ttk.Frame):
                 enabled=True, logos_dir=LOGOS_DIR, mode="cid",
                 quantize=cp.get("IMAGE_API", "quantize", fallback="true").lower() in ("true","1","yes"),
                 downscale=cp.get("IMAGE_API", "downscale", fallback="false").lower() in ("true","1","yes"),
+                max_colors=int(cp.get("IMAGE_API", "logo_max_colors", fallback="256")),
             )
             lead_count = self._lead_count.get()
             mgr.prepare(lead_count)

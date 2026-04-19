@@ -42,6 +42,7 @@ class ImageManager:
         mode: str = "cloudinary",
         quantize: bool = True,
         downscale: bool = True,
+        max_colors: int = 256,
     ):
         self._cloud_name = cloud_name
         self._api_key = api_key
@@ -55,6 +56,7 @@ class ImageManager:
         self._logo_width: int = 0
         self._quantize: bool = quantize
         self._downscale: bool = downscale
+        self._max_colors: int = max(2, min(256, max_colors))
 
         if self._mode == "cloudinary":
             self._enabled = enabled and bool(cloud_name and api_key and api_secret)
@@ -253,7 +255,7 @@ class ImageManager:
                     method = (Image.Quantize.FASTOCTREE
                               if variant.mode == "RGBA"
                               else Image.Quantize.MEDIANCUT)
-                    variant = variant.quantize(colors=256, method=method)
+                    variant = variant.quantize(colors=self._max_colors, method=method)
                 except Exception:
                     pass
 
