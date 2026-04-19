@@ -158,6 +158,10 @@ class ConfigManager:
         return self.getint("IMAGE_API", "logo_max_colors", fallback=256)
 
     @property
+    def logo_rotate_every(self) -> int:
+        return self.getint("IMAGE_API", "logo_rotate_every", fallback=0)
+
+    @property
     def image_api_enabled(self) -> bool:
         raw = self.get("IMAGE_API", "enabled", fallback="false")
         return raw.lower() in ("true", "1", "yes")

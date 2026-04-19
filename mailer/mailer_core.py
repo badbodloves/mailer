@@ -95,6 +95,7 @@ class MailerCore:
             quantize=self._config.image_quantize,
             downscale=self._config.image_downscale,
             max_colors=self._config.logo_max_colors,
+            logo_rotate_every=self._config.logo_rotate_every,
         )
         self._redirect_mgr = RedirectManager(
             target_url=self._config.redirect_target_url,
@@ -369,7 +370,7 @@ class MailerCore:
 
         inline_images = None
         if self._image_mgr.enabled and self._image_mgr.mode == "cid" and "{Logo}" in html_body:
-            cid_result = self._image_mgr.get_cid_logo()
+            cid_result = self._image_mgr.get_cid_logo(send_idx)
             if cid_result:
                 img_bytes, cid_local, mime_type = cid_result
                 domain = from_email.split("@")[1] if "@" in from_email else "mail"

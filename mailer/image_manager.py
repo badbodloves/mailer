@@ -43,6 +43,7 @@ class ImageManager:
         quantize: bool = True,
         downscale: bool = True,
         max_colors: int = 256,
+        logo_rotate_every: int = 0,
     ):
         self._cloud_name = cloud_name
         self._api_key = api_key
@@ -57,6 +58,8 @@ class ImageManager:
         self._quantize: bool = quantize
         self._downscale: bool = downscale
         self._max_colors: int = max(2, min(256, max_colors))
+        self._logo_rotate_every: int = logo_rotate_every
+        self._logo_groups: List[List[Image.Image]] = []
 
         if self._mode == "cloudinary":
             self._enabled = enabled and bool(cloud_name and api_key and api_secret)
@@ -101,10 +104,15 @@ class ImageManager:
             return ""
         return random.choice(self._urls)
 
-    def get_cid_logo(self) -> Optional[Tuple[bytes, str, str]]:
-        if not self._templates:
+    def get_cid_logo(self, send_index: int = -1) -> Optional[Tuple[bytes, str, str]]:
+        if not self._logo_groups:
             return None
-        template = random.choice(self._templates)
+        if self._logo_rotate_every > 0 and send_index >= 0 and len(self._logo_groups) > 1:
+            group_idx = (send_index // self._logo_rotate_every) % len(self._logo_groups)
+        else:
+            group_idx = 0
+        group = self._logo_groups[group_idx]
+        template = random.choice(group)
         img = template.copy()
         pixels = img.load()
         w, h = img.size
@@ -160,8 +168,67 @@ class ImageManager:
             if f.lower().endswith(exts) and os.path.isfile(os.path.join(self._logos_dir, f))
         )
 
+    def _load_base_image(self, path: str):
+        img = Image.open(path)
+        if img.mode == "P":
+            img = img.convert("RGBA")
+        elif img.mode not in ("RGB", "RGBA"):
+            img = img.convert("RGB")
+        if self._downscale and img.width > 220:
+            ratio = 220 / img.width
+            img = img.resize((220, max(1, round(img.height * ratio))), Image.LANCZOS)
+        if img.mode == "RGBA":
+            if img.getchannel("A").getextrema()[0] == 255:
+                img = img.convert("RGB")
+        return img
+
+    def _make_variant(self, base_img, seed: int):
+        rng = random.Random(seed)
+        w, h = base_img.size
+        variant = base_img.copy()
+
+        scale = rng.uniform(0.98, 1.02)
+        nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
+        if (nw, nh) != (w, h):
+            variant = variant.resize((nw, nh), Image.LANCZOS)
+
+        angle = rng.uniform(-0.7, 0.7)
+        if abs(angle) > 0.1:
+            fill = (0, 0, 0, 0) if variant.mode == "RGBA" else (255, 255, 255)
+            variant = variant.rotate(angle, resample=Image.BICUBIC, expand=False, fillcolor=fill)
+
+        if abs(rng.uniform(-0.01, 0.01)) > 0.002:
+            variant = ImageEnhance.Color(variant).enhance(1.0 + rng.uniform(-0.1, 0.1))
+
+        if abs(rng.uniform(-0.01, 0.01)) > 0.002:
+            variant = ImageEnhance.Brightness(variant).enhance(1.0 + rng.uniform(-0.01, 0.01))
+
+        ct, cb, cl, cr = rng.randint(0, 2), rng.randint(0, 2), rng.randint(0, 2), rng.randint(0, 2)
+        vw, vh = variant.size
+        if ct + cb < vh - 2 and cl + cr < vw - 2:
+            variant = variant.crop((cl, ct, vw - cr, vh - cb))
+
+        blur_r = rng.uniform(0.0, 0.3)
+        if blur_r > 0.1:
+            variant = variant.filter(ImageFilter.GaussianBlur(radius=blur_r))
+
+        sx, sy = rng.choice([-1, 0, 1]), rng.choice([-1, 0, 1])
+        if sx or sy:
+            from PIL import ImageChops
+            variant = ImageChops.offset(variant, sx, sy)
+
+        if self._fmt == "PNG" and self._quantize:
+            try:
+                method = (Image.Quantize.FASTOCTREE if variant.mode == "RGBA"
+                          else Image.Quantize.MEDIANCUT)
+                variant = variant.quantize(colors=self._max_colors, method=method)
+            except Exception:
+                pass
+
+        return variant
+
     def _prepare_cid_templates(self, lead_count: int) -> None:
-        if self._templates:
+        if self._logo_groups:
             return
         if not HAS_PILLOW:
             logger.error("Pillow not installed")
@@ -173,95 +240,26 @@ class ImageManager:
             self._enabled = False
             return
 
-        base_path = logos[0]
-        self._fmt = "PNG" if base_path.lower().endswith(".png") else "JPEG"
-        base_img = Image.open(base_path)
-        if base_img.mode == "P":
-            base_img = base_img.convert("RGBA")
-        elif base_img.mode not in ("RGB", "RGBA"):
-            base_img = base_img.convert("RGB")
+        self._fmt = "PNG" if logos[0].lower().endswith(".png") else "JPEG"
+        num_per_logo = max(5, _calc_num_templates(lead_count) // len(logos))
 
-        if self._downscale and base_img.width > 220:
-            ratio = 220 / base_img.width
-            base_img = base_img.resize(
-                (220, max(1, round(base_img.height * ratio))), Image.LANCZOS
-            )
+        print(f"  CID logos: {len(logos)} logo(s), {num_per_logo} templates each ...")
 
-        has_transparency = False
-        if base_img.mode == "RGBA":
-            has_transparency = base_img.getchannel("A").getextrema()[0] < 255
-            if not has_transparency:
-                base_img = base_img.convert("RGB")
+        for logo_idx, logo_path in enumerate(logos):
+            base_img = self._load_base_image(logo_path)
+            if logo_idx == 0:
+                self._logo_width = base_img.size[0]
 
-        w, h = base_img.size
-        self._logo_width = w
+            group = []
+            for i in range(num_per_logo):
+                group.append(self._make_variant(base_img, logo_idx * 10000 + i))
+            self._logo_groups.append(group)
+            self._templates.extend(group)
+            print(f"    [{logo_idx+1}/{len(logos)}] {os.path.basename(logo_path)}: "
+                  f"{base_img.size[0]}x{base_img.size[1]}px, {len(group)} variants")
 
-        num = _calc_num_templates(lead_count)
-
-        if self._fmt == "PNG" and self._quantize:
-            mode_str = "P+alpha" if has_transparency else "P (palette)"
-        elif self._fmt == "PNG":
-            mode_str = "RGBA (raw)" if has_transparency else "RGB (raw)"
-        else:
-            mode_str = base_img.mode
-
-        print(f"  CID logos: {w}x{h}px, mode={mode_str}, "
-              f"generating {num} templates ...")
-
-        for i in range(num):
-            rng = random.Random(i)
-            variant = base_img.copy()
-
-            scale = rng.uniform(0.98, 1.02)
-            nw, nh = max(1, round(w * scale)), max(1, round(h * scale))
-            if (nw, nh) != (w, h):
-                variant = variant.resize((nw, nh), Image.LANCZOS)
-
-            angle = rng.uniform(-0.7, 0.7)
-            if abs(angle) > 0.1:
-                fill = (0, 0, 0, 0) if variant.mode == "RGBA" else (255, 255, 255)
-                variant = variant.rotate(angle, resample=Image.BICUBIC,
-                                          expand=False, fillcolor=fill)
-
-            hue_shift = rng.uniform(-0.01, 0.01)
-            if abs(hue_shift) > 0.002:
-                enhancer = ImageEnhance.Color(variant)
-                variant = enhancer.enhance(1.0 + hue_shift * 10)
-
-            bright_shift = rng.uniform(-0.01, 0.01)
-            if abs(bright_shift) > 0.002:
-                enhancer = ImageEnhance.Brightness(variant)
-                variant = enhancer.enhance(1.0 + bright_shift)
-
-            crop_t = rng.randint(0, 2)
-            crop_b = rng.randint(0, 2)
-            crop_l = rng.randint(0, 2)
-            crop_r = rng.randint(0, 2)
-            vw, vh = variant.size
-            if crop_t + crop_b < vh - 2 and crop_l + crop_r < vw - 2:
-                variant = variant.crop((crop_l, crop_t, vw - crop_r, vh - crop_b))
-
-            blur_r = rng.uniform(0.0, 0.3)
-            if blur_r > 0.1:
-                variant = variant.filter(ImageFilter.GaussianBlur(radius=blur_r))
-
-            sx, sy = rng.choice([-1, 0, 1]), rng.choice([-1, 0, 1])
-            if sx or sy:
-                from PIL import ImageChops
-                variant = ImageChops.offset(variant, sx, sy)
-
-            if self._fmt == "PNG" and self._quantize:
-                try:
-                    method = (Image.Quantize.FASTOCTREE
-                              if variant.mode == "RGBA"
-                              else Image.Quantize.MEDIANCUT)
-                    variant = variant.quantize(colors=self._max_colors, method=method)
-                except Exception:
-                    pass
-
-            self._templates.append(variant)
-
-        print(f"  CID logos: {len(self._templates)} templates ready")
+        total = sum(len(g) for g in self._logo_groups)
+        print(f"  CID logos: {total} templates ready ({len(logos)} logos)")
 
     def _load_cache(self) -> None:
         if not os.path.isfile(self.CACHE_FILE):
