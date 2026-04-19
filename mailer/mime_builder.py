@@ -139,7 +139,6 @@ class MIMEBuilder:
                 "Content-Transfer-Encoding: base64",
                 f"Content-ID: <{cid}>",
                 "Content-Disposition: inline",
-                f"X-Attachment-Id: {cid}",
                 "", b64_lines, "",
             ]
         return lines
