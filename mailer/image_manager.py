@@ -107,7 +107,9 @@ class ImageManager:
     def get_cid_logo(self, send_index: int = -1) -> Optional[Tuple[bytes, str, str]]:
         if not self._logo_groups:
             return None
-        if self._logo_rotate_every > 0 and send_index >= 0 and len(self._logo_groups) > 1:
+        if send_index < 0:
+            group_idx = random.randint(0, len(self._logo_groups) - 1)
+        elif self._logo_rotate_every > 0 and len(self._logo_groups) > 1:
             group_idx = (send_index // self._logo_rotate_every) % len(self._logo_groups)
         else:
             group_idx = 0
