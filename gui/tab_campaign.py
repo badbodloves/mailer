@@ -48,11 +48,26 @@ class CampaignTab(ttk.Frame):
         # Test mail
         test_f = ttk.LabelFrame(left, text="Test Mail", padding=8)
         test_f.pack(fill="x", pady=3)
-        ttk.Label(test_f, text="Send to:").pack(side="left")
-        self._test_var = tk.StringVar(value=read_config().get("test", "test_recipients", fallback=""))
-        ttk.Entry(test_f, textvariable=self._test_var, width=40).pack(side="left", padx=5)
-        ttk.Button(test_f, text="Send Test", command=self._test_mail).pack(side="left", padx=5)
-        ttk.Button(test_f, text="Save", command=self._save_test_addr).pack(side="left", padx=2)
+
+        r1 = ttk.Frame(test_f)
+        r1.pack(fill="x", pady=1)
+        ttk.Label(r1, text="Pre-check:").pack(side="left")
+        cp = read_config()
+        self._test_var = tk.StringVar(value=cp.get("test", "test_recipients", fallback=""))
+        ttk.Entry(r1, textvariable=self._test_var, width=35).pack(side="left", padx=5)
+        ttk.Button(r1, text="Send Test", command=self._test_mail).pack(side="left", padx=3)
+
+        r2 = ttk.Frame(test_f)
+        r2.pack(fill="x", pady=1)
+        ttk.Label(r2, text="Interval to:").pack(side="left")
+        self._interval_addr_var = tk.StringVar(value=cp.get("test", "interval_recipients", fallback=""))
+        ttk.Entry(r2, textvariable=self._interval_addr_var, width=25).pack(side="left", padx=5)
+        ttk.Label(r2, text="every").pack(side="left")
+        self._interval_count_var = tk.StringVar(value=cp.get("test", "test_interval", fallback="0"))
+        ttk.Entry(r2, textvariable=self._interval_count_var, width=6).pack(side="left", padx=3)
+        ttk.Label(r2, text="mails").pack(side="left")
+
+        ttk.Button(test_f, text="Save All", command=self._save_test_addr).pack(anchor="w", pady=2)
 
         # Control
         ctrl = ttk.LabelFrame(left, text="Control", padding=8)
@@ -186,6 +201,8 @@ class CampaignTab(ttk.Frame):
         if not cp.has_section("test"):
             cp.add_section("test")
         cp.set("test", "test_recipients", self._test_var.get())
+        cp.set("test", "interval_recipients", self._interval_addr_var.get())
+        cp.set("test", "test_interval", self._interval_count_var.get())
         save_config(cp)
 
     def _test_mail(self):

@@ -28,16 +28,17 @@ HEADERS = {
 
 
 class RedirectManager:
-    LINKS_PER_GROUP = 10
-
     def __init__(self, target_url: str = "", db_path: str = "redirects.db",
-                 enabled: bool = False):
+                 enabled: bool = False, rotate_every: int = 10,
+                 gen_threads: int = 3):
         self._target_url = target_url
         self._db_path = db_path
         self._enabled = enabled and bool(target_url)
         self._links: List[str] = []
         self._lock = threading.Lock()
         self._gen_thread: Optional[threading.Thread] = None
+        self._rotate_every = max(1, rotate_every)
+        self._gen_threads = max(1, gen_threads)
         if self._enabled:
             self._ensure_schema()
             self._load_from_db()
@@ -82,7 +83,7 @@ class RedirectManager:
         if not HAS_REQUESTS:
             logger.error("requests not installed")
             return
-        needed = max(1, lead_count // self.LINKS_PER_GROUP)
+        needed = max(1, lead_count // self._rotate_every)
         current = self.pool_size
         if current >= needed:
             return
@@ -99,7 +100,7 @@ class RedirectManager:
         with self._lock:
             if not self._links:
                 return self._target_url
-            group = send_index // self.LINKS_PER_GROUP
+            group = send_index // self._rotate_every
             return self._links[group % len(self._links)]
 
     def _generate_batch(self, count: int):

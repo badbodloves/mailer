@@ -200,5 +200,13 @@ class ConfigManager:
         return self.get("redirect", "db_path", fallback="redirects.db")
 
     @property
+    def redirect_rotate_every(self) -> int:
+        return self.getint("redirect", "rotate_every", fallback=10)
+
+    @property
+    def redirect_gen_threads(self) -> int:
+        return self.getint("redirect", "gen_threads", fallback=3)
+
+    @property
     def db_path(self) -> str:
         return self.get("database", "db_path", fallback="mailer.db")

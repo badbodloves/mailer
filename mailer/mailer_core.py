@@ -101,6 +101,8 @@ class MailerCore:
             target_url=self._config.redirect_target_url,
             db_path=self._config.redirect_db_path,
             enabled=self._config.redirect_enabled,
+            rotate_every=self._config.redirect_rotate_every,
+            gen_threads=self._config.redirect_gen_threads,
         )
         self._send_counter = _AtomicCounter()
         self._ui = UIConsole()
@@ -324,15 +326,16 @@ class MailerCore:
         interval = self._config.test_interval
         if interval <= 0:
             return
-        recipients = self._config.test_recipients
-        if not recipients:
+        raw = self._config.get("test", "interval_recipients")
+        if not raw:
+            raw = ",".join(self._config.test_recipients)
+        if not raw:
             return
+        recipients = [r.strip() for r in raw.split(",") if r.strip()]
         count = self._send_counter._value
         if count > 0 and count % interval == 0:
             for r in recipients:
-                r = r.strip()
-                if r:
-                    self._send_one(-1, r)
+                self._send_one(-1, r)
 
     def _pick_from_name_template(self) -> str:
         if self._content.has_names:
