@@ -91,10 +91,12 @@ class PreviewTab(QWidget):
         from_name = domain["from_name"] or "Newsletter"
         reply_to = domain["reply_to"] or from_email
 
-        raw, envelope = BulkMIMEBuilder.build_email(
-            from_name=from_name, from_email=from_email, reply_to=reply_to,
+        raw, envelope, _ = BulkMIMEBuilder.build_email(
+            from_name=from_name, from_email=from_email,
+            reply_to_name="", reply_to_email=reply_to,
             to_email=email, subject=subject, html_body=html_body, plain_body=plain,
-            list_id=f'"NL" <nl.{domain["domain"]}>',
+            list_id_token=f"nl.{domain['domain']}",
+            list_id_name="Newsletter",
             unsubscribe_url=f"https://unsub.{domain['domain']}/u/preview",
             unsubscribe_mailto=f"unsub-preview@unsub.{domain['domain']}",
             feedback_id=f"preview:test:p1:{domain['domain'][:15]}",

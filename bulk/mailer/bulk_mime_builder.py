@@ -18,8 +18,14 @@ from email.header import Header
 from typing import Optional, Tuple, List, Dict
 
 _CRLF = str.maketrans("", "", "\r\n")
-_LINE_LENGTH_RE = re.compile(r"[^\r\n]{991,}")
-_FEEDBACK_RE = re.compile(r"^[\w\-.:]{1,50}:[\w\-.:]{1,50}:[\w\-.:]{1,50}:[\w\-]{5,15}$")
+_LINE_LENGTH_RE = re.compile(r"[^\r\n]{997,}")
+_FEEDBACK_RE = re.compile(r"^[\w\-.:]*:[\w\-.:]*:[\w\-.:]*:[\w\-]{5,15}$")
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
+_RESERVED_HEADERS = frozenset({
+    "from", "to", "subject", "date", "message-id", "mime-version",
+    "content-type", "list-unsubscribe", "list-unsubscribe-post",
+    "list-id", "precedence", "feedback-id", "x-entity-ref-id", "reply-to",
+})
 
 
 class BulkMIMEBuilder:
@@ -69,7 +75,7 @@ class BulkMIMEBuilder:
 
     @staticmethod
     def _validate_email(email: str, label: str):
-        if "@" not in email or "." not in email.split("@")[-1]:
+        if not _EMAIL_RE.match(email):
             raise ValueError(f"Invalid {label}: {email!r}")
 
     @classmethod
@@ -77,16 +83,19 @@ class BulkMIMEBuilder:
         cls,
         from_name: str,
         from_email: str,
-        reply_to: str,
+        reply_to_name: str,
+        reply_to_email: str,
         to_email: str,
         subject: str,
         html_body: str,
         plain_body: str,
-        list_id: str,
-        unsubscribe_url: str,
-        unsubscribe_mailto: str,
+        list_id_token: str,
+        list_id_name: str = "",
+        unsubscribe_url: str = "",
+        unsubscribe_mailto: str = "",
         feedback_id: str = "",
         bounce_domain: str = "",
+        message_id_domain: str = "",
         recipient_id: str = "",
         attachment: Optional[Tuple[str, bytes]] = None,
         inline_images: Optional[List[Tuple[bytes, str, str]]] = None,
@@ -94,37 +103,41 @@ class BulkMIMEBuilder:
     ) -> Tuple[str, str, str]:
         """Build a bulk/newsletter email.
 
+        Does NOT include a Date header — the send layer must prepend
+        Date: at SMTP handoff time to avoid stale timestamps in queued batches.
+
         Returns (raw_message, envelope_from, verp_tag).
         """
         from_name = cls._sanitize(from_name)
         from_email = cls._sanitize(from_email)
-        reply_to_addr = cls._sanitize(reply_to)
+        reply_to_name = cls._sanitize(reply_to_name)
+        reply_to_email = cls._sanitize(reply_to_email)
         to_email = cls._sanitize(to_email)
         subject = cls._sanitize(subject)
-        list_id = cls._sanitize(list_id)
+        list_id_token = cls._sanitize(list_id_token)
+        list_id_name = cls._sanitize(list_id_name)
         unsubscribe_url = cls._sanitize(unsubscribe_url)
         unsubscribe_mailto = cls._sanitize(unsubscribe_mailto)
         feedback_id = cls._sanitize(feedback_id)
 
         cls._validate_email(from_email, "From")
         cls._validate_email(to_email, "To")
+        cls._validate_email(reply_to_email, "Reply-To")
 
         domain = from_email.split("@")[1]
-        if not domain or "." not in domain:
-            raise ValueError(f"Invalid sender domain: {domain!r}")
+        mid_domain = message_id_domain or domain
 
-        if not unsubscribe_url.startswith("https://"):
+        if unsubscribe_url and not unsubscribe_url.startswith("https://"):
             raise ValueError("Unsubscribe URL must be HTTPS")
 
         if feedback_id and not _FEEDBACK_RE.match(feedback_id):
             raise ValueError(f"Invalid Feedback-ID format: {feedback_id!r}")
 
-        if not list_id.strip().endswith(">"):
-            list_id = cls._ensure_angle_brackets(list_id)
+        list_id_str = f'"{list_id_name}" <{list_id_token}>' if list_id_name else f"<{list_id_token}>"
 
-        msg_id = cls._message_id(domain)
+        msg_id = cls._message_id(mid_domain)
         from_header = formataddr((cls._encode_header(from_name), from_email))
-        reply_header = formataddr(("", reply_to_addr)) if "@" in reply_to_addr else reply_to_addr
+        reply_header = formataddr((cls._encode_header(reply_to_name), reply_to_email))
         subject_enc = cls._encode_header(subject)
         entity_ref = str(uuid.uuid4())
 
@@ -138,11 +151,14 @@ class BulkMIMEBuilder:
             f"To: {to_email}",
             f"Subject: {subject_enc}",
             f"Message-ID: {msg_id}",
-            f"List-Id: {list_id}",
-            f"List-Unsubscribe: <{unsubscribe_url}>, <mailto:{unsubscribe_mailto}>",
-            "List-Unsubscribe-Post: List-Unsubscribe=One-Click",
-            "Precedence: bulk",
+            f"List-Id: {list_id_str}",
         ]
+
+        if unsubscribe_url and unsubscribe_mailto:
+            headers.append(f"List-Unsubscribe: <{unsubscribe_url}>, <mailto:{unsubscribe_mailto}>")
+            headers.append("List-Unsubscribe-Post: List-Unsubscribe=One-Click")
+
+        headers.append("Precedence: bulk")
 
         if feedback_id:
             headers.append(f"Feedback-ID: {feedback_id}")
@@ -151,6 +167,8 @@ class BulkMIMEBuilder:
 
         if custom_headers:
             for k, v in custom_headers.items():
+                if k.lower() in _RESERVED_HEADERS:
+                    raise ValueError(f"Cannot override reserved header: {k}")
                 headers.append(f"{cls._sanitize(k)}: {cls._sanitize(v)}")
 
         headers.append("MIME-Version: 1.0")
@@ -226,7 +244,7 @@ class BulkMIMEBuilder:
         h = list(headers)
         bnd = cls._boundary()
         h.append(f'Content-Type: multipart/alternative; boundary="{bnd}"')
-        lines = h + ["", ""] + cls._alt_part(bnd, html, plain) + [""]
+        lines = h + [""] + cls._alt_part(bnd, html, plain) + [""]
         return "\r\n".join(lines)
 
     @classmethod
@@ -236,7 +254,7 @@ class BulkMIMEBuilder:
         rel = cls._boundary()
         alt = cls._boundary()
         h.append(f'Content-Type: multipart/related; boundary="{rel}"')
-        lines = h + ["", ""]
+        lines = h + [""]
         lines.append(f"--{rel}")
         lines.append(f'Content-Type: multipart/alternative; boundary="{alt}"')
         lines.append("")
@@ -256,7 +274,7 @@ class BulkMIMEBuilder:
         mix = cls._boundary()
         alt = cls._boundary()
         h.append(f'Content-Type: multipart/mixed; boundary="{mix}"')
-        lines = h + ["", ""]
+        lines = h + [""]
         lines.append(f"--{mix}")
         lines.append(f'Content-Type: multipart/alternative; boundary="{alt}"')
         lines.append("")
@@ -277,7 +295,7 @@ class BulkMIMEBuilder:
         rel = cls._boundary()
         alt = cls._boundary()
         h.append(f'Content-Type: multipart/mixed; boundary="{mix}"')
-        lines = h + ["", ""]
+        lines = h + [""]
         lines.append(f"--{mix}")
         lines.append(f'Content-Type: multipart/related; boundary="{rel}"')
         lines.append("")
