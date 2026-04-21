@@ -27,9 +27,12 @@ CF_API = "https://api.cloudflare.com/client/v4"
 
 class R2Manager:
     def __init__(self, account_id: str = "", api_token: str = "",
-                 access_key_id: str = "", secret_access_key: str = ""):
+                 access_key_id: str = "", secret_access_key: str = "",
+                 global_api_key: str = "", auth_email: str = ""):
         self._account_id = account_id
         self._api_token = api_token
+        self._global_api_key = global_api_key
+        self._auth_email = auth_email
         self._s3 = None
 
         if HAS_BOTO3 and account_id and access_key_id and secret_access_key:
@@ -119,6 +122,10 @@ class R2Manager:
     # --- Cloudflare REST API for public access + custom domains ---
 
     def _cf_headers(self) -> dict:
+        if self._global_api_key and self._auth_email:
+            return {"X-Auth-Key": self._global_api_key,
+                    "X-Auth-Email": self._auth_email,
+                    "Content-Type": "application/json"}
         return {"Authorization": f"Bearer {self._api_token}",
                 "Content-Type": "application/json"}
 

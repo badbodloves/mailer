@@ -72,7 +72,10 @@ class BulkDBManager:
                 CREATE TABLE IF NOT EXISTS cf_accounts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
-                    api_token TEXT NOT NULL,
+                    auth_type TEXT DEFAULT 'token',
+                    api_token TEXT DEFAULT '',
+                    global_api_key TEXT DEFAULT '',
+                    auth_email TEXT DEFAULT '',
                     account_id TEXT DEFAULT '',
                     r2_access_key TEXT DEFAULT '',
                     r2_secret_key TEXT DEFAULT '',
@@ -464,11 +467,16 @@ class BulkDBManager:
         return json.dumps(data, indent=2, ensure_ascii=False, default=str)
 
     # --- Cloudflare Accounts ---
-    def add_cf_account(self, name: str, api_token: str, account_id: str = "",
+    def add_cf_account(self, name: str, auth_type: str = "token",
+                       api_token: str = "", global_api_key: str = "",
+                       auth_email: str = "", account_id: str = "",
                        r2_access_key: str = "", r2_secret_key: str = "") -> int:
         c = self._conn()
-        c.execute("INSERT INTO cf_accounts (name,api_token,account_id,r2_access_key,r2_secret_key) "
-                  "VALUES (?,?,?,?,?)", (name, api_token, account_id, r2_access_key, r2_secret_key))
+        c.execute("INSERT INTO cf_accounts (name,auth_type,api_token,global_api_key,"
+                  "auth_email,account_id,r2_access_key,r2_secret_key) "
+                  "VALUES (?,?,?,?,?,?,?,?)",
+                  (name, auth_type, api_token, global_api_key, auth_email,
+                   account_id, r2_access_key, r2_secret_key))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 

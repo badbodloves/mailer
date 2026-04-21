@@ -180,30 +180,68 @@ class CloudflareTab(QWidget):
         self._r2 = None
 
     def _add_account(self):
-        from PySide6.QtWidgets import QDialog, QFormLayout, QDialogButtonBox
+        from PySide6.QtWidgets import QDialog, QFormLayout, QDialogButtonBox, QRadioButton, QButtonGroup
         dlg = QDialog(self)
         dlg.setWindowTitle("Add Cloudflare Account")
         dlg.setMinimumWidth(450)
         fl = QFormLayout(dlg)
+
         name_in = QLineEdit()
+        fl.addRow("Account Name:", name_in)
+
+        auth_group = QButtonGroup(dlg)
+        rb_token = QRadioButton("API Token")
+        rb_global = QRadioButton("Global API Key")
+        rb_token.setChecked(True)
+        auth_group.addButton(rb_token)
+        auth_group.addButton(rb_global)
+        auth_row = QHBoxLayout()
+        auth_row.addWidget(rb_token)
+        auth_row.addWidget(rb_global)
+        fl.addRow("Auth Type:", auth_row)
+
         token_in = QLineEdit()
         token_in.setEchoMode(QLineEdit.Password)
+        token_in.setPlaceholderText("Bearer API Token")
+        fl.addRow("API Token:", token_in)
+
+        global_key = QLineEdit()
+        global_key.setEchoMode(QLineEdit.Password)
+        global_key.setPlaceholderText("Global API Key")
+        fl.addRow("Global Key:", global_key)
+
+        email_in = QLineEdit()
+        email_in.setPlaceholderText("Cloudflare login email (for Global Key)")
+        fl.addRow("Auth Email:", email_in)
+
         acct_in = QLineEdit()
+        acct_in.setPlaceholderText("Account ID")
+        fl.addRow("Account ID:", acct_in)
+
         r2_key = QLineEdit()
+        r2_key.setPlaceholderText("R2 Access Key ID (optional)")
+        fl.addRow("R2 Access Key:", r2_key)
         r2_sec = QLineEdit()
         r2_sec.setEchoMode(QLineEdit.Password)
-        fl.addRow("Account Name:", name_in)
-        fl.addRow("API Token:", token_in)
-        fl.addRow("Account ID:", acct_in)
-        fl.addRow("R2 Access Key:", r2_key)
         fl.addRow("R2 Secret Key:", r2_sec)
+
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(dlg.accept)
         btns.rejected.connect(dlg.reject)
         fl.addRow(btns)
+
         if dlg.exec() == QDialog.Accepted:
-            self.db.add_cf_account(name_in.text(), token_in.text(),
-                                    acct_in.text(), r2_key.text(), r2_sec.text())
+            auth_type = "global" if rb_global.isChecked() else "token"
+            self.db.add_cf_account(
+                name=name_in.text(),
+                auth_type=auth_type,
+                api_token=token_in.text(),
+                global_api_key=global_key.text(),
+                auth_email=email_in.text(),
+                account_id=acct_in.text(),
+                r2_access_key=r2_key.text(),
+                r2_secret_key=r2_sec.text(),
+            )
             self._refresh_accounts()
 
     def _delete_account(self):
@@ -227,9 +265,11 @@ class CloudflareTab(QWidget):
         from bulk.mailer.r2_manager import R2Manager
         self._r2 = R2Manager(
             account_id=acct["account_id"],
-            api_token=acct["api_token"],
-            access_key_id=acct["r2_access_key"],
-            secret_access_key=acct["r2_secret_key"],
+            api_token=acct["api_token"] or "",
+            access_key_id=acct["r2_access_key"] or "",
+            secret_access_key=acct["r2_secret_key"] or "",
+            global_api_key=acct.get("global_api_key", ""),
+            auth_email=acct.get("auth_email", ""),
         )
         return self._r2
 
@@ -369,11 +409,22 @@ class CloudflareTab(QWidget):
             QMessageBox.warning(self, "Account", "Select a Cloudflare account")
             return
         account_id = acct["account_id"]
-        api_token = acct["api_token"]
         worker_name = self.worker_name.text().strip()
         kv_name = self.kv_name.text().strip()
 
-        if not all([account_id, api_token, worker_name, kv_name]):
+        if acct.get("global_api_key") and acct.get("auth_email"):
+            headers_auth = {"X-Auth-Key": acct["global_api_key"],
+                            "X-Auth-Email": acct["auth_email"],
+                            "Content-Type": "application/json"}
+            headers_upload = {"X-Auth-Key": acct["global_api_key"],
+                              "X-Auth-Email": acct["auth_email"]}
+        else:
+            api_token = acct.get("api_token", "")
+            headers_auth = {"Authorization": f"Bearer {api_token}",
+                            "Content-Type": "application/json"}
+            headers_upload = {"Authorization": f"Bearer {api_token}"}
+
+        if not all([account_id, worker_name, kv_name]):
             QMessageBox.warning(self, "Missing", "Fill all fields")
             return
 
@@ -381,14 +432,12 @@ class CloudflareTab(QWidget):
 
         def deploy():
             import requests
-            headers = {"Authorization": f"Bearer {api_token}",
-                       "Content-Type": "application/json"}
 
             # Step 1: Create KV namespace
             self._wlog("Creating KV namespace...")
             resp = requests.post(
                 f"https://api.cloudflare.com/client/v4/accounts/{account_id}/storage/kv/namespaces",
-                headers=headers, json={"title": kv_name}, timeout=30)
+                headers=headers_auth, json={"title": kv_name}, timeout=30)
 
             if resp.status_code == 200 and resp.json().get("success"):
                 ns_id = resp.json()["result"]["id"]
@@ -397,7 +446,7 @@ class CloudflareTab(QWidget):
                 # Get existing
                 resp2 = requests.get(
                     f"https://api.cloudflare.com/client/v4/accounts/{account_id}/storage/kv/namespaces",
-                    headers=headers, timeout=30)
+                    headers=headers_auth, timeout=30)
                 ns_id = None
                 for ns in resp2.json().get("result", []):
                     if ns["title"] == kv_name:
@@ -434,7 +483,7 @@ class CloudflareTab(QWidget):
 
             resp = requests.put(
                 f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}",
-                headers={"Authorization": f"Bearer {api_token}"},
+                headers=headers_upload,
                 files={
                     "metadata": ("metadata.json", metadata, "application/json"),
                     "worker.mjs": ("worker.mjs", worker_code, "application/javascript+module"),
@@ -453,7 +502,7 @@ class CloudflareTab(QWidget):
                 self._wlog(f"Adding route: {route}")
                 resp = requests.post(
                     f"https://api.cloudflare.com/client/v4/zones/{zone_id}/workers/routes",
-                    headers=headers,
+                    headers=headers_auth,
                     json={"pattern": route, "script": worker_name},
                     timeout=30)
                 if resp.status_code in (200, 201):
@@ -470,17 +519,21 @@ class CloudflareTab(QWidget):
         if not acct:
             return
         account_id = acct["account_id"]
-        api_token = acct["api_token"]
         worker_name = self.worker_name.text().strip()
-        if not all([account_id, api_token, worker_name]):
+        if not all([account_id, worker_name]):
             return
+
+        if acct.get("global_api_key") and acct.get("auth_email"):
+            check_headers = {"X-Auth-Key": acct["global_api_key"],
+                             "X-Auth-Email": acct["auth_email"]}
+        else:
+            check_headers = {"Authorization": f"Bearer {acct.get('api_token', '')}"}
 
         def check():
             import requests
-            headers = {"Authorization": f"Bearer {api_token}"}
             resp = requests.get(
                 f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}",
-                headers=headers, timeout=15)
+                headers=check_headers, timeout=15)
             if resp.status_code == 200:
                 self._wlog(f"Worker '{worker_name}' is deployed and active")
             else:
