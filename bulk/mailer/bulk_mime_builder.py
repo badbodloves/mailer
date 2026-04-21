@@ -21,6 +21,7 @@ _CRLF = str.maketrans("", "", "\r\n")
 _LINE_LENGTH_RE = re.compile(r"[^\r\n]{997,}")
 _FEEDBACK_RE = re.compile(r"^[\w\-.:]*:[\w\-.:]*:[\w\-.:]*:[\w\-]{5,15}$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
+_LIST_ID_RE = re.compile(r"^[\w\-.]+$")
 _RESERVED_HEADERS = frozenset({
     "from", "to", "subject", "date", "message-id", "mime-version",
     "content-type", "list-unsubscribe", "list-unsubscribe-post",
@@ -122,7 +123,8 @@ class BulkMIMEBuilder:
 
         cls._validate_email(from_email, "From")
         cls._validate_email(to_email, "To")
-        cls._validate_email(reply_to_email, "Reply-To")
+        if reply_to_email:
+            cls._validate_email(reply_to_email, "Reply-To")
 
         domain = from_email.split("@")[1]
         mid_domain = message_id_domain or domain
@@ -133,11 +135,14 @@ class BulkMIMEBuilder:
         if feedback_id and not _FEEDBACK_RE.match(feedback_id):
             raise ValueError(f"Invalid Feedback-ID format: {feedback_id!r}")
 
-        list_id_str = f'"{list_id_name}" <{list_id_token}>' if list_id_name else f"<{list_id_token}>"
+        if not _LIST_ID_RE.match(list_id_token):
+            raise ValueError(f"Invalid list_id_token (use domain-style, no @ or spaces): {list_id_token!r}")
+
+        safe_name = list_id_name.replace('"', '\\"') if list_id_name else ""
+        list_id_str = f'"{safe_name}" <{list_id_token}>' if safe_name else f"<{list_id_token}>"
 
         msg_id = cls._message_id(mid_domain)
         from_header = formataddr((cls._encode_header(from_name), from_email))
-        reply_header = formataddr((cls._encode_header(reply_to_name), reply_to_email))
         subject_enc = cls._encode_header(subject)
         entity_ref = str(uuid.uuid4())
 
@@ -145,9 +150,11 @@ class BulkMIMEBuilder:
         b_domain = bounce_domain or f"bounce.{domain}"
         envelope_from = f"bounce+{verp_tag}@{b_domain}"
 
-        headers = [
-            f"From: {from_header}",
-            f"Reply-To: {reply_header}",
+        headers = [f"From: {from_header}"]
+        if reply_to_email:
+            reply_header = formataddr((cls._encode_header(reply_to_name), reply_to_email))
+            headers.append(f"Reply-To: {reply_header}")
+        headers += [
             f"To: {to_email}",
             f"Subject: {subject_enc}",
             f"Message-ID: {msg_id}",
@@ -244,7 +251,7 @@ class BulkMIMEBuilder:
         h = list(headers)
         bnd = cls._boundary()
         h.append(f'Content-Type: multipart/alternative; boundary="{bnd}"')
-        lines = h + [""] + cls._alt_part(bnd, html, plain) + [""]
+        lines = h + ["", "This is a multi-part message in MIME format.", ""] + cls._alt_part(bnd, html, plain) + [""]
         return "\r\n".join(lines)
 
     @classmethod
@@ -254,7 +261,7 @@ class BulkMIMEBuilder:
         rel = cls._boundary()
         alt = cls._boundary()
         h.append(f'Content-Type: multipart/related; boundary="{rel}"')
-        lines = h + [""]
+        lines = h + ["", "This is a multi-part message in MIME format.", ""]
         lines.append(f"--{rel}")
         lines.append(f'Content-Type: multipart/alternative; boundary="{alt}"')
         lines.append("")
@@ -274,7 +281,7 @@ class BulkMIMEBuilder:
         mix = cls._boundary()
         alt = cls._boundary()
         h.append(f'Content-Type: multipart/mixed; boundary="{mix}"')
-        lines = h + [""]
+        lines = h + ["", "This is a multi-part message in MIME format.", ""]
         lines.append(f"--{mix}")
         lines.append(f'Content-Type: multipart/alternative; boundary="{alt}"')
         lines.append("")
@@ -295,7 +302,7 @@ class BulkMIMEBuilder:
         rel = cls._boundary()
         alt = cls._boundary()
         h.append(f'Content-Type: multipart/mixed; boundary="{mix}"')
-        lines = h + [""]
+        lines = h + ["", "This is a multi-part message in MIME format.", ""]
         lines.append(f"--{mix}")
         lines.append(f'Content-Type: multipart/related; boundary="{rel}"')
         lines.append("")
