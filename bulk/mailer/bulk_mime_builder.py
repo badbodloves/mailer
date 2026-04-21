@@ -3,9 +3,10 @@
 Builds RFC-compliant newsletter/bulk emails with proper List-* headers,
 Precedence, Feedback-ID, VERP envelope, and X-Entity-Ref-ID.
 
-NO Anti-Fingerprint. NO CID logos. NO Spintax obfuscation.
-This is meant to look like legitimate ESP output (Mailchimp/SendGrid).
+NO Anti-Fingerprint. NO Spintax obfuscation.
+This is meant to look like legitimate ESP output.
 """
+import re
 import mimetypes
 import secrets
 import time
@@ -14,9 +15,11 @@ import base64
 import uuid
 from email.utils import formatdate, formataddr, encode_rfc2231
 from email.header import Header
-from typing import Optional, Tuple, List
+from typing import Optional, Tuple, List, Dict
 
 _CRLF = str.maketrans("", "", "\r\n")
+_LINE_LENGTH_RE = re.compile(r"[^\r\n]{991,}")
+_FEEDBACK_RE = re.compile(r"^[\w\-.:]{1,50}:[\w\-.:]{1,50}:[\w\-.:]{1,50}:[\w\-]{5,15}$")
 
 
 class BulkMIMEBuilder:
@@ -31,16 +34,19 @@ class BulkMIMEBuilder:
             v.encode("ascii")
             return v
         except UnicodeEncodeError:
-            return Header(v, "utf-8", maxlinelen=998).encode()
+            return Header(v, "utf-8", maxlinelen=76).encode()
 
     @staticmethod
-    def _get_encoding(text: str) -> tuple:
-        try:
-            text.encode("ascii")
-            return "7bit", text
-        except UnicodeEncodeError:
-            enc = quopri.encodestring(text.encode("utf-8"), quotetabs=True)
-            return "quoted-printable", enc.decode("ascii").replace("\n", "\r\n")
+    def _get_encoding(text: str, force_qp: bool = False) -> tuple:
+        if not force_qp:
+            try:
+                text.encode("ascii")
+                if not _LINE_LENGTH_RE.search(text):
+                    return "7bit", text
+            except UnicodeEncodeError:
+                pass
+        enc = quopri.encodestring(text.encode("utf-8"), quotetabs=True)
+        return "quoted-printable", enc.decode("ascii").replace("\n", "\r\n")
 
     @staticmethod
     def _boundary() -> str:
@@ -53,8 +59,18 @@ class BulkMIMEBuilder:
         return f"<{ts}.{rnd}@{domain}>"
 
     @staticmethod
-    def _entity_ref_id() -> str:
-        return str(uuid.uuid4())
+    def _ensure_angle_brackets(val: str) -> str:
+        val = val.strip()
+        if not val.startswith("<"):
+            val = f"<{val}"
+        if not val.endswith(">"):
+            val = f"{val}>"
+        return val
+
+    @staticmethod
+    def _validate_email(email: str, label: str):
+        if "@" not in email or "." not in email.split("@")[-1]:
+            raise ValueError(f"Invalid {label}: {email!r}")
 
     @classmethod
     def build_email(
@@ -70,32 +86,55 @@ class BulkMIMEBuilder:
         unsubscribe_url: str,
         unsubscribe_mailto: str,
         feedback_id: str = "",
+        bounce_domain: str = "",
+        recipient_id: str = "",
         attachment: Optional[Tuple[str, bytes]] = None,
-    ) -> Tuple[str, str]:
+        inline_images: Optional[List[Tuple[bytes, str, str]]] = None,
+        custom_headers: Optional[Dict[str, str]] = None,
+    ) -> Tuple[str, str, str]:
         """Build a bulk/newsletter email.
 
-        Returns (raw_message, envelope_from).
-        envelope_from is the VERP address for SMTP MAIL FROM.
+        Returns (raw_message, envelope_from, verp_tag).
         """
         from_name = cls._sanitize(from_name)
         from_email = cls._sanitize(from_email)
+        reply_to_addr = cls._sanitize(reply_to)
         to_email = cls._sanitize(to_email)
         subject = cls._sanitize(subject)
+        list_id = cls._sanitize(list_id)
+        unsubscribe_url = cls._sanitize(unsubscribe_url)
+        unsubscribe_mailto = cls._sanitize(unsubscribe_mailto)
+        feedback_id = cls._sanitize(feedback_id)
 
-        domain = from_email.split("@")[1] if "@" in from_email else "localhost"
+        cls._validate_email(from_email, "From")
+        cls._validate_email(to_email, "To")
+
+        domain = from_email.split("@")[1]
+        if not domain or "." not in domain:
+            raise ValueError(f"Invalid sender domain: {domain!r}")
+
+        if not unsubscribe_url.startswith("https://"):
+            raise ValueError("Unsubscribe URL must be HTTPS")
+
+        if feedback_id and not _FEEDBACK_RE.match(feedback_id):
+            raise ValueError(f"Invalid Feedback-ID format: {feedback_id!r}")
+
+        if not list_id.strip().endswith(">"):
+            list_id = cls._ensure_angle_brackets(list_id)
+
         msg_id = cls._message_id(domain)
-        date_str = formatdate(localtime=True)
         from_header = formataddr((cls._encode_header(from_name), from_email))
+        reply_header = formataddr(("", reply_to_addr)) if "@" in reply_to_addr else reply_to_addr
         subject_enc = cls._encode_header(subject)
-        entity_ref = cls._entity_ref_id()
+        entity_ref = str(uuid.uuid4())
 
-        verp_tag = secrets.token_hex(8)
-        envelope_from = f"bounce+{verp_tag}@bounce.{domain}"
+        verp_tag = recipient_id or secrets.token_hex(8)
+        b_domain = bounce_domain or f"bounce.{domain}"
+        envelope_from = f"bounce+{verp_tag}@{b_domain}"
 
         headers = [
-            f"Date: {date_str}",
             f"From: {from_header}",
-            f"Reply-To: <{cls._sanitize(reply_to)}>",
+            f"Reply-To: {reply_header}",
             f"To: {to_email}",
             f"Subject: {subject_enc}",
             f"Message-ID: {msg_id}",
@@ -109,25 +148,32 @@ class BulkMIMEBuilder:
             headers.append(f"Feedback-ID: {feedback_id}")
 
         headers.append(f"X-Entity-Ref-ID: {entity_ref}")
+
+        if custom_headers:
+            for k, v in custom_headers.items():
+                headers.append(f"{cls._sanitize(k)}: {cls._sanitize(v)}")
+
         headers.append("MIME-Version: 1.0")
 
-        if attachment:
-            raw = cls._build_mixed(headers, html_body, plain_body, attachment)
-        else:
-            raw = cls._build_alternative(headers, html_body, plain_body)
+        has_inline = bool(inline_images)
+        has_attach = bool(attachment)
 
-        return raw, envelope_from
+        if has_attach and has_inline:
+            body = cls._build_mixed_related(headers, html_body, plain_body, attachment, inline_images)
+        elif has_attach:
+            body = cls._build_mixed(headers, html_body, plain_body, attachment)
+        elif has_inline:
+            body = cls._build_related(headers, html_body, plain_body, inline_images)
+        else:
+            body = cls._build_alternative(headers, html_body, plain_body)
+
+        return body, envelope_from, verp_tag
 
     @classmethod
-    def _build_alternative(cls, headers: list, html: str, plain: str) -> str:
-        bnd = cls._boundary()
-        headers.append(f'Content-Type: multipart/alternative; boundary="{bnd}"')
+    def _alt_part(cls, bnd: str, html: str, plain: str) -> list:
         plain_enc, plain_data = cls._get_encoding(plain)
-        html_enc, html_data = cls._get_encoding(html)
-        lines = headers + [
-            "",
-            "This is a multi-part message in MIME format.",
-            "",
+        html_enc, html_data = cls._get_encoding(html, force_qp=True)
+        return [
             f"--{bnd}",
             "Content-Type: text/plain; charset=utf-8",
             f"Content-Transfer-Encoding: {plain_enc}",
@@ -136,55 +182,117 @@ class BulkMIMEBuilder:
             "Content-Type: text/html; charset=utf-8",
             f"Content-Transfer-Encoding: {html_enc}",
             "", html_data, "",
-            f"--{bnd}--", "",
+            f"--{bnd}--",
         ]
+
+    @classmethod
+    def _inline_parts(cls, images: List[Tuple[bytes, str, str]]) -> list:
+        lines = []
+        for data, cid, mime_type in images:
+            b64 = base64.b64encode(data).decode("ascii")
+            b64_lines = "\r\n".join(b64[i:i+76] for i in range(0, len(b64), 76))
+            lines += [
+                f"Content-Type: {mime_type}",
+                "Content-Transfer-Encoding: base64",
+                f"Content-ID: <{cid}>",
+                "Content-Disposition: inline",
+                "", b64_lines, "",
+            ]
+        return lines
+
+    @classmethod
+    def _attach_part(cls, filename: str, data: bytes) -> list:
+        filename = cls._sanitize(filename)
+        mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
+        try:
+            filename.encode("ascii")
+            name_p = f'name="{filename}"'
+            disp_p = f'filename="{filename}"'
+        except UnicodeEncodeError:
+            enc = encode_rfc2231(filename, "utf-8")
+            name_p = f"name*={enc}"
+            disp_p = f"filename*={enc}"
+        b64 = base64.b64encode(data).decode("ascii")
+        b64_lines = "\r\n".join(b64[i:i+76] for i in range(0, len(b64), 76))
+        return [
+            f"Content-Type: {mime_type}; {name_p}",
+            f"Content-Disposition: attachment; {disp_p}",
+            "Content-Transfer-Encoding: base64",
+            "", b64_lines, "",
+        ]
+
+    @classmethod
+    def _build_alternative(cls, headers: list, html: str, plain: str) -> str:
+        h = list(headers)
+        bnd = cls._boundary()
+        h.append(f'Content-Type: multipart/alternative; boundary="{bnd}"')
+        lines = h + ["", ""] + cls._alt_part(bnd, html, plain) + [""]
+        return "\r\n".join(lines)
+
+    @classmethod
+    def _build_related(cls, headers: list, html: str, plain: str,
+                       images: list) -> str:
+        h = list(headers)
+        rel = cls._boundary()
+        alt = cls._boundary()
+        h.append(f'Content-Type: multipart/related; boundary="{rel}"')
+        lines = h + ["", ""]
+        lines.append(f"--{rel}")
+        lines.append(f'Content-Type: multipart/alternative; boundary="{alt}"')
+        lines.append("")
+        lines += cls._alt_part(alt, html, plain)
+        lines.append("")
+        for data, cid, mime in images:
+            lines.append(f"--{rel}")
+            lines += cls._inline_parts([(data, cid, mime)])
+        lines.append(f"--{rel}--")
+        lines.append("")
         return "\r\n".join(lines)
 
     @classmethod
     def _build_mixed(cls, headers: list, html: str, plain: str,
                      attachment: Tuple[str, bytes]) -> str:
+        h = list(headers)
         mix = cls._boundary()
         alt = cls._boundary()
-        att_fn, att_data = attachment
-        att_fn = cls._sanitize(att_fn)
-        mime_type = mimetypes.guess_type(att_fn)[0] or "application/octet-stream"
+        h.append(f'Content-Type: multipart/mixed; boundary="{mix}"')
+        lines = h + ["", ""]
+        lines.append(f"--{mix}")
+        lines.append(f'Content-Type: multipart/alternative; boundary="{alt}"')
+        lines.append("")
+        lines += cls._alt_part(alt, html, plain)
+        lines.append("")
+        lines.append(f"--{mix}")
+        lines += cls._attach_part(attachment[0], attachment[1])
+        lines.append(f"--{mix}--")
+        lines.append("")
+        return "\r\n".join(lines)
 
-        try:
-            att_fn.encode("ascii")
-            name_p = f'name="{att_fn}"'
-            disp_p = f'filename="{att_fn}"'
-        except UnicodeEncodeError:
-            enc = encode_rfc2231(att_fn, "utf-8")
-            name_p = f"name*={enc}"
-            disp_p = f"filename*={enc}"
-
-        b64 = base64.b64encode(att_data).decode("ascii")
-        b64_lines = "\r\n".join(b64[i:i+76] for i in range(0, len(b64), 76))
-        plain_enc, plain_data = cls._get_encoding(plain)
-        html_enc, html_data = cls._get_encoding(html)
-
-        headers.append(f'Content-Type: multipart/mixed; boundary="{mix}"')
-        lines = headers + [
-            "",
-            "This is a multi-part message in MIME format.",
-            "",
-            f"--{mix}",
-            f'Content-Type: multipart/alternative; boundary="{alt}"',
-            "",
-            f"--{alt}",
-            "Content-Type: text/plain; charset=utf-8",
-            f"Content-Transfer-Encoding: {plain_enc}",
-            "", plain_data, "",
-            f"--{alt}",
-            "Content-Type: text/html; charset=utf-8",
-            f"Content-Transfer-Encoding: {html_enc}",
-            "", html_data, "",
-            f"--{alt}--", "",
-            f"--{mix}",
-            f"Content-Type: {mime_type}; {name_p}",
-            f"Content-Disposition: attachment; {disp_p}",
-            "Content-Transfer-Encoding: base64",
-            "", b64_lines, "",
-            f"--{mix}--", "",
-        ]
+    @classmethod
+    def _build_mixed_related(cls, headers: list, html: str, plain: str,
+                              attachment: Tuple[str, bytes],
+                              images: list) -> str:
+        h = list(headers)
+        mix = cls._boundary()
+        rel = cls._boundary()
+        alt = cls._boundary()
+        h.append(f'Content-Type: multipart/mixed; boundary="{mix}"')
+        lines = h + ["", ""]
+        lines.append(f"--{mix}")
+        lines.append(f'Content-Type: multipart/related; boundary="{rel}"')
+        lines.append("")
+        lines.append(f"--{rel}")
+        lines.append(f'Content-Type: multipart/alternative; boundary="{alt}"')
+        lines.append("")
+        lines += cls._alt_part(alt, html, plain)
+        lines.append("")
+        for data, cid, mime in images:
+            lines.append(f"--{rel}")
+            lines += cls._inline_parts([(data, cid, mime)])
+        lines.append(f"--{rel}--")
+        lines.append("")
+        lines.append(f"--{mix}")
+        lines += cls._attach_part(attachment[0], attachment[1])
+        lines.append(f"--{mix}--")
+        lines.append("")
         return "\r\n".join(lines)

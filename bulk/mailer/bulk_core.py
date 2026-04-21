@@ -8,6 +8,7 @@ import json
 import time
 import threading
 import logging
+from email.utils import formatdate
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional
 
@@ -155,7 +156,7 @@ class BulkMailerCore:
                         attachment = (os.path.basename(pdf_path), pdf_bytes)
 
                 try:
-                    raw_msg, envelope_from = BulkMIMEBuilder.build_email(
+                    raw_msg, envelope_from, verp_tag = BulkMIMEBuilder.build_email(
                         from_name=engine.process(cur_from_name, email),
                         from_email=from_email,
                         reply_to=reply_to,
@@ -167,8 +168,13 @@ class BulkMailerCore:
                         unsubscribe_url=unsub_url,
                         unsubscribe_mailto=unsub_mailto,
                         feedback_id=feedback_id,
+                        bounce_domain=f"{bounce_sub}.{domain}",
+                        recipient_id=str(lead_id),
                         attachment=attachment,
                     )
+
+                    date_line = f"Date: {formatdate(localtime=True)}\r\n"
+                    raw_msg = date_line + raw_msg
 
                     success, error, code = smtp.send(envelope_from, email, raw_msg)
 
