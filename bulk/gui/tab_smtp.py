@@ -13,8 +13,8 @@ class SMTPTab(QWidget):
         layout = QVBoxLayout(self)
 
         self.table = QTableWidget()
-        self.table.setColumnCount(6)
-        self.table.setHorizontalHeaderLabels(["Name", "Host", "Port", "Username", "Daily Limit", "Sent Today"])
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(["Name", "Host", "Port", "Provider", "Username", "Daily Limit", "Sent Today"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         layout.addWidget(self.table)
@@ -38,10 +38,11 @@ class SMTPTab(QWidget):
             self.table.setItem(i, 0, QTableWidgetItem(r["name"]))
             self.table.setItem(i, 1, QTableWidgetItem(r["host"]))
             self.table.setItem(i, 2, QTableWidgetItem(str(r["port"])))
-            self.table.setItem(i, 3, QTableWidgetItem(r["username"]))
-            self.table.setItem(i, 4, QTableWidgetItem(str(r["daily_limit"])))
-            self.table.setItem(i, 5, QTableWidgetItem(str(r["sent_today"])))
-            for j in range(6):
+            self.table.setItem(i, 3, QTableWidgetItem(r.get("provider_type", "generic")))
+            self.table.setItem(i, 4, QTableWidgetItem(r["username"]))
+            self.table.setItem(i, 5, QTableWidgetItem(str(r["daily_limit"])))
+            self.table.setItem(i, 6, QTableWidgetItem(str(r["sent_today"])))
+            for j in range(7):
                 item = self.table.item(i, j)
                 if item:
                     item.setData(Qt.UserRole, r["id"])
@@ -109,12 +110,19 @@ class SMTPDialog(QDialog):
         self.limit.setValue(existing["daily_limit"] if existing else 50000)
         self.proxy = QLineEdit(existing["proxy"] if existing else "")
         self.proxy.setPlaceholderText("socks5://ip:port:user:pass (optional)")
+        self.provider = QComboBox()
+        self.provider.addItems(["generic", "ses", "sendgrid", "mailgun", "postmark"])
+        if existing and existing.get("provider_type"):
+            idx = self.provider.findText(existing["provider_type"])
+            if idx >= 0:
+                self.provider.setCurrentIndex(idx)
 
         layout.addRow("Name:", self.name)
         layout.addRow("Host:", self.host)
         layout.addRow("Port:", self.port)
         layout.addRow("Username:", self.username)
         layout.addRow("Password:", self.password)
+        layout.addRow("Provider Type:", self.provider)
         layout.addRow("Daily Limit (0=unlimited):", self.limit)
         layout.addRow("Proxy:", self.proxy)
 
@@ -130,6 +138,7 @@ class SMTPDialog(QDialog):
             "port": self.port.value(),
             "username": self.username.text(),
             "password": self.password.text(),
+            "provider_type": self.provider.currentText(),
             "daily_limit": self.limit.value(),
             "proxy": self.proxy.text(),
         }

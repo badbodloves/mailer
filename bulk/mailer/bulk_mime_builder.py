@@ -92,6 +92,7 @@ class BulkMIMEBuilder:
         attachment: Optional[Tuple[str, bytes]] = None,
         inline_images: Optional[List[Tuple[bytes, str, str]]] = None,
         custom_headers: Optional[Dict[str, str]] = None,
+        provider_type: str = "generic",
     ) -> Tuple[str, str, str]:
         """Build a bulk/newsletter email.
 
@@ -141,10 +142,16 @@ class BulkMIMEBuilder:
         b_domain = bounce_domain or f"bounce.{domain}"
         envelope_from = f"bounce+{verp_tag}@{b_domain}"
 
+        is_ses = provider_type.lower() in ("ses", "aws", "amazon")
+
         headers = [f"From: {from_header}"]
         if reply_to_email:
             reply_header = formataddr((cls._encode_header(reply_to_name), reply_to_email))
             headers.append(f"Reply-To: {reply_header}")
+
+        if not is_ses:
+            headers.append(f"Return-Path: <{envelope_from}>")
+
         headers += [
             f"To: {to_email}",
             f"Subject: {subject_enc}",
@@ -157,6 +164,9 @@ class BulkMIMEBuilder:
             headers.append("List-Unsubscribe-Post: List-Unsubscribe=One-Click")
 
         headers.append("Precedence: bulk")
+
+        if is_ses:
+            headers.append(f"X-SES-MESSAGE-TAGS: campaign={verp_tag}")
 
         if feedback_id:
             headers.append(f"Feedback-ID: {feedback_id}")

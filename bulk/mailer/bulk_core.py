@@ -173,6 +173,7 @@ class BulkMailerCore:
                         bounce_domain=f"{bounce_sub}.{domain}",
                         recipient_id=str(lead_id),
                         attachment=attachment,
+                        provider_type=smtp_row.get("provider_type", "generic"),
                     )
 
                     date_line = f"Date: {formatdate(localtime=True)}\r\n"

@@ -61,6 +61,7 @@ class BulkDBManager:
                     port INTEGER DEFAULT 587,
                     username TEXT NOT NULL,
                     password TEXT NOT NULL,
+                    provider_type TEXT DEFAULT 'generic',
                     daily_limit INTEGER DEFAULT 0,
                     sent_today INTEGER DEFAULT 0,
                     last_reset_date TEXT DEFAULT '',
@@ -188,10 +189,12 @@ class BulkDBManager:
 
     # --- SMTP Presets ---
     def add_smtp(self, name: str, host: str, port: int, username: str,
-                 password: str, daily_limit: int = 0, proxy: str = "") -> int:
+                 password: str, provider_type: str = "generic",
+                 daily_limit: int = 0, proxy: str = "") -> int:
         c = self._conn()
-        c.execute("INSERT INTO smtp_presets (name,host,port,username,password,daily_limit,proxy) "
-                  "VALUES (?,?,?,?,?,?,?)", (name, host, port, username, password, daily_limit, proxy))
+        c.execute("INSERT INTO smtp_presets (name,host,port,username,password,provider_type,daily_limit,proxy) "
+                  "VALUES (?,?,?,?,?,?,?,?)",
+                  (name, host, port, username, password, provider_type, daily_limit, proxy))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
