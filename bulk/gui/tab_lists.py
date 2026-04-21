@@ -44,8 +44,9 @@ class ListsTab(QWidget):
         self.search_input.setPlaceholderText("Search emails...")
         self.search_input.returnPressed.connect(self._search)
         search_row.addWidget(self.search_input)
-        QPushButton("Search").clicked.connect(self._search)
-        search_row.addWidget(QPushButton("Search", clicked=self._search))
+        search_btn = QPushButton("Search")
+        search_btn.clicked.connect(self._search)
+        search_row.addWidget(search_btn)
         rl.addLayout(search_row)
 
         # Exclude bar
@@ -54,8 +55,9 @@ class ListsTab(QWidget):
         self.exclude_input = QLineEdit()
         self.exclude_input.setPlaceholderText("e.g. yahoo.de")
         exclude_row.addWidget(self.exclude_input)
-        QPushButton("Delete all @domain").clicked.connect(self._delete_domain)
-        exclude_row.addWidget(QPushButton("Delete all @domain", clicked=self._delete_domain))
+        del_domain_btn = QPushButton("Delete all @domain")
+        del_domain_btn.clicked.connect(self._delete_domain)
+        exclude_row.addWidget(del_domain_btn)
         rl.addLayout(exclude_row)
 
         # Table
@@ -71,8 +73,9 @@ class ListsTab(QWidget):
         self.stats_label = QLabel("Select a list")
         stats.addWidget(self.stats_label)
         stats.addStretch()
-        QPushButton("Delete Selected").clicked.connect(self._delete_selected)
-        stats.addWidget(QPushButton("Delete Selected", clicked=self._delete_selected))
+        del_sel_btn = QPushButton("Delete Selected")
+        del_sel_btn.clicked.connect(self._delete_selected)
+        stats.addWidget(del_sel_btn)
         rl.addLayout(stats)
 
         splitter = QSplitter(Qt.Horizontal)
