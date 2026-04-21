@@ -13,7 +13,7 @@ import time
 import quopri
 import base64
 import uuid
-from email.utils import formatdate, formataddr, encode_rfc2231
+from email.utils import formataddr, encode_rfc2231
 from email.header import Header
 from typing import Optional, Tuple, List, Dict
 
@@ -21,7 +21,7 @@ _CRLF = str.maketrans("", "", "\r\n")
 _LINE_LENGTH_RE = re.compile(r"[^\r\n]{997,}")
 _FEEDBACK_RE = re.compile(r"^[\w\-.:]*:[\w\-.:]*:[\w\-.:]*:[\w\-]{5,15}$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
-_LIST_ID_RE = re.compile(r"^[\w\-.]+$")
+_LIST_ID_RE = re.compile(r"^[\w\-]+(\.[\w\-]+)+$")
 _RESERVED_HEADERS = frozenset({
     "from", "to", "subject", "date", "message-id", "mime-version",
     "content-type", "list-unsubscribe", "list-unsubscribe-post",
@@ -64,15 +64,6 @@ class BulkMIMEBuilder:
         ts = format(int(time.time() * 1000), "x")
         rnd = secrets.token_hex(16)
         return f"<{ts}.{rnd}@{domain}>"
-
-    @staticmethod
-    def _ensure_angle_brackets(val: str) -> str:
-        val = val.strip()
-        if not val.startswith("<"):
-            val = f"<{val}"
-        if not val.endswith(">"):
-            val = f"{val}>"
-        return val
 
     @staticmethod
     def _validate_email(email: str, label: str):
