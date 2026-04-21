@@ -17,6 +17,7 @@ from .tab_macros import MacrosTab
 from .tab_composer import ComposerTab
 from .tab_mailing import MailingTab
 from .tab_preview import PreviewTab
+from .tab_cloudflare import CloudflareTab
 from .tab_logs import LogsTab
 
 
@@ -37,6 +38,7 @@ class BulkMailerWindow(QMainWindow):
         tabs.addTab(ComposerTab(self.db), "Composer")
         tabs.addTab(MacrosTab(self.db), "Macros")
         tabs.addTab(PreviewTab(self.db), "Preview")
+        tabs.addTab(CloudflareTab(self.db), "Cloudflare")
         tabs.addTab(LogsTab(self.db), "Logs")
 
         self.statusBar().showMessage("Ready")
