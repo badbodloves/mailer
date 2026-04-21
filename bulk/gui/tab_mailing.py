@@ -42,6 +42,10 @@ class MailingTab(QWidget):
         self.tmpl_cb = QComboBox()
         form.addRow("Message Template:", self.tmpl_cb)
 
+        self.sender_name_input = QLineEdit()
+        self.sender_name_input.setPlaceholderText("Sender display name (or {macro})")
+        form.addRow("Sender Name:", self.sender_name_input)
+
         self.daily_limit = QSpinBox()
         self.daily_limit.setRange(0, 999999)
         self.daily_limit.setSpecialValueText("Use SMTP limit")

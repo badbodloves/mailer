@@ -107,6 +107,8 @@ class SMTPDialog(QDialog):
         self.limit = QSpinBox()
         self.limit.setRange(0, 999999)
         self.limit.setValue(existing["daily_limit"] if existing else 50000)
+        self.proxy = QLineEdit(existing["proxy"] if existing else "")
+        self.proxy.setPlaceholderText("socks5://ip:port:user:pass (optional)")
 
         layout.addRow("Name:", self.name)
         layout.addRow("Host:", self.host)
@@ -114,6 +116,7 @@ class SMTPDialog(QDialog):
         layout.addRow("Username:", self.username)
         layout.addRow("Password:", self.password)
         layout.addRow("Daily Limit (0=unlimited):", self.limit)
+        layout.addRow("Proxy:", self.proxy)
 
         btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
         btns.accepted.connect(self.accept)
@@ -128,4 +131,5 @@ class SMTPDialog(QDialog):
             "username": self.username.text(),
             "password": self.password.text(),
             "daily_limit": self.limit.value(),
+            "proxy": self.proxy.text(),
         }

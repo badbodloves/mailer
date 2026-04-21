@@ -45,9 +45,11 @@ class BulkDBManager:
                     domain TEXT NOT NULL,
                     from_name TEXT DEFAULT '',
                     from_email TEXT DEFAULT '',
-                    reply_to TEXT DEFAULT '',
+                    reply_to_email TEXT DEFAULT '',
                     bounce_subdomain TEXT DEFAULT 'bounce',
-                    list_id_label TEXT DEFAULT '',
+                    send_subdomain TEXT DEFAULT 'mail',
+                    unsub_worker_deployed INTEGER DEFAULT 0,
+                    unsub_domain TEXT DEFAULT '',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(brand_id, domain)
                 );
@@ -62,6 +64,17 @@ class BulkDBManager:
                     daily_limit INTEGER DEFAULT 0,
                     sent_today INTEGER DEFAULT 0,
                     last_reset_date TEXT DEFAULT '',
+                    proxy TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
+                CREATE TABLE IF NOT EXISTS cf_accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    api_token TEXT NOT NULL,
+                    account_id TEXT DEFAULT '',
+                    r2_access_key TEXT DEFAULT '',
+                    r2_secret_key TEXT DEFAULT '',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -175,10 +188,10 @@ class BulkDBManager:
 
     # --- SMTP Presets ---
     def add_smtp(self, name: str, host: str, port: int, username: str,
-                 password: str, daily_limit: int = 0) -> int:
+                 password: str, daily_limit: int = 0, proxy: str = "") -> int:
         c = self._conn()
-        c.execute("INSERT INTO smtp_presets (name,host,port,username,password,daily_limit) "
-                  "VALUES (?,?,?,?,?,?)", (name, host, port, username, password, daily_limit))
+        c.execute("INSERT INTO smtp_presets (name,host,port,username,password,daily_limit,proxy) "
+                  "VALUES (?,?,?,?,?,?,?)", (name, host, port, username, password, daily_limit, proxy))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -446,6 +459,53 @@ class BulkDBManager:
             "lead_lists": [dict(r) for r in self.get_lists()],
         }
         return json.dumps(data, indent=2, ensure_ascii=False, default=str)
+
+    # --- Cloudflare Accounts ---
+    def add_cf_account(self, name: str, api_token: str, account_id: str = "",
+                       r2_access_key: str = "", r2_secret_key: str = "") -> int:
+        c = self._conn()
+        c.execute("INSERT INTO cf_accounts (name,api_token,account_id,r2_access_key,r2_secret_key) "
+                  "VALUES (?,?,?,?,?)", (name, api_token, account_id, r2_access_key, r2_secret_key))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_cf_accounts(self) -> list:
+        return self._conn().execute("SELECT * FROM cf_accounts ORDER BY name").fetchall()
+
+    def delete_cf_account(self, cf_id: int):
+        c = self._conn()
+        c.execute("DELETE FROM cf_accounts WHERE id=?", (cf_id,))
+        c.commit()
+
+    def update_cf_account(self, cf_id: int, **kw):
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in kw)
+        c.execute(f"UPDATE cf_accounts SET {sets} WHERE id=?", list(kw.values()) + [cf_id])
+        c.commit()
+
+    # --- Domain Unsub Status ---
+    def mark_unsub_deployed(self, domain_id: int, unsub_domain: str):
+        c = self._conn()
+        c.execute("UPDATE domains SET unsub_worker_deployed=1, unsub_domain=? WHERE id=?",
+                  (unsub_domain, domain_id))
+        c.commit()
+
+    def is_unsub_deployed(self, domain_id: int) -> bool:
+        r = self._conn().execute("SELECT unsub_worker_deployed FROM domains WHERE id=?",
+                                  (domain_id,)).fetchone()
+        return bool(r and r[0])
+
+    def get_unsub_domain(self, domain_id: int) -> str:
+        r = self._conn().execute("SELECT unsub_domain FROM domains WHERE id=?",
+                                  (domain_id,)).fetchone()
+        return r["unsub_domain"] if r and r["unsub_domain"] else ""
+
+    # --- List-ID Generation ---
+    @staticmethod
+    def generate_list_id(domain: str, campaign_id: int = 0) -> str:
+        import secrets
+        short = secrets.token_hex(4)
+        return f"c{campaign_id}-{short}.{domain}"
 
     def close(self):
         if hasattr(self._local, "conn") and self._local.conn:

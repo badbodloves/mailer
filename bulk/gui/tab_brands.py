@@ -1,8 +1,9 @@
-"""Brands & Domains management tab."""
+"""Brands & Domains management — Brand is just a name container."""
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
                                  QGroupBox, QTreeWidget, QTreeWidgetItem,
                                  QPushButton, QLineEdit, QLabel, QFormLayout,
-                                 QMessageBox, QInputDialog, QHeaderView)
+                                 QMessageBox, QInputDialog, QHeaderView,
+                                 QTableWidget, QTableWidgetItem, QTabWidget)
 from PySide6.QtCore import Qt
 
 
@@ -16,7 +17,7 @@ class BrandsTab(QWidget):
         left = QGroupBox("Brands & Domains")
         ll = QVBoxLayout(left)
         self.tree = QTreeWidget()
-        self.tree.setHeaderLabels(["Name", "Type", "Details"])
+        self.tree.setHeaderLabels(["Name", "Type", "Info"])
         self.tree.header().setSectionResizeMode(0, QHeaderView.Stretch)
         self.tree.itemClicked.connect(self._on_select)
         ll.addWidget(self.tree)
@@ -29,55 +30,75 @@ class BrandsTab(QWidget):
             btns.addWidget(b)
         ll.addLayout(btns)
 
-        # Right: details + list usage
-        right = QGroupBox("Details")
+        # Right: details
+        right = QWidget()
         rl = QVBoxLayout(right)
-        self.detail_form = QFormLayout()
-        self.lbl_name = QLabel("-")
-        self.lbl_type = QLabel("-")
-        self.detail_form.addRow("Name:", self.lbl_name)
-        self.detail_form.addRow("Type:", self.lbl_type)
 
-        self.edit_from = QLineEdit()
+        # Domain settings
+        dom_box = QGroupBox("Domain Settings")
+        df = QFormLayout(dom_box)
+        self.edit_from_name = QLineEdit()
+        self.edit_from_email = QLineEdit()
         self.edit_reply = QLineEdit()
         self.edit_bounce = QLineEdit()
-        self.edit_listid = QLineEdit()
-        self.detail_form.addRow("From Email:", self.edit_from)
-        self.detail_form.addRow("Reply-To:", self.edit_reply)
-        self.detail_form.addRow("Bounce Sub:", self.edit_bounce)
-        self.detail_form.addRow("List-ID:", self.edit_listid)
-        rl.addLayout(self.detail_form)
-
-        save_btn = QPushButton("Save Domain Settings")
+        self.edit_send_sub = QLineEdit()
+        self.lbl_unsub = QLabel("Not deployed")
+        df.addRow("From Name:", self.edit_from_name)
+        df.addRow("From Email:", self.edit_from_email)
+        df.addRow("Reply-To:", self.edit_reply)
+        df.addRow("Bounce Subdomain:", self.edit_bounce)
+        df.addRow("Send Subdomain:", self.edit_send_sub)
+        df.addRow("Unsub Worker:", self.lbl_unsub)
+        save_btn = QPushButton("Save Domain")
         save_btn.clicked.connect(self._save_domain)
-        rl.addWidget(save_btn)
+        df.addRow(save_btn)
+        rl.addWidget(dom_box)
 
-        # List usage
-        usage_box = QGroupBox("List Usage")
-        ul = QVBoxLayout(usage_box)
-        self.used_label = QLabel("Used lists: -")
-        self.unused_label = QLabel("Unused lists: -")
-        ul.addWidget(self.used_label)
-        ul.addWidget(self.unused_label)
-        rl.addWidget(usage_box)
-        rl.addStretch()
+        # List usage overview
+        tabs = QTabWidget()
+
+        used_tab = QWidget()
+        utl = QVBoxLayout(used_tab)
+        self.used_table = QTableWidget()
+        self.used_table.setColumnCount(2)
+        self.used_table.setHorizontalHeaderLabels(["List Name", "Used At"])
+        self.used_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        utl.addWidget(self.used_table)
+        tabs.addTab(used_tab, "Used Lists")
+
+        unused_tab = QWidget()
+        uutl = QVBoxLayout(unused_tab)
+        self.unused_table = QTableWidget()
+        self.unused_table.setColumnCount(2)
+        self.unused_table.setHorizontalHeaderLabels(["List Name", "Lead Count"])
+        self.unused_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        uutl.addWidget(self.unused_table)
+        mark_btn = QPushButton("Mark Selected as Used")
+        mark_btn.clicked.connect(self._mark_used)
+        uutl.addWidget(mark_btn)
+        tabs.addTab(unused_tab, "Unused Lists")
+
+        rl.addWidget(tabs)
 
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(left)
         splitter.addWidget(right)
-        splitter.setSizes([500, 400])
+        splitter.setSizes([400, 500])
         layout.addWidget(splitter)
 
+        self._current_brand_id = None
+        self._current_domain_id = None
         self._refresh()
 
     def _refresh(self):
         self.tree.clear()
         for brand in self.db.get_brands():
-            item = QTreeWidgetItem([brand["name"], "Brand", f"ID: {brand['id']}"])
+            item = QTreeWidgetItem([brand["name"], "Brand", ""])
             item.setData(0, Qt.UserRole, ("brand", brand["id"]))
             for dom in self.db.get_domains(brand["id"]):
-                child = QTreeWidgetItem([dom["domain"], "Domain", dom["from_email"] or "-"])
-                child.setData(0, Qt.UserRole, ("domain", dom["id"]))
+                unsub = "✓ Unsub" if dom["unsub_worker_deployed"] else ""
+                child = QTreeWidgetItem([dom["domain"], "Domain", unsub])
+                child.setData(0, Qt.UserRole, ("domain", dom["id"], brand["id"]))
                 item.addChild(child)
             item.setExpanded(True)
             self.tree.addTopLevelItem(item)
@@ -99,16 +120,13 @@ class BrandsTab(QWidget):
         data = item.data(0, Qt.UserRole)
         if not data:
             return
-        if data[0] == "domain":
-            parent = item.parent()
-            if parent:
-                data = parent.data(0, Qt.UserRole)
-        if data[0] != "brand":
+        brand_id = data[1] if data[0] == "brand" else data[2] if len(data) > 2 else None
+        if not brand_id:
             return
         domain, ok = QInputDialog.getText(self, "Add Domain", "Domain (e.g. news.example.com):")
         if ok and domain.strip():
             try:
-                self.db.add_domain(data[1], domain.strip())
+                self.db.add_domain(brand_id, domain.strip())
                 self._refresh()
             except Exception as e:
                 QMessageBox.warning(self, "Error", str(e))
@@ -120,7 +138,7 @@ class BrandsTab(QWidget):
         data = item.data(0, Qt.UserRole)
         if not data:
             return
-        if QMessageBox.question(self, "Delete", f"Delete {data[0]} '{item.text(0)}'?") != QMessageBox.Yes:
+        if QMessageBox.question(self, "Delete", f"Delete '{item.text(0)}'?") != QMessageBox.Yes:
             return
         if data[0] == "brand":
             self.db.delete_brand(data[1])
@@ -132,37 +150,66 @@ class BrandsTab(QWidget):
         data = item.data(0, Qt.UserRole)
         if not data:
             return
-        self.lbl_name.setText(item.text(0))
-        self.lbl_type.setText(data[0])
 
         if data[0] == "brand":
-            used = self.db.get_used_lists(data[1])
-            unused = self.db.get_unused_lists(data[1])
-            self.used_label.setText(f"Used lists: {len(used)} — " + ", ".join(r['name'] for r in used[:10]))
-            self.unused_label.setText(f"Unused lists: {len(unused)} — " + ", ".join(r['name'] for r in unused[:10]))
-            self.edit_from.clear()
-            self.edit_reply.clear()
+            self._current_brand_id = data[1]
+            self._current_domain_id = None
+            self._load_list_usage(data[1])
 
         elif data[0] == "domain":
+            self._current_domain_id = data[1]
+            self._current_brand_id = data[2] if len(data) > 2 else None
             row = self.db._conn().execute("SELECT * FROM domains WHERE id=?", (data[1],)).fetchone()
             if row:
-                self.edit_from.setText(row["from_email"] or "")
-                self.edit_reply.setText(row["reply_to"] or "")
+                self.edit_from_name.setText(row["from_name"] or "")
+                self.edit_from_email.setText(row["from_email"] or "")
+                self.edit_reply.setText(row["reply_to_email"] or "")
                 self.edit_bounce.setText(row["bounce_subdomain"] or "bounce")
-                self.edit_listid.setText(row["list_id_label"] or "")
+                self.edit_send_sub.setText(row["send_subdomain"] or "mail")
+                self.lbl_unsub.setText(
+                    f"✓ Deployed ({row['unsub_domain']})" if row["unsub_worker_deployed"]
+                    else "Not deployed")
+            if self._current_brand_id:
+                self._load_list_usage(self._current_brand_id)
 
     def _save_domain(self):
-        item = self.tree.currentItem()
-        if not item:
-            return
-        data = item.data(0, Qt.UserRole)
-        if not data or data[0] != "domain":
-            QMessageBox.warning(self, "Select", "Select a domain to save")
+        if not self._current_domain_id:
+            QMessageBox.warning(self, "Select", "Select a domain")
             return
         c = self.db._conn()
-        c.execute("UPDATE domains SET from_email=?, reply_to=?, bounce_subdomain=?, list_id_label=? WHERE id=?",
-                  (self.edit_from.text(), self.edit_reply.text(),
-                   self.edit_bounce.text(), self.edit_listid.text(), data[1]))
+        c.execute("""UPDATE domains SET from_name=?, from_email=?, reply_to_email=?,
+                     bounce_subdomain=?, send_subdomain=? WHERE id=?""",
+                  (self.edit_from_name.text(), self.edit_from_email.text(),
+                   self.edit_reply.text(), self.edit_bounce.text(),
+                   self.edit_send_sub.text(), self._current_domain_id))
         c.commit()
         self._refresh()
         QMessageBox.information(self, "Saved", "Domain settings saved")
+
+    def _load_list_usage(self, brand_id):
+        used = self.db.get_used_lists(brand_id)
+        self.used_table.setRowCount(len(used))
+        for i, r in enumerate(used):
+            self.used_table.setItem(i, 0, QTableWidgetItem(r["name"]))
+            self.used_table.setItem(i, 1, QTableWidgetItem(str(r.get("created_at", ""))))
+
+        unused = self.db.get_unused_lists(brand_id)
+        self.unused_table.setRowCount(len(unused))
+        for i, r in enumerate(unused):
+            item = QTableWidgetItem(r["name"])
+            item.setData(Qt.UserRole, r["id"])
+            self.unused_table.setItem(i, 0, item)
+            count = self.db.get_list_lead_count(r["id"])
+            self.unused_table.setItem(i, 1, QTableWidgetItem(f"{count:,}"))
+
+    def _mark_used(self):
+        if not self._current_brand_id:
+            return
+        rows = set(idx.row() for idx in self.unused_table.selectedIndexes())
+        for r in rows:
+            item = self.unused_table.item(r, 0)
+            if item:
+                list_id = item.data(Qt.UserRole)
+                if list_id:
+                    self.db.mark_list_used(self._current_brand_id, list_id)
+        self._load_list_usage(self._current_brand_id)
