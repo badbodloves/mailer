@@ -38,16 +38,16 @@ class BrandsTab(QWidget):
         dom_box = QGroupBox("Domain Settings")
         df = QFormLayout(dom_box)
         self.edit_from_name = QLineEdit()
+        self.edit_from_name.setPlaceholderText("Fixed name or {macro_name}")
         self.edit_from_email = QLineEdit()
         self.edit_reply = QLineEdit()
-        self.edit_bounce = QLineEdit()
-        self.edit_send_sub = QLineEdit()
+        self.edit_mail_sub = QLineEdit()
+        self.edit_mail_sub.setPlaceholderText("mail (used for bounce + sending)")
         self.lbl_unsub = QLabel("Not deployed")
         df.addRow("From Name:", self.edit_from_name)
         df.addRow("From Email:", self.edit_from_email)
         df.addRow("Reply-To:", self.edit_reply)
-        df.addRow("Bounce Subdomain:", self.edit_bounce)
-        df.addRow("Send Subdomain:", self.edit_send_sub)
+        df.addRow("Mail Subdomain:", self.edit_mail_sub)
         df.addRow("Unsub Worker:", self.lbl_unsub)
         save_btn = QPushButton("Save Domain")
         save_btn.clicked.connect(self._save_domain)
@@ -164,8 +164,7 @@ class BrandsTab(QWidget):
                 self.edit_from_name.setText(row["from_name"] or "")
                 self.edit_from_email.setText(row["from_email"] or "")
                 self.edit_reply.setText(row["reply_to_email"] or "")
-                self.edit_bounce.setText(row["bounce_subdomain"] or "bounce")
-                self.edit_send_sub.setText(row["send_subdomain"] or "mail")
+                self.edit_mail_sub.setText(row["send_subdomain"] or "mail")
                 self.lbl_unsub.setText(
                     f"✓ Deployed ({row['unsub_domain']})" if row["unsub_worker_deployed"]
                     else "Not deployed")
@@ -177,11 +176,11 @@ class BrandsTab(QWidget):
             QMessageBox.warning(self, "Select", "Select a domain")
             return
         c = self.db._conn()
+        sub = self.edit_mail_sub.text() or "mail"
         c.execute("""UPDATE domains SET from_name=?, from_email=?, reply_to_email=?,
                      bounce_subdomain=?, send_subdomain=? WHERE id=?""",
                   (self.edit_from_name.text(), self.edit_from_email.text(),
-                   self.edit_reply.text(), self.edit_bounce.text(),
-                   self.edit_send_sub.text(), self._current_domain_id))
+                   self.edit_reply.text(), sub, sub, self._current_domain_id))
         c.commit()
         self._refresh()
         QMessageBox.information(self, "Saved", "Domain settings saved")

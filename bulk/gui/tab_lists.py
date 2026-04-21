@@ -60,6 +60,19 @@ class ListsTab(QWidget):
         exclude_row.addWidget(del_domain_btn)
         rl.addLayout(exclude_row)
 
+        # Exclude Rules
+        rules_box = QGroupBox("Global Exclude Rules (applied to all lists unless disabled)")
+        rules_l = QVBoxLayout(rules_box)
+        self.exclude_rules = QTextEdit()
+        self.exclude_rules.setMaximumHeight(80)
+        self.exclude_rules.setPlaceholderText(
+            "One rule per line. Prefix with @ for domain, no prefix for local-part.\n"
+            "Examples: @spam.com  spam@  datenschutz@  dsgvo@  noreply@  abuse@  postmaster@")
+        self.exclude_rules.setPlainText(
+            "@spam.com\n@junk.com\nspam@\ndatenschutz@\ndsgvo@\nnoreply@\nabuse@\npostmaster@\nmailer-daemon@")
+        rules_l.addWidget(self.exclude_rules)
+        rl.addWidget(rules_box)
+
         # Table
         self.lead_table = QTableWidget()
         self.lead_table.setColumnCount(3)
@@ -94,27 +107,49 @@ class ListsTab(QWidget):
             item.setData(Qt.UserRole, lst["id"])
             self.list_widget.addItem(item)
 
+    def _get_exclude_rules(self) -> list:
+        rules = []
+        for line in self.exclude_rules.toPlainText().splitlines():
+            line = line.strip().lower()
+            if line:
+                rules.append(line)
+        return rules
+
+    def _should_exclude(self, email: str, rules: list) -> bool:
+        email = email.lower()
+        local = email.split("@")[0] if "@" in email else ""
+        domain = email.split("@")[1] if "@" in email else ""
+        for rule in rules:
+            if rule.startswith("@") and domain == rule[1:]:
+                return True
+            if rule.endswith("@") and local == rule[:-1]:
+                return True
+            if rule in email:
+                return True
+        return False
+
     def _import(self):
         paths, _ = QFileDialog.getOpenFileNames(self, "Import Leads", "",
                                                   "Text Files (*.txt *.csv);;All (*)")
         if not paths:
             return
-        exclude_str, ok = QInputDialog.getText(self, "Exclude Domains",
-                                                "Exclude domains (comma-sep, e.g. yahoo.de,aol.com):")
-        excludes = [d.strip().lower() for d in exclude_str.split(",") if d.strip()] if ok else []
+
+        rules = self._get_exclude_rules()
 
         for path in paths:
             name = os.path.splitext(os.path.basename(path))[0]
             list_id = self.db.create_list(name, path)
-            emails = []
+            all_emails = []
             with open(path, "r", encoding="utf-8", errors="replace") as f:
                 for line in f:
                     for match in EMAIL_RE.findall(line):
-                        emails.append(match.lower())
-            added = self.db.import_leads(list_id, emails, excludes)
+                        all_emails.append(match.lower())
+            filtered = [e for e in all_emails if not self._should_exclude(e, rules)]
+            excluded_count = len(all_emails) - len(filtered)
+            added = self.db.import_leads(list_id, filtered)
             QMessageBox.information(self, "Imported",
                                      f"{name}: {added:,} leads imported"
-                                     + (f" ({len(emails)-added} excluded)" if excludes else ""))
+                                     + (f" ({excluded_count} excluded by rules)" if excluded_count else ""))
         self._refresh()
 
     def _delete_list(self):

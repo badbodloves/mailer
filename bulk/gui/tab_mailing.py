@@ -19,7 +19,6 @@ class MailingTab(QWidget):
         self._started_at = 0.0
         layout = QHBoxLayout(self)
 
-        # Left: mailing setup
         left = QWidget()
         ll = QVBoxLayout(left)
 
@@ -31,7 +30,11 @@ class MailingTab(QWidget):
         form.addRow("Brand:", self.brand_cb)
 
         self.domain_cb = QComboBox()
-        form.addRow("Domain:", self.domain_cb)
+        form.addRow("Sender Domain:", self.domain_cb)
+
+        self.sender_name_input = QLineEdit()
+        self.sender_name_input.setPlaceholderText("Display name or {macro}")
+        form.addRow("Sender Name:", self.sender_name_input)
 
         self.list_cb = QComboBox()
         form.addRow("Mailing List:", self.list_cb)
@@ -40,11 +43,7 @@ class MailingTab(QWidget):
         form.addRow("SMTP Preset:", self.smtp_cb)
 
         self.tmpl_cb = QComboBox()
-        form.addRow("Message Template:", self.tmpl_cb)
-
-        self.sender_name_input = QLineEdit()
-        self.sender_name_input.setPlaceholderText("Sender display name (or {macro})")
-        form.addRow("Sender Name:", self.sender_name_input)
+        form.addRow("Message:", self.tmpl_cb)
 
         self.daily_limit = QSpinBox()
         self.daily_limit.setRange(0, 999999)
@@ -57,7 +56,6 @@ class MailingTab(QWidget):
 
         ll.addWidget(setup)
 
-        # Controls
         ctrl = QGroupBox("Control")
         cl = QHBoxLayout(ctrl)
         self.btn_start = QPushButton("▶ START")
@@ -76,7 +74,6 @@ class MailingTab(QWidget):
         cl.addWidget(self.btn_refresh)
         ll.addWidget(ctrl)
 
-        # Stats
         stats = QGroupBox("Delivery Info")
         sl = QVBoxLayout(stats)
         self.status_label = QLabel("Status: Idle")
@@ -96,7 +93,6 @@ class MailingTab(QWidget):
         sl.addLayout(metrics)
         ll.addWidget(stats)
 
-        # Right: events log
         right = QGroupBox("Events Log")
         rl = QVBoxLayout(right)
         self.events = QTextEdit()
@@ -117,40 +113,45 @@ class MailingTab(QWidget):
         self._refresh_all()
 
     def _log(self, msg):
-        ts = time.strftime("%H:%M:%S")
-        self.events.append(f"{ts}  {msg}")
+        self.events.append(f"{time.strftime('%H:%M:%S')}  {msg}")
 
     def _refresh_all(self):
-        # Brands
+        self.brand_cb.blockSignals(True)
         self.brand_cb.clear()
         for b in self.db.get_brands():
             self.brand_cb.addItem(b["name"], b["id"])
+        self.brand_cb.blockSignals(False)
 
-        # SMTPs
         self.smtp_cb.clear()
+        self.db.reset_daily_counts()
         for s in self.db.get_smtps():
             remaining = self.db.get_smtp_remaining(s["id"])
-            self.smtp_cb.addItem(f"{s['name']} ({remaining:,} remaining)", s["id"])
+            proxy = " [proxy]" if s.get("proxy") else ""
+            self.smtp_cb.addItem(f"{s['name']} ({remaining:,} left){proxy}", s["id"])
 
-        # Templates
         self.tmpl_cb.clear()
         for t in self.db.get_templates():
             self.tmpl_cb.addItem(t["name"], t["id"])
 
-        # Lists
         self.list_cb.clear()
         for l in self.db.get_lists():
             count = self.db.get_list_lead_count(l["id"])
             self.list_cb.addItem(f"{l['name']} ({count:,})", l["id"])
 
-        self._on_brand_change()
+        if self.brand_cb.count() > 0:
+            self.brand_cb.setCurrentIndex(0)
+            self._on_brand_change()
 
     def _on_brand_change(self):
         self.domain_cb.clear()
         bid = self.brand_cb.currentData()
-        if bid:
-            for d in self.db.get_domains(bid):
-                self.domain_cb.addItem(d["domain"], d["id"])
+        if not bid:
+            return
+        for d in self.db.get_domains(bid):
+            label = d["domain"]
+            if d.get("from_email"):
+                label += f" ({d['from_email']})"
+            self.domain_cb.addItem(label, d["id"])
 
     def _start(self):
         if self._running:
@@ -161,8 +162,14 @@ class MailingTab(QWidget):
         smtp_id = self.smtp_cb.currentData()
         tmpl_id = self.tmpl_cb.currentData()
 
-        if not all([brand_id, domain_id, list_id, smtp_id, tmpl_id]):
-            QMessageBox.warning(self, "Missing", "Select all fields")
+        missing = []
+        if not brand_id: missing.append("Brand")
+        if not domain_id: missing.append("Domain")
+        if not list_id: missing.append("List")
+        if not smtp_id: missing.append("SMTP")
+        if not tmpl_id: missing.append("Template")
+        if missing:
+            QMessageBox.warning(self, "Missing", f"Select: {', '.join(missing)}")
             return
 
         excludes = [d.strip() for d in self.exclude_input.text().split(",") if d.strip()]
@@ -207,7 +214,7 @@ class MailingTab(QWidget):
             self.status_label.setText("Status: Paused")
             self.btn_start.setEnabled(True)
             self.btn_pause.setEnabled(False)
-            self._log("Mailing paused")
+            self._log("Paused")
 
     def _stop(self):
         if self._core:
@@ -217,7 +224,7 @@ class MailingTab(QWidget):
         self.btn_start.setEnabled(True)
         self.btn_pause.setEnabled(False)
         self.btn_stop.setEnabled(False)
-        self._log("Mailing stopped")
+        self._log("Stopped")
 
     def _poll(self):
         list_id = self.list_cb.currentData()
@@ -255,5 +262,3 @@ class MailingTab(QWidget):
             self.btn_start.setEnabled(True)
             self.btn_pause.setEnabled(False)
             self.btn_stop.setEnabled(False)
-            if self.status_label.text() == "Status: Running":
-                self.status_label.setText("Status: Finished")

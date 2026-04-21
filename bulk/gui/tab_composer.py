@@ -45,9 +45,15 @@ class ComposerTab(QWidget):
         self.html_list.setMaximumHeight(100)
         hl.addWidget(self.html_list)
         hb = QHBoxLayout()
-        add_html_btn = QPushButton("Add HTML")
-        add_html_btn.clicked.connect(self._add_html)
-        hb.addWidget(add_html_btn)
+        add_file_btn = QPushButton("Add File(s)")
+        add_file_btn.clicked.connect(self._add_html)
+        hb.addWidget(add_file_btn)
+        add_folder_btn = QPushButton("Add Folder")
+        add_folder_btn.clicked.connect(self._add_html_folder)
+        hb.addWidget(add_folder_btn)
+        add_code_btn = QPushButton("Paste HTML")
+        add_code_btn.clicked.connect(self._paste_html)
+        hb.addWidget(add_code_btn)
         remove_html_btn = QPushButton("Remove")
         remove_html_btn.clicked.connect(self._remove_html)
         hb.addWidget(remove_html_btn)
@@ -178,6 +184,41 @@ class ComposerTab(QWidget):
                                                   "HTML (*.html *.htm)")
         for p in paths:
             self.html_list.addItem(p)
+
+    def _add_html_folder(self):
+        from PySide6.QtWidgets import QFileDialog as QFD
+        folder = QFD.getExistingDirectory(self, "Select HTML Folder")
+        if folder:
+            import os
+            for f in sorted(os.listdir(folder)):
+                if f.lower().endswith((".html", ".htm")):
+                    self.html_list.addItem(os.path.join(folder, f))
+
+    def _paste_html(self):
+        from PySide6.QtWidgets import QDialog, QVBoxLayout, QTextEdit, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Paste HTML Code")
+        dlg.setMinimumSize(600, 400)
+        dl = QVBoxLayout(dlg)
+        editor = QTextEdit()
+        editor.setPlaceholderText("Paste your HTML code here...")
+        dl.addWidget(editor)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        dl.addWidget(btns)
+
+        if dlg.exec() == QDialog.Accepted:
+            code = editor.toPlainText().strip()
+            if code:
+                import os, tempfile
+                os.makedirs("bulk_html", exist_ok=True)
+                import secrets
+                name = f"pasted_{secrets.token_hex(4)}.html"
+                path = os.path.join("bulk_html", name)
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(code)
+                self.html_list.addItem(os.path.abspath(path))
 
     def _remove_html(self):
         row = self.html_list.currentRow()
