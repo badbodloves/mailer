@@ -18,8 +18,8 @@ from email.header import Header
 from typing import Optional, Tuple, List, Dict
 
 _CRLF = str.maketrans("", "", "\r\n")
-_LINE_LENGTH_RE = re.compile(r"[^\r\n]{997,}")
-_FEEDBACK_RE = re.compile(r"^[\w\-.:]*:[\w\-.:]*:[\w\-.:]*:[\w\-]{5,15}$")
+_LINE_LENGTH_RE = re.compile(r"[^\r\n]{999,}")
+_FEEDBACK_RE = re.compile(r"^[\w\-.:]*:[\w\-.:]*:[\w\-.:]*:[\w\-.]{5,15}$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
 _LIST_ID_RE = re.compile(r"^[\w\-]+(\.[\w\-]+)+$")
 _RESERVED_HEADERS = frozenset({
@@ -130,8 +130,11 @@ class BulkMIMEBuilder:
         if not _LIST_ID_RE.match(list_id_token):
             raise ValueError(f"Invalid list_id_token (use domain-style, no @ or spaces): {list_id_token!r}")
 
-        safe_name = list_id_name.replace('"', '\\"') if list_id_name else ""
-        list_id_str = f'"{safe_name}" <{list_id_token}>' if safe_name else f"<{list_id_token}>"
+        if list_id_name:
+            encoded_name = cls._encode_header(list_id_name)
+            list_id_str = f"{encoded_name} <{list_id_token}>"
+        else:
+            list_id_str = f"<{list_id_token}>"
 
         msg_id = cls._message_id(mid_domain)
         from_header = formataddr((cls._encode_header(from_name), from_email))
@@ -159,9 +162,15 @@ class BulkMIMEBuilder:
             f"List-Id: {list_id_str}",
         ]
 
-        if unsubscribe_url and unsubscribe_mailto:
-            headers.append(f"List-Unsubscribe: <{unsubscribe_url}>, <mailto:{unsubscribe_mailto}>")
-            headers.append("List-Unsubscribe-Post: List-Unsubscribe=One-Click")
+        unsub_parts = []
+        if unsubscribe_url:
+            unsub_parts.append(f"<{unsubscribe_url}>")
+        if unsubscribe_mailto:
+            unsub_parts.append(f"<mailto:{unsubscribe_mailto}>")
+        if unsub_parts:
+            headers.append(f"List-Unsubscribe: {', '.join(unsub_parts)}")
+            if unsubscribe_url:
+                headers.append("List-Unsubscribe-Post: List-Unsubscribe=One-Click")
 
         headers.append("Precedence: bulk")
 

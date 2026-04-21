@@ -5,7 +5,7 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
                                  QGroupBox, QListWidget, QListWidgetItem,
                                  QTableWidget, QTableWidgetItem, QPushButton,
                                  QLineEdit, QLabel, QFileDialog, QMessageBox,
-                                 QHeaderView, QInputDialog, QCheckBox)
+                                 QHeaderView, QInputDialog, QCheckBox, QTextEdit)
 from PySide6.QtCore import Qt
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")

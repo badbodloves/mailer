@@ -143,9 +143,9 @@ class BulkMailerCore:
 
                 unsub_token = f"{lead_id}-{self._mailing_id}"
                 unsub_url = f"https://unsub.{domain}/u/{unsub_token}"
-                unsub_mailto = f"unsub-{unsub_token}@unsub.{domain}"
+                unsub_mailto = f"unsub-{unsub_token}@{domain}"
 
-                feedback_id = f"{feedback_base}:{domain[:15]}"
+                feedback_id = f"{feedback_base}:{domain.replace('.', '-')[:15]}"
 
                 attachment = None
                 if pdf_bytes:
