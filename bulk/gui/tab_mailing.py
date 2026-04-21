@@ -32,9 +32,14 @@ class MailingTab(QWidget):
         self.domain_cb = QComboBox()
         form.addRow("Sender Domain:", self.domain_cb)
 
+        sender_row = QHBoxLayout()
         self.sender_name_input = QLineEdit()
         self.sender_name_input.setPlaceholderText("Display name or {macro}")
-        form.addRow("Sender Name:", self.sender_name_input)
+        sender_row.addWidget(self.sender_name_input)
+        insert_sender_btn = QPushButton("Insert Macro")
+        insert_sender_btn.clicked.connect(self._insert_sender_macro)
+        sender_row.addWidget(insert_sender_btn)
+        form.addRow("Sender Name:", sender_row)
 
         self.list_cb = QComboBox()
         form.addRow("Mailing List:", self.list_cb)
@@ -152,6 +157,10 @@ class MailingTab(QWidget):
             if d.get("from_email"):
                 label += f" ({d['from_email']})"
             self.domain_cb.addItem(label, d["id"])
+
+    def _insert_sender_macro(self):
+        from .macro_insert import insert_macro_into
+        insert_macro_into(self.db, self.sender_name_input, self)
 
     def _start(self):
         if self._running:

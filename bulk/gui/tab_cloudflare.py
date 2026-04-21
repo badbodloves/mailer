@@ -18,33 +18,39 @@ class CloudflareTab(QWidget):
         self._r2 = None
         layout = QVBoxLayout(self)
 
-        # Credentials
-        creds = QGroupBox("Cloudflare Credentials")
-        cf = QFormLayout(creds)
-        self.account_id = QLineEdit()
-        self.account_id.setPlaceholderText("Cloudflare Account ID")
-        cf.addRow("Account ID:", self.account_id)
-        self.api_token = QLineEdit()
-        self.api_token.setEchoMode(QLineEdit.Password)
-        self.api_token.setPlaceholderText("API Token (R2 + Workers + Zones)")
-        cf.addRow("API Token:", self.api_token)
-        self.r2_access_key = QLineEdit()
-        self.r2_access_key.setPlaceholderText("R2 Access Key ID")
-        cf.addRow("R2 Access Key:", self.r2_access_key)
-        self.r2_secret_key = QLineEdit()
-        self.r2_secret_key.setEchoMode(QLineEdit.Password)
-        self.r2_secret_key.setPlaceholderText("R2 Secret Access Key")
-        cf.addRow("R2 Secret Key:", self.r2_secret_key)
+        # Account Manager
+        acct = QGroupBox("Cloudflare Accounts")
+        al = QVBoxLayout(acct)
+        self.acct_cb = QComboBox()
+        self.acct_cb.currentIndexChanged.connect(self._on_account_change)
+        al.addWidget(self.acct_cb)
 
-        cred_btns = QHBoxLayout()
-        cred_btns.addWidget(QPushButton("Connect", clicked=self._connect))
-        cred_btns.addWidget(QPushButton("Save Credentials", clicked=self._save_creds))
-        cred_btns.addWidget(QPushButton("Load Credentials", clicked=self._load_creds))
-        cf.addRow(cred_btns)
+        acct_btns = QHBoxLayout()
+        add_acct = QPushButton("Add Account")
+        add_acct.clicked.connect(self._add_account)
+        acct_btns.addWidget(add_acct)
+        del_acct = QPushButton("Delete")
+        del_acct.clicked.connect(self._delete_account)
+        acct_btns.addWidget(del_acct)
+        connect_btn = QPushButton("Connect")
+        connect_btn.clicked.connect(self._connect)
+        acct_btns.addWidget(connect_btn)
+        al.addLayout(acct_btns)
 
         self.status_label = QLabel("Not connected")
-        cf.addRow("Status:", self.status_label)
-        layout.addWidget(creds)
+        al.addWidget(self.status_label)
+
+        # Domains in this CF account vs brand domains
+        domain_box = QGroupBox("Domains (from Cloudflare)")
+        dl = QVBoxLayout(domain_box)
+        self.cf_domain_list = QListWidget()
+        dl.addWidget(self.cf_domain_list)
+        sync_btn = QPushButton("Pull Domains from Cloudflare")
+        sync_btn.clicked.connect(self._pull_domains)
+        dl.addWidget(sync_btn)
+        al.addWidget(domain_box)
+
+        layout.addWidget(acct)
 
         # Tabs for R2 and Workers
         tabs = QTabWidget()
@@ -153,7 +159,7 @@ class CloudflareTab(QWidget):
         tabs.addTab(worker_tab, "Unsubscribe Worker")
         layout.addWidget(tabs)
 
-        self._load_creds()
+        self._refresh_accounts()
 
     def _wlog(self, msg):
         self.worker_log.append(msg)
@@ -161,53 +167,102 @@ class CloudflareTab(QWidget):
     def _ulog(self, msg):
         self.upload_log.append(msg)
 
+    def _refresh_accounts(self):
+        self.acct_cb.blockSignals(True)
+        self.acct_cb.clear()
+        for a in self.db.get_cf_accounts():
+            self.acct_cb.addItem(a["name"], a["id"])
+        self.acct_cb.blockSignals(False)
+        if self.acct_cb.count() > 0:
+            self.acct_cb.setCurrentIndex(0)
+
+    def _on_account_change(self):
+        self._r2 = None
+
+    def _add_account(self):
+        from PySide6.QtWidgets import QDialog, QFormLayout, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("Add Cloudflare Account")
+        dlg.setMinimumWidth(450)
+        fl = QFormLayout(dlg)
+        name_in = QLineEdit()
+        token_in = QLineEdit()
+        token_in.setEchoMode(QLineEdit.Password)
+        acct_in = QLineEdit()
+        r2_key = QLineEdit()
+        r2_sec = QLineEdit()
+        r2_sec.setEchoMode(QLineEdit.Password)
+        fl.addRow("Account Name:", name_in)
+        fl.addRow("API Token:", token_in)
+        fl.addRow("Account ID:", acct_in)
+        fl.addRow("R2 Access Key:", r2_key)
+        fl.addRow("R2 Secret Key:", r2_sec)
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        fl.addRow(btns)
+        if dlg.exec() == QDialog.Accepted:
+            self.db.add_cf_account(name_in.text(), token_in.text(),
+                                    acct_in.text(), r2_key.text(), r2_sec.text())
+            self._refresh_accounts()
+
+    def _delete_account(self):
+        cf_id = self.acct_cb.currentData()
+        if cf_id and QMessageBox.question(self, "Delete", "Delete this account?") == QMessageBox.Yes:
+            self.db.delete_cf_account(cf_id)
+            self._refresh_accounts()
+
+    def _get_current_account(self):
+        cf_id = self.acct_cb.currentData()
+        if not cf_id:
+            return None
+        return self.db._conn().execute("SELECT * FROM cf_accounts WHERE id=?", (cf_id,)).fetchone()
+
     def _get_r2(self):
         if self._r2 and self._r2.enabled:
             return self._r2
+        acct = self._get_current_account()
+        if not acct:
+            return None
         from bulk.mailer.r2_manager import R2Manager
         self._r2 = R2Manager(
-            account_id=self.account_id.text().strip(),
-            api_token=self.api_token.text().strip(),
-            access_key_id=self.r2_access_key.text().strip(),
-            secret_access_key=self.r2_secret_key.text().strip(),
+            account_id=acct["account_id"],
+            api_token=acct["api_token"],
+            access_key_id=acct["r2_access_key"],
+            secret_access_key=acct["r2_secret_key"],
         )
         return self._r2
 
     def _connect(self):
         r2 = self._get_r2()
+        if not r2:
+            self.status_label.setText("No account selected")
+            return
         if r2.enabled:
             buckets = r2.list_buckets()
             self.status_label.setText(f"Connected — {len(buckets)} buckets")
             self.status_label.setStyleSheet("color:green; font-weight:bold")
             self._refresh_buckets()
             self._refresh_zones()
+            self._pull_domains()
         else:
             self.status_label.setText("Failed — check credentials")
             self.status_label.setStyleSheet("color:red")
 
-    def _save_creds(self):
-        data = {
-            "account_id": self.account_id.text(),
-            "api_token": self.api_token.text(),
-            "r2_access_key": self.r2_access_key.text(),
-            "r2_secret_key": self.r2_secret_key.text(),
-        }
-        with open("cf_credentials.json", "w") as f:
-            json.dump(data, f, indent=2)
-        QMessageBox.information(self, "Saved", "Credentials saved to cf_credentials.json")
-
-    def _load_creds(self):
-        if not os.path.isfile("cf_credentials.json"):
+    def _pull_domains(self):
+        r2 = self._get_r2()
+        if not r2:
             return
-        try:
-            with open("cf_credentials.json", "r") as f:
-                data = json.load(f)
-            self.account_id.setText(data.get("account_id", ""))
-            self.api_token.setText(data.get("api_token", ""))
-            self.r2_access_key.setText(data.get("r2_access_key", ""))
-            self.r2_secret_key.setText(data.get("r2_secret_key", ""))
-        except Exception:
-            pass
+        self.cf_domain_list.clear()
+        zones = r2.list_zones()
+        brand_domains = {d["domain"] for d in self.db.get_domains()}
+        for z in zones:
+            name = z["name"]
+            in_brands = "✓ In Brands" if name in brand_domains else ""
+            dom_row = self.db._conn().execute(
+                "SELECT unsub_worker_deployed FROM domains WHERE domain=?", (name,)).fetchone()
+            unsub = "✓ Unsub" if dom_row and dom_row[0] else ""
+            self.cf_domain_list.addItem(f"{name}  {in_brands}  {unsub}")
 
     def _refresh_buckets(self):
         r2 = self._get_r2()
@@ -309,8 +364,12 @@ class CloudflareTab(QWidget):
             self.zone_cb.addItem(f"{zone['name']} ({zone['id'][:8]}...)", zone["id"])
 
     def _deploy_worker(self):
-        account_id = self.account_id.text().strip()
-        api_token = self.api_token.text().strip()
+        acct = self._get_current_account()
+        if not acct:
+            QMessageBox.warning(self, "Account", "Select a Cloudflare account")
+            return
+        account_id = acct["account_id"]
+        api_token = acct["api_token"]
         worker_name = self.worker_name.text().strip()
         kv_name = self.kv_name.text().strip()
 
@@ -407,8 +466,11 @@ class CloudflareTab(QWidget):
         threading.Thread(target=deploy, daemon=True).start()
 
     def _check_worker(self):
-        account_id = self.account_id.text().strip()
-        api_token = self.api_token.text().strip()
+        acct = self._get_current_account()
+        if not acct:
+            return
+        account_id = acct["account_id"]
+        api_token = acct["api_token"]
         worker_name = self.worker_name.text().strip()
         if not all([account_id, api_token, worker_name]):
             return

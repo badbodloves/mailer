@@ -65,9 +65,14 @@ class ComposerTab(QWidget):
         hl.addWidget(self.html_rotate)
 
         # Subject
+        subj_row = QHBoxLayout()
         self.subject_input = QLineEdit()
         self.subject_input.setPlaceholderText("Subject or {macro_name}")
-        form.addRow("Subject:", self.subject_input)
+        subj_row.addWidget(self.subject_input)
+        insert_subj_btn = QPushButton("Insert Macro")
+        insert_subj_btn.clicked.connect(self._insert_subject_macro)
+        subj_row.addWidget(insert_subj_btn)
+        form.addRow("Subject:", subj_row)
 
         # Sender rotation
         sender_box = QGroupBox("Sender Rotation")
@@ -224,6 +229,10 @@ class ComposerTab(QWidget):
         row = self.html_list.currentRow()
         if row >= 0:
             self.html_list.takeItem(row)
+
+    def _insert_subject_macro(self):
+        from .macro_insert import insert_macro_into
+        insert_macro_into(self.db, self.subject_input, self)
 
     def _browse_pdf(self):
         path, _ = QFileDialog.getOpenFileName(self, "Select PDF", "",
