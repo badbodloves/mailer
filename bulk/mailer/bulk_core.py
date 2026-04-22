@@ -36,6 +36,16 @@ class BulkMailerCore:
         self._shutdown.set()
 
     def run(self):
+        try:
+            self._run_inner()
+        except Exception as exc:
+            logger.error("Mailing %d CRASHED: %s", self._mailing_id, exc, exc_info=True)
+            try:
+                self._db.update_mailing_status(self._mailing_id, "FAILED")
+            except Exception:
+                pass
+
+    def _run_inner(self):
         mailing = self._load_mailing()
         if not mailing:
             logger.error("Mailing %d not found", self._mailing_id)
@@ -49,8 +59,14 @@ class BulkMailerCore:
         template_row = self._db._conn().execute(
             "SELECT * FROM message_templates WHERE id=?", (mailing["template_id"],)).fetchone()
 
-        if not all([domain_row, smtp_row, template_row]):
-            logger.error("Missing domain, SMTP, or template for mailing %d", self._mailing_id)
+        if not domain_row:
+            logger.error("Mailing %d: domain_id=%d not found", self._mailing_id, mailing["domain_id"])
+            return
+        if not smtp_row:
+            logger.error("Mailing %d: smtp_preset_id=%d not found", self._mailing_id, mailing["smtp_preset_id"])
+            return
+        if not template_row:
+            logger.error("Mailing %d: template_id=%d not found", self._mailing_id, mailing["template_id"])
             return
 
         domain_row = dict(domain_row)
@@ -112,12 +128,15 @@ class BulkMailerCore:
         self._db.reset_in_progress(list_id_db)
         self._db.reset_daily_counts()
 
-        pending_count = self._db._conn().execute(
-            "SELECT COUNT(*) FROM leads WHERE list_id=? AND state='PENDING'",
-            (list_id_db,)).fetchone()[0]
-        logger.info("Mailing %d starting: list=%d, %d pending leads, smtp=%s, proxy=%s",
-                     self._mailing_id, list_id_db, pending_count,
-                     smtp_row["host"], proxy_str or "none")
+        c = self._db._conn()
+        total_in_list = c.execute("SELECT COUNT(*) FROM leads WHERE list_id=?", (list_id_db,)).fetchone()[0]
+        pending_count = c.execute("SELECT COUNT(*) FROM leads WHERE list_id=? AND state='PENDING'", (list_id_db,)).fetchone()[0]
+        states = c.execute("SELECT state, COUNT(*) FROM leads WHERE list_id=? GROUP BY state", (list_id_db,)).fetchall()
+        state_str = ", ".join(f"{s[0]}={s[1]}" for s in states) if states else "no leads"
+        logger.info("Mailing %d starting: list_id=%d, total_in_list=%d, pending=%d, states=[%s], "
+                     "smtp=%s, provider=%s, proxy=%s, excludes=%s",
+                     self._mailing_id, list_id_db, total_in_list, pending_count, state_str,
+                     smtp_row["host"], provider, proxy_str or "none", exclude_domains)
 
         sent = 0
         failed = 0
@@ -125,7 +144,9 @@ class BulkMailerCore:
 
         while not self._shutdown.is_set():
             batch = self._db.fetch_pending(list_id_db, exclude_domains, self.BATCH_SIZE)
+            logger.info("Mailing %d: fetched batch of %d leads", self._mailing_id, len(batch))
             if not batch:
+                logger.info("Mailing %d: no more pending leads, finishing", self._mailing_id)
                 break
 
             lead_ids = [r[0] for r in batch]
@@ -204,12 +225,14 @@ class BulkMailerCore:
                     date_line = f"Date: {formatdate(localtime=True, usegmt=False)}\r\n"
                     raw_msg = date_line + raw_msg
 
+                    logger.info("Mailing %d: sending to %s (lead %d)", self._mailing_id, email, lead_id)
                     success, error, code = smtp.send(envelope_from, email, raw_msg)
 
                     if success:
                         self._db.mark_sent(lead_id)
                         self._db.increment_smtp_sent(smtp_row["id"])
                         sent += 1
+                        logger.info("Mailing %d: sent %d/%d to %s", self._mailing_id, sent, pending_count, email)
                         if test_interval > 0 and test_email and sent % test_interval == 0:
                             try:
                                 test_raw, test_env, _ = BulkMIMEBuilder.build_email(
@@ -233,11 +256,13 @@ class BulkMailerCore:
                     elif error.startswith("FATAL:"):
                         self._db.mark_failed(lead_id, error)
                         failed += 1
+                        logger.error("Mailing %d: FATAL for %s: %s (code %d)", self._mailing_id, email, error, code)
                     else:
                         self._db._conn().execute(
                             "UPDATE leads SET state='PENDING' WHERE id=?", (lead_id,))
                         self._db._conn().commit()
                         failed += 1
+                        logger.warning("Mailing %d: transient fail for %s: %s (code %d)", self._mailing_id, email, error, code)
 
                 except Exception as exc:
                     self._db.mark_failed(lead_id, str(exc)[:500])
@@ -250,6 +275,8 @@ class BulkMailerCore:
                 self._db.update_mailing_counts(self._mailing_id, sent, failed, excluded)
 
         status = "FINISHED" if not self._shutdown.is_set() else "PAUSED"
+        logger.info("Mailing %d %s: sent=%d, failed=%d, excluded=%d",
+                     self._mailing_id, status, sent, failed, excluded)
         self._db.update_mailing_status(self._mailing_id, status)
         self._db.reset_in_progress(list_id_db)
 

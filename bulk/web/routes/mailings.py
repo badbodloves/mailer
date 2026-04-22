@@ -1,9 +1,12 @@
 """Mailings page — persistent campaigns with edit, start, stop, resend."""
 import json
 import time
+import logging
 import threading
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
+
+logger = logging.getLogger("bulk.mailings")
 
 router = APIRouter()
 _cores = {}
@@ -137,17 +140,9 @@ async def start_mailing(request: Request, mid: int):
                 except ValueError:
                     pass
 
-            last_check = time.monotonic()
-            last_sent = 0
-
-            original_run = core.run
-
-            def tracked_run():
-                nonlocal last_check, last_sent
-                original_run()
-
             def speed_tracker():
-                nonlocal last_check, last_sent
+                last_check = time.monotonic()
+                last_sent = 0
                 while mid in _cores:
                     time.sleep(5)
                     try:
@@ -165,10 +160,11 @@ async def start_mailing(request: Request, mid: int):
 
             st = threading.Thread(target=speed_tracker, daemon=True)
             st.start()
+            logger.info("Mailing %d thread: calling core.run()", mid)
             core.run()
+            logger.info("Mailing %d thread: core.run() returned", mid)
         except Exception as e:
-            import logging
-            logging.getLogger("bulk.web").error("Mailing %d error: %s", mid, e)
+            logger.error("Mailing %d thread EXCEPTION: %s", mid, e, exc_info=True)
         finally:
             _cores.pop(mid, None)
             _speed.pop(mid, None)
