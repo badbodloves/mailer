@@ -218,14 +218,15 @@ async def campaigns_table(request: Request):
 
 
 def _run_campaign(db, cid: int):
-    """Execute a transactional campaign using the mailer core modules."""
+    """Execute a transactional campaign with multi-threading and full content engine."""
     from mailer.content_engine import ContentEngine
     from mailer.mime_builder import MIMEBuilder
     from mailer.smtp_worker import SMTPPool, SMTPWorker, SendResult
     from mailer.antifingerprint import AntiFingerprintEngine
     from mailer.advanced_antifingerprint import AdvancedAntiFingerprintEngine
-    from email.utils import formatdate
+    from concurrent.futures import ThreadPoolExecutor, as_completed
     import os
+    import random
     import tempfile
 
     camp = dict(db.get_campaign(cid))
@@ -240,8 +241,6 @@ def _run_campaign(db, cid: int):
             logger.info("Campaign %d: 0 pending, %d total — resetting", cid, total)
             db.reset_leads(cid)
             pending = total
-
-    logger.info("Campaign %d starting: %d pending leads", cid, pending)
 
     smtps = db.get_smtps()
     if not smtps:
@@ -262,8 +261,7 @@ def _run_campaign(db, cid: int):
 
     try:
         pool = SMTPPool(
-            smtp_file.name,
-            timeout=30,
+            smtp_file.name, timeout=30,
             warmup_delay=camp.get("warmup_delay", 30.0),
             warmup_count=camp.get("warmup_count", 5),
             ignore_ssl_errors=bool(camp.get("ignore_ssl_errors", 1)),
@@ -285,116 +283,183 @@ def _run_campaign(db, cid: int):
             afp = None
 
         templates = [dict(t) for t in db.get_templates()]
+        html_bodies = [t["html_content"] for t in templates if t.get("html_content")]
+
         names_pool = db.get_pool("names")
         subjects_pool = db.get_pool("subjects")
+        spintax_pools = {}
+        for p in db.get_pools("spintax"):
+            pd = dict(p)
+            if pd.get("content"):
+                lines = [l.strip() for l in pd["content"].splitlines() if l.strip()]
+                if lines:
+                    spintax_pools[pd["name"]] = lines
+
         names_list = [n.strip() for n in names_pool.splitlines() if n.strip()] if names_pool else []
         subjects_list = [s.strip() for s in subjects_pool.splitlines() if s.strip()] if subjects_pool else []
 
-        from_email = camp.get("from_email", "")
-        from_name = camp.get("from_name", "") or "Newsletter"
-        subject_tpl = camp.get("subject", "") or "Notification"
+        from_email_cfg = camp.get("from_email", "")
+        from_name_cfg = camp.get("from_name", "") or "Newsletter"
+        subject_cfg = camp.get("subject", "") or "Notification"
 
-        import random
+        thread_count = min(camp.get("threads", 40) or 40, pool.size * 2, 200)
+        thread_count = max(thread_count, 1)
+        logger.info("Campaign %d starting: %d pending, %d SMTPs, %d threads, %d templates",
+                     cid, pending, pool.size, thread_count, len(html_bodies))
 
         sent = 0
         failed = 0
-        last_check = time.monotonic()
-        last_sent = 0
+        _lock = threading.Lock()
 
         def speed_tracker():
-            nonlocal last_check, last_sent
+            nonlocal sent
+            last_s, last_t = 0, time.monotonic()
             while cid in _runners:
                 time.sleep(5)
                 try:
                     now_t = time.monotonic()
-                    elapsed = now_t - last_check
+                    elapsed = now_t - last_t
                     if elapsed > 0:
-                        rate = (sent - last_sent) / elapsed * 3600
-                        _speed[cid] = int(rate)
-                    last_check = now_t
-                    last_sent = sent
+                        _speed[cid] = int((sent - last_s) / elapsed * 3600)
+                    last_t, last_s = now_t, sent
                 except Exception:
                     pass
 
         st = threading.Thread(target=speed_tracker, daemon=True)
         st.start()
 
-        while cid in _runners:
-            batch = db.fetch_pending(cid, 200)
-            if not batch:
-                break
-
-            lead_ids = [r["id"] for r in batch]
-            db.mark_in_progress(lead_ids)
-
-            for row in batch:
-                if cid not in _runners:
+        def _process_variable(text, email):
+            """Resolve all variables and spintax in text."""
+            user = email.split("@")[0] if "@" in email else email
+            domain = email.split("@")[1] if "@" in email else ""
+            text = text.replace("{email}", email)
+            text = text.replace("{email_user}", user)
+            text = text.replace("{domain}", domain)
+            for pool_name, pool_lines in spintax_pools.items():
+                text = text.replace(f"{{{pool_name}}}", random.choice(pool_lines))
+            import re as _re
+            def _resolve_spintax(m):
+                opts = m.group(1).split("|")
+                return random.choice(opts) if opts else ""
+            for _ in range(20):
+                new = _re.sub(r"\{([^{}]+\|[^{}]+)\}", _resolve_spintax, text)
+                if new == text:
                     break
+                text = new
+            def _resolve_randstr(m):
+                import string
+                length = int(m.group(1))
+                charset_name = m.group(2)
+                case = m.group(3)
+                charsets = {
+                    "a-z": string.ascii_lowercase, "A-Z": string.ascii_uppercase,
+                    "0-9": string.digits, "a-z0-9": string.ascii_lowercase + string.digits,
+                    "A-Z0-9": string.ascii_uppercase + string.digits,
+                    "a-zA-Z": string.ascii_letters,
+                    "a-zA-Z0-9": string.ascii_letters + string.digits,
+                }
+                chars = charsets.get(charset_name, string.ascii_lowercase)
+                result = "".join(random.choice(chars) for _ in range(length))
+                if case == "upper":
+                    result = result.upper()
+                elif case == "lower":
+                    result = result.lower()
+                return result
+            text = _re.sub(r"\[RANDSTR:(\d+):([a-zA-Z0-9\-]+):(\w+)\]", _resolve_randstr, text)
+            return text
 
-                lead_id = row["id"]
-                email = row["email"]
+        def _send_one(lead_id, email):
+            nonlocal sent, failed
+            if cid not in _runners:
+                return
 
+            account = pool.acquire()
+            if account is None:
+                if pool.all_dead:
+                    return
+                time.sleep(3)
                 account = pool.acquire()
                 if account is None:
-                    if pool.all_dead:
-                        logger.error("Campaign %d: all SMTPs dead", cid)
-                        _runners.pop(cid, None)
-                        break
-                    time.sleep(5)
-                    continue
+                    return
 
-                cur_from_email = from_email or account.user
-                cur_from_name = random.choice(names_list) if names_list else from_name
-                cur_subject = random.choice(subjects_list) if subjects_list else subject_tpl
+            cur_from_email = from_email_cfg or account.user
+            cur_from_name = _process_variable(
+                random.choice(names_list) if names_list else from_name_cfg, email)
+            cur_subject = _process_variable(
+                random.choice(subjects_list) if subjects_list else subject_cfg, email)
 
-                html_body = "<p>Hello {email_user},</p><p>This is your notification.</p>"
-                if templates:
-                    tpl = random.choice(templates)
-                    if tpl.get("html_content"):
-                        html_body = tpl["html_content"]
+            html_body = random.choice(html_bodies) if html_bodies else \
+                "<p>Hello {email_user},</p><p>This is your notification.</p>"
+            html_body = _process_variable(html_body, email)
 
-                html_body = html_body.replace("{email}", email)
-                html_body = html_body.replace("{email_user}", email.split("@")[0])
-                html_body = html_body.replace("{domain}", email.split("@")[1] if "@" in email else "")
-                cur_from_name = cur_from_name.replace("{email_user}", email.split("@")[0])
-                cur_subject = cur_subject.replace("{email_user}", email.split("@")[0])
-                cur_subject = cur_subject.replace("{email}", email)
+            if afp:
+                html_body = afp.transform(html_body)
 
-                if afp:
-                    html_body = afp.transform(html_body)
+            plain_body = re.sub(r"<br\s*/?>", "\n", html_body)
+            plain_body = re.sub(r"<[^>]+>", "", plain_body).strip()
 
-                plain_body = html_body.replace("<br>", "\n").replace("<br/>", "\n")
-                plain_body = re.sub(r"<[^>]+>", "", plain_body).strip()
+            raw_msg = MIMEBuilder.build_email(
+                from_name=cur_from_name,
+                from_email=cur_from_email,
+                to_email=email,
+                subject=cur_subject,
+                html_body=html_body,
+                plain_body=plain_body,
+            )
 
-                raw_msg = MIMEBuilder.build_email(
-                    from_name=cur_from_name,
-                    from_email=cur_from_email,
-                    to_email=email,
-                    subject=cur_subject,
-                    html_body=html_body,
-                    plain_body=plain_body,
-                )
+            result = worker.send(cur_from_email, email, raw_msg, account=account)
 
-                result = worker.send(cur_from_email, email, raw_msg, account=account)
-
+            with _lock:
                 if result.is_success:
                     db.mark_sent(lead_id)
                     sent += 1
-                    delay = worker.get_delay(email)
-                    if delay > 0:
-                        time.sleep(delay)
                 elif result.is_fatal:
                     db.mark_failed(lead_id, result.error[:500])
                     failed += 1
                 else:
-                    db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lead_id,))
+                    db._conn().execute(
+                        "UPDATE trans_leads SET state='PENDING' WHERE id=?", (lead_id,))
                     db._conn().commit()
-
                 db.update_campaign(cid, sent=sent, failed=failed)
+
+            if result.is_success:
+                delay = worker.get_delay(email)
+                if delay > 0:
+                    time.sleep(delay)
+
+        with ThreadPoolExecutor(max_workers=thread_count) as executor:
+            while cid in _runners:
+                if pool.all_dead:
+                    logger.error("Campaign %d: all SMTPs dead", cid)
+                    break
+
+                batch = db.fetch_pending(cid, 200)
+                if not batch:
+                    break
+
+                lead_ids = [r["id"] for r in batch]
+                db.mark_in_progress(lead_ids)
+
+                futures = {}
+                for row in batch:
+                    if cid not in _runners:
+                        break
+                    f = executor.submit(_send_one, row["id"], row["email"])
+                    futures[f] = row["id"]
+
+                for f in as_completed(futures):
+                    try:
+                        f.result(timeout=120)
+                    except Exception as e:
+                        lid = futures[f]
+                        with _lock:
+                            db.mark_failed(lid, str(e)[:500])
+                            failed += 1
 
         status = "FINISHED" if cid not in _runners else "PAUSED"
         logger.info("Campaign %d %s: sent=%d, failed=%d", cid, status, sent, failed)
         db.update_campaign(cid, status=status, sent=sent, failed=failed)
+        db.reset_in_progress(cid)
 
     finally:
         os.unlink(smtp_file.name)

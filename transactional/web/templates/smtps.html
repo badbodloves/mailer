@@ -55,6 +55,10 @@
                 <input name="proxy_override" placeholder="socks5://ip:port:user:pass">
                 <div class="form-help">Leave empty to use each SMTP's own proxy</div>
 
+                <label>Threads</label>
+                <input name="check_threads" type="number" value="5" min="1" max="50">
+                <div class="form-help">Parallel connections for faster checking</div>
+
                 <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer">
                     <input type="checkbox" name="send_test" value="1" style="width:auto"
                            onchange="document.getElementById('test-send-opts').style.display=this.checked?'block':'none'">

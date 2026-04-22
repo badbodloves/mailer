@@ -165,6 +165,7 @@ async def test_smtp(request: Request, sid: int):
 @router.post("/smtps/check-all", response_class=HTMLResponse)
 async def start_bulk_check(request: Request,
                            proxy_override: str = Form(""),
+                           check_threads: int = Form(5),
                            send_test: int = Form(0),
                            test_to: str = Form(""),
                            test_subject: str = Form("SMTP Test"),
@@ -183,48 +184,57 @@ async def start_bulk_check(request: Request,
     _check_running = True
 
     do_send = bool(send_test and test_to.strip())
+    num_threads = max(1, min(check_threads, 50))
+
+    def check_one(s):
+        sid = s["id"]
+        proxy = proxy_override.strip() or s.get("proxy", "")
+        _check_results[sid] = {"status": "checking", "error": "",
+                                "error_type": None, "username": s["username"],
+                                "host": s["host"]}
+
+        server, error, etype = _connect_smtp(
+            s["host"], s["port"], s["username"], s["password"], proxy, 20)
+
+        if server:
+            if do_send:
+                try:
+                    msg = MIMEText(test_body.strip() or "Test.", "plain", "utf-8")
+                    msg["From"] = f'{test_from_name.strip()} <{s["username"]}>'
+                    msg["To"] = test_to.strip()
+                    msg["Subject"] = test_subject.strip() or "Test"
+                    server.send_message(msg)
+                    _check_results[sid].update(status="valid_sent", error="", error_type=None)
+                except Exception as e:
+                    _check_results[sid].update(status="valid_send_failed",
+                                                error=str(e)[:200], error_type="send")
+            else:
+                _check_results[sid].update(status="valid", error="", error_type=None)
+            try:
+                server.quit()
+            except Exception:
+                pass
+        else:
+            _check_results[sid].update(status="invalid", error=error or "Unknown",
+                                        error_type=etype)
 
     def worker():
         global _check_running
         try:
-            for s in smtps:
-                sid = s["id"]
-                proxy = proxy_override.strip() or s.get("proxy", "")
-                _check_results[sid] = {"status": "checking", "error": "",
-                                        "error_type": None, "username": s["username"],
-                                        "host": s["host"]}
-
-                server, error, etype = _connect_smtp(
-                    s["host"], s["port"], s["username"], s["password"], proxy, 20)
-
-                if server:
-                    if do_send:
-                        try:
-                            msg = MIMEText(test_body.strip() or "Test.", "plain", "utf-8")
-                            msg["From"] = f'{test_from_name.strip()} <{s["username"]}>'
-                            msg["To"] = test_to.strip()
-                            msg["Subject"] = test_subject.strip() or "Test"
-                            server.send_message(msg)
-                            _check_results[sid].update(status="valid_sent", error="", error_type=None)
-                        except Exception as e:
-                            _check_results[sid].update(status="valid_send_failed",
-                                                        error=str(e)[:200], error_type="send")
-                    else:
-                        _check_results[sid].update(status="valid", error="", error_type=None)
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+            with ThreadPoolExecutor(max_workers=num_threads) as executor:
+                futures = {executor.submit(check_one, s): s["id"] for s in smtps}
+                for f in as_completed(futures):
                     try:
-                        server.quit()
+                        f.result(timeout=30)
                     except Exception:
                         pass
-                else:
-                    _check_results[sid].update(status="invalid", error=error or "Unknown",
-                                                error_type=etype)
-                time.sleep(0.3)
         finally:
             _check_running = False
 
     t = threading.Thread(target=worker, daemon=True)
     t.start()
-    return HTMLResponse('<div class="alert alert-info">Check started...</div>')
+    return HTMLResponse(f'<div class="alert alert-info">Checking {len(smtps)} SMTPs with {num_threads} threads...</div>')
 
 
 @router.get("/smtps/check-results", response_class=HTMLResponse)

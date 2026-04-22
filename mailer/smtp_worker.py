@@ -299,7 +299,6 @@ class SMTPPool:
         return None
 
     def connect(self, account: SMTPAccount) -> smtplib.SMTP:
-        self._dns_cache.resolve_a(account.host)
         ctx = self._build_ssl_context()
         if not account.proxy and self._proxies:
             account.proxy = self.get_current_proxy()
@@ -307,9 +306,12 @@ class SMTPPool:
 
         if account.port == 465:
             if proxy_sock:
+                wrapped = ctx.wrap_socket(proxy_sock, server_hostname=account.host)
                 server = smtplib.SMTP_SSL(context=ctx)
-                server.sock = ctx.wrap_socket(proxy_sock, server_hostname=account.host)
+                server.sock = wrapped
                 server._host = account.host
+                server.file = server.sock.makefile("rb")
+                server.getreply()
             else:
                 server = smtplib.SMTP_SSL(
                     account.host, account.port,
@@ -321,6 +323,8 @@ class SMTPPool:
                 server = smtplib.SMTP()
                 server.sock = proxy_sock
                 server._host = account.host
+                server.file = server.sock.makefile("rb")
+                server.getreply()
             else:
                 server = smtplib.SMTP(account.host, account.port, timeout=self._timeout)
             server.ehlo()
