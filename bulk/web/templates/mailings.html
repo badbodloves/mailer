@@ -1,0 +1,98 @@
+{% extends "base.html" %}
+{% block title %} — Mailings{% endblock %}
+{% block content %}
+<h1>Mailings</h1>
+
+<div class="card">
+    <h3>All Mailings</h3>
+    <table>
+        <thead>
+            <tr><th>Name</th><th>Status</th><th>Progress</th><th>Total</th><th>Sent</th><th>Failed</th><th>Schedule</th><th>Actions</th></tr>
+        </thead>
+        <tbody>
+        {% for m in mailings %}
+        <tr>
+            <td>{{ m.name or ('#' ~ m.id) }}</td>
+            <td><span class="badge badge-{{ m.status|lower }}">{{ m.status }}</span></td>
+            <td>
+                <div class="progress" style="width:120px">
+                    <div class="progress-bar" style="width:{{ m.pct }}%">{{ m.pct }}%</div>
+                </div>
+            </td>
+            <td>{{ "{:,}".format(m.total_leads or 0) }}</td>
+            <td>{{ "{:,}".format(m.sent or 0) }}</td>
+            <td>{{ "{:,}".format(m.failed or 0) }}</td>
+            <td>{{ m.schedule_time or '-' }}</td>
+            <td>
+                {% if not m.running %}
+                <form method="post" action="/mailings/{{ m.id }}/start" style="display:inline">
+                    <button class="btn btn-success btn-sm">Start</button>
+                </form>
+                {% else %}
+                <form method="post" action="/mailings/{{ m.id }}/stop" style="display:inline">
+                    <button class="btn btn-danger btn-sm">Stop</button>
+                </form>
+                {% endif %}
+                <form method="post" action="/mailings/{{ m.id }}/delete" style="display:inline"
+                      onsubmit="return confirm('Delete?')">
+                    <button class="btn btn-secondary btn-sm">Del</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h3>Add Mailing</h3>
+    <form method="post" action="/mailings/add">
+        <div class="grid-2">
+            <div>
+                <label>Name</label>
+                <input name="name" placeholder="e.g. KN-News April 2026">
+                <label>Brand</label>
+                <select name="brand_id">
+                    {% for b in brands %}<option value="{{ b.id }}">{{ b.name }}</option>{% endfor %}
+                </select>
+                <label>Domain</label>
+                <select name="domain_id">
+                    {% for d in domains %}<option value="{{ d.id }}">{{ d.domain }}</option>{% endfor %}
+                </select>
+                <label>Mailing List</label>
+                <select name="list_id">
+                    {% for l in lists %}<option value="{{ l.id }}">{{ l.name }} ({{ db.get_list_lead_count(l.id) }})</option>{% endfor %}
+                </select>
+                <label>SMTP</label>
+                <select name="smtp_preset_id">
+                    {% for s in smtps %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Template</label>
+                <select name="template_id">
+                    {% for t in templates %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}
+                </select>
+                <label>Daily Limit (0 = SMTP limit)</label>
+                <input name="daily_limit" type="number" value="0">
+                <label>Exclude Domains</label>
+                <input name="exclude_domains" placeholder="yahoo.de, aol.com">
+                <label>Test Email</label>
+                <input name="test_email" placeholder="test@inbox.com">
+                <label>Test Every N Sends</label>
+                <input name="test_interval" type="number" value="0">
+                <label>Schedule (HH:MM)</label>
+                <input name="schedule_time" placeholder="07:00">
+            </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:15px">Create Mailing</button>
+    </form>
+</div>
+
+{% if mailings %}
+<div class="card" hx-get="/mailings/{{ mailings[0].id }}/stats" hx-trigger="every 3s" hx-swap="innerHTML">
+    <h3>Live Stats — {{ mailings[0].name or ('#' ~ mailings[0].id) }}</h3>
+    <p style="color:var(--fg2)">Loading...</p>
+</div>
+{% endif %}
+{% endblock %}

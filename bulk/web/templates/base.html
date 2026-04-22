@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bulk Mailer{% block title %}{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    <nav class="sidebar">
+        <h2>BULK MAILER</h2>
+        {% set pages = [
+            ("mailings", "Mailings"),
+            ("brands", "Brands"),
+            ("smtp", "SMTP"),
+            ("lists", "Lists"),
+            ("composer", "Composer"),
+            ("macros", "Macros"),
+            ("preview", "Preview"),
+            ("cloudflare", "Cloudflare"),
+            ("logs", "Logs"),
+            ("help", "Macro Help"),
+        ] %}
+        {% for href, label in pages %}
+        <a href="/{{ href }}" class="{{ 'active' if active == href else '' }}">{{ label }}</a>
+        {% endfor %}
+    </nav>
+    <div class="main">
+        {% block content %}{% endblock %}
+    </div>
+</body>
+</html>
