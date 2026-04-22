@@ -45,6 +45,47 @@
     {% endif %}
 </div>
 
+<!-- Bulk Checker -->
+<div class="card">
+    <div class="card-header"><h3>Bulk SMTP Checker</h3></div>
+    <form hx-post="/smtps/check-all" hx-target="#check-start-msg" hx-swap="innerHTML">
+        <div class="grid-2">
+            <div>
+                <label>Proxy Override (optional — use for ALL checks)</label>
+                <input name="proxy_override" placeholder="socks5://ip:port:user:pass">
+                <div class="form-help">Leave empty to use each SMTP's own proxy</div>
+
+                <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer">
+                    <input type="checkbox" name="send_test" value="1" style="width:auto"
+                           onchange="document.getElementById('test-send-opts').style.display=this.checked?'block':'none'">
+                    <span>Send test email from each valid SMTP</span>
+                </label>
+            </div>
+            <div id="test-send-opts" style="display:none">
+                <label>Send Test To</label>
+                <input name="test_to" placeholder="your-test@inbox.com">
+                <label>Subject</label>
+                <input name="test_subject" value="SMTP Check" placeholder="Test subject">
+                <label>From Name</label>
+                <input name="test_from_name" value="Test" placeholder="Sender name">
+                <label>Body</label>
+                <textarea name="test_body" rows="2" placeholder="SMTP test message." style="font-size:12px">SMTP connectivity and delivery test.</textarea>
+            </div>
+        </div>
+        <div style="margin-top:14px">
+            <button class="btn btn-primary" {{ 'disabled' if check_running }}>
+                {{ 'Check Running...' if check_running else 'Check All SMTPs (' ~ smtps|length ~ ')' }}
+            </button>
+        </div>
+    </form>
+    <div id="check-start-msg" style="margin-top:10px"></div>
+    <div id="check-results" style="margin-top:12px"
+         hx-get="/smtps/check-results"
+         hx-trigger="every 2s"
+         hx-swap="innerHTML"></div>
+</div>
+
+<!-- Add / Import -->
 <div class="grid-2" style="align-items:start">
     <details {{ 'open' if not smtps }}>
         <summary>Add SMTP Account</summary>
