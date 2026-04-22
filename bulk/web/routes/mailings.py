@@ -18,6 +18,16 @@ _speed = {}
 async def mailings_page(request: Request):
     db = request.app.state.db
     tpl = request.app.state.templates
+    mailings = _build_mailing_list(db)
+    return tpl.TemplateResponse(request, "mailings.html", {
+        "active": "mailings", "mailings": mailings,
+        "brands": db.get_brands(), "domains": db.get_domains(),
+        "lists": db.get_lists(), "smtps": db.get_smtps(),
+        "templates": db.get_templates(), "db": db,
+    })
+
+
+def _build_mailing_list(db):
     rows = db.get_mailings()
     mailings = []
     for r in rows:
@@ -42,12 +52,37 @@ async def mailings_page(request: Request):
         except Exception:
             m["domain_name"] = "—"
         mailings.append(m)
-    return tpl.TemplateResponse(request, "mailings.html", {
-        "active": "mailings", "mailings": mailings,
-        "brands": db.get_brands(), "domains": db.get_domains(),
-        "lists": db.get_lists(), "smtps": db.get_smtps(),
-        "templates": db.get_templates(), "db": db,
-    })
+    return mailings
+
+
+@router.get("/mailings/table", response_class=HTMLResponse)
+async def mailings_table(request: Request):
+    """HTMX polling endpoint for the campaigns table."""
+    db = request.app.state.db
+    mailings = _build_mailing_list(db)
+    html = '<div class="card-header"><h3>Campaigns <span class="count">' + str(len(mailings)) + '</span></h3></div>'
+    html += '<table><thead><tr><th>Name</th><th>Domain</th><th>SMTP</th><th>Progress</th><th>Total</th><th>Sent</th><th>Failed</th><th>Remaining</th><th>Speed</th><th></th></tr></thead><tbody>'
+    for m in mailings:
+        bg = ' style="background:var(--green-light)"' if m["running"] else ''
+        pct = m["pct"]
+        speed = f'{m["speed"]:,}/h' if m["speed"] else "—"
+        btn = (f'<form method="post" action="/mailings/{m["id"]}/stop" style="display:inline">'
+               f'<button class="btn btn-danger btn-xs">Stop</button></form>') if m["running"] else \
+              (f'<form method="post" action="/mailings/{m["id"]}/start" style="display:inline">'
+               f'<button class="btn btn-success btn-xs">Start</button></form>')
+        html += (f'<tr{bg}>'
+                 f'<td style="font-weight:500">{m["name"] or ("#" + str(m["id"]))}</td>'
+                 f'<td style="font-size:12px">{m["domain_name"]}</td>'
+                 f'<td style="font-size:12px">{m["smtp_name"]}</td>'
+                 f'<td style="min-width:120px"><div class="progress"><div class="progress-bar" style="width:{pct}%">{pct}%</div></div></td>'
+                 f'<td>{m.get("total_leads",0) or 0:,}</td>'
+                 f'<td style="color:var(--green);font-weight:500">{m.get("sent",0) or 0:,}</td>'
+                 f'<td style="color:var(--red)">{m.get("failed",0) or 0:,}</td>'
+                 f'<td>{m["remaining"]:,}</td>'
+                 f'<td>{speed}</td>'
+                 f'<td><div class="btn-group">{btn}</div></td></tr>')
+    html += '</tbody></table>'
+    return HTMLResponse(html)
 
 
 @router.post("/mailings/add")

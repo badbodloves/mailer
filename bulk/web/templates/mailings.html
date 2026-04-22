@@ -6,7 +6,7 @@
 </div>
 
 {% if mailings %}
-<div class="card">
+<div class="card" hx-get="/mailings/table" hx-trigger="every 3s" hx-swap="innerHTML" id="mailings-table">
     <div class="card-header">
         <h3>Campaigns <span class="count">{{ mailings|length }}</span></h3>
     </div>
