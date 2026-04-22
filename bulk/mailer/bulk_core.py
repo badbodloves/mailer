@@ -40,6 +40,7 @@ class BulkMailerCore:
         if not mailing:
             logger.error("Mailing %d not found", self._mailing_id)
             return
+        mailing = dict(mailing)
 
         domain_row = self._db._conn().execute(
             "SELECT * FROM domains WHERE id=?", (mailing["domain_id"],)).fetchone()
@@ -52,6 +53,10 @@ class BulkMailerCore:
             logger.error("Missing domain, SMTP, or template for mailing %d", self._mailing_id)
             return
 
+        domain_row = dict(domain_row)
+        smtp_row = dict(smtp_row)
+        template_row = dict(template_row)
+
         macros = {r["name"]: json.loads(r["values_json"]) for r in self._db.get_macros()}
         engine = BulkContentEngine(macros)
 
@@ -63,10 +68,9 @@ class BulkMailerCore:
 
         domain = domain_row["domain"]
         from_email = domain_row["from_email"] or f"newsletter@{domain}"
-        reply_to = domain_row["reply_to"] or from_email
-        list_id_label = domain_row["list_id_label"] or f"newsletter.{domain}"
-        list_id = f'"{list_id_label}" <{list_id_label}>'
-        bounce_sub = domain_row["bounce_subdomain"] or "bounce"
+        reply_to = domain_row.get("reply_to_email", "") or from_email
+        list_id_label = f"newsletter.{domain}"
+        bounce_sub = domain_row.get("bounce_subdomain") or domain_row.get("send_subdomain") or "mail"
 
         html_files = json.loads(template_row["html_files_json"] or "[]")
         html_rotate = template_row["html_rotate_every"] or 0
@@ -142,8 +146,13 @@ class BulkMailerCore:
                 plain_body = engine.html_to_plaintext(html_body)
 
                 unsub_token = f"{lead_id}-{self._mailing_id}"
-                unsub_url = f"https://unsub.{domain}/u/{unsub_token}"
-                unsub_mailto = f"unsub-{unsub_token}@{domain}"
+                if domain_row.get("unsub_worker_deployed"):
+                    unsub_domain = domain_row.get("unsub_domain") or f"unsub.{domain}"
+                    unsub_url = f"https://{unsub_domain}/u/{unsub_token}"
+                    unsub_mailto = f"unsub-{unsub_token}@{domain}"
+                else:
+                    unsub_url = ""
+                    unsub_mailto = ""
 
                 feedback_id = f"{feedback_base}:{domain.replace('.', '-')[:15]}"
 

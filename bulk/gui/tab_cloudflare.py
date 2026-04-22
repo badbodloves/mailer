@@ -289,34 +289,63 @@ class CloudflareTab(QWidget):
 
     def _connect(self):
         r2 = self._get_r2()
-        if not r2:
-            self.status_label.setText("No account selected")
-            return
-        if r2.enabled:
+        if r2 and r2.enabled:
             buckets = r2.list_buckets()
             self.status_label.setText(f"Connected — {len(buckets)} buckets")
             self.status_label.setStyleSheet("color:green; font-weight:bold")
             self._refresh_buckets()
-            self._refresh_zones()
-            self._pull_domains()
         else:
-            self.status_label.setText("Failed — check credentials")
-            self.status_label.setStyleSheet("color:red")
+            self.status_label.setText("Connected (no R2 keys)")
+            self.status_label.setStyleSheet("color:orange; font-weight:bold")
+        self._refresh_zones()
+        self._pull_domains()
 
     def _pull_domains(self):
-        r2 = self._get_r2()
-        if not r2:
+        acct = self._get_current_account()
+        if not acct:
             return
+        import requests
+        account_id = acct.get("account_id", "")
+        if acct.get("global_api_key") and acct.get("auth_email"):
+            headers = {"X-Auth-Key": acct["global_api_key"],
+                       "X-Auth-Email": acct["auth_email"]}
+        else:
+            headers = {"Authorization": f"Bearer {acct.get('api_token', '')}"}
+
         self.cf_domain_list.clear()
-        zones = r2.list_zones()
+        try:
+            resp = requests.get("https://api.cloudflare.com/client/v4/zones",
+                                 headers=headers, params={"per_page": 50}, timeout=15)
+            zones = resp.json().get("result", []) if resp.status_code == 200 else []
+        except Exception:
+            zones = []
+
         brand_domains = {d["domain"] for d in self.db.get_domains()}
+
         for z in zones:
             name = z["name"]
-            in_brands = "✓ In Brands" if name in brand_domains else ""
+            in_brands = "✓ Brands" if name in brand_domains else ""
+
             dom_row = self.db._conn().execute(
-                "SELECT unsub_worker_deployed FROM domains WHERE domain=?", (name,)).fetchone()
-            unsub = "✓ Unsub" if dom_row and dom_row[0] else ""
-            self.cf_domain_list.addItem(f"{name}  {in_brands}  {unsub}")
+                "SELECT unsub_worker_deployed, unsub_domain FROM domains WHERE domain=?", (name,)).fetchone()
+            local_unsub = dom_row and dom_row[0] if dom_row else False
+
+            worker_exists = False
+            if account_id:
+                worker_name = f"unsub-{name.replace('.', '-')}"
+                try:
+                    wr = requests.get(
+                        f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}",
+                        headers=headers, timeout=10)
+                    worker_exists = wr.status_code == 200
+                except Exception:
+                    pass
+
+            if worker_exists and not local_unsub and dom_row:
+                self.db.mark_unsub_deployed(dom_row["id"] if hasattr(dom_row, "__getitem__") else 0, f"unsub.{name}")
+
+            unsub_str = "✓ Worker" if worker_exists else ("✓ Local" if local_unsub else "")
+            self.cf_domain_list.addItem(f"{name}  {in_brands}  {unsub_str}")
 
     def _refresh_buckets(self):
         r2 = self._get_r2()

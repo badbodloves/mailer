@@ -74,18 +74,6 @@ class ComposerTab(QWidget):
         subj_row.addWidget(insert_subj_btn)
         form.addRow("Subject:", subj_row)
 
-        # Sender rotation
-        sender_box = QGroupBox("Sender Rotation")
-        sl = QVBoxLayout(sender_box)
-        self.sender_edit = QTextEdit()
-        self.sender_edit.setMaximumHeight(80)
-        self.sender_edit.setPlaceholderText("One sender name per line")
-        sl.addWidget(self.sender_edit)
-        self.sender_rotate = QSpinBox()
-        self.sender_rotate.setRange(0, 9999)
-        sl.addWidget(QLabel("Rotate every N emails:"))
-        sl.addWidget(self.sender_rotate)
-
         # PDF
         pdf_box = QGroupBox("PDF Attachment")
         pl = QVBoxLayout(pdf_box)
@@ -102,7 +90,7 @@ class ComposerTab(QWidget):
 
         rl.addLayout(form)
         rl.addWidget(html_box)
-        rl.addWidget(sender_box)
+
         rl.addWidget(pdf_box)
 
         save_btn = QPushButton("Save Template")
@@ -134,7 +122,7 @@ class ComposerTab(QWidget):
         self.name_input.setText(row["name"])
         self.subject_input.setText(row["subject_macro"] or "")
         self.html_rotate.setValue(row["html_rotate_every"] or 0)
-        self.sender_rotate.setValue(row["sender_rotate_every"] or 0)
+
         self.pdf_path.setText(row["pdf_path"] or "")
         self.pdf_macro.setChecked(bool(row["pdf_macro_enabled"]))
 
@@ -142,8 +130,7 @@ class ComposerTab(QWidget):
         for f in json.loads(row["html_files_json"] or "[]"):
             self.html_list.addItem(f)
 
-        senders = json.loads(row["sender_rotate_json"] or "[]")
-        self.sender_edit.setPlainText("\n".join(senders))
+
 
     def _new(self):
         name = self.name_input.text().strip() or "New Template"
@@ -160,16 +147,12 @@ class ComposerTab(QWidget):
             return
 
         html_files = [self.html_list.item(i).text() for i in range(self.html_list.count())]
-        senders = [s.strip() for s in self.sender_edit.toPlainText().splitlines() if s.strip()]
-
         c = self.db._conn()
         c.execute("""UPDATE message_templates SET
                      name=?, html_files_json=?, html_rotate_every=?,
-                     subject_macro=?, sender_rotate_json=?, sender_rotate_every=?,
-                     pdf_path=?, pdf_macro_enabled=? WHERE id=?""",
+                     subject_macro=?, pdf_path=?, pdf_macro_enabled=? WHERE id=?""",
                   (self.name_input.text(), json.dumps(html_files),
                    self.html_rotate.value(), self.subject_input.text(),
-                   json.dumps(senders), self.sender_rotate.value(),
                    self.pdf_path.text(), int(self.pdf_macro.isChecked()),
                    self._current_id))
         c.commit()
