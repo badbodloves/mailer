@@ -1,5 +1,63 @@
 {% extends "base.html" %}
 {% block content %}
-<h1>Lists</h1>
-<div class="card"><p>Coming soon...</p></div>
+<h1>Mailing Lists</h1>
+{% if summary %}
+<div class="card" style="border-color:var(--green)">
+    <h3>Import Complete</h3>
+    {% for s in summary %}<p>{{ s }}</p>{% endfor %}
+</div>
+{% endif %}
+{% if compare %}
+<div class="card" style="border-color:var(--accent)">
+    <h3>Compare Result</h3>
+    <div class="grid-3">
+        <div class="metric"><div class="value">{{ "{:,}".format(compare.both) }}</div><div class="label">In Both</div></div>
+        <div class="metric"><div class="value">{{ "{:,}".format(compare.only_a) }}</div><div class="label">Only in A</div></div>
+        <div class="metric"><div class="value">{{ "{:,}".format(compare.only_b) }}</div><div class="label">Only in B</div></div>
+    </div>
+    <form method="post" action="/lists/compare/save" style="margin-top:10px;display:inline">
+        <input type="hidden" name="list_a" value="{{ compare.list_a }}"><input type="hidden" name="list_b" value="{{ compare.list_b }}">
+        <input type="hidden" name="which" value="a"><button class="btn btn-primary btn-sm">Save "Only in A"</button>
+    </form>
+    <form method="post" action="/lists/compare/save" style="display:inline">
+        <input type="hidden" name="list_a" value="{{ compare.list_a }}"><input type="hidden" name="list_b" value="{{ compare.list_b }}">
+        <input type="hidden" name="which" value="b"><button class="btn btn-primary btn-sm">Save "Only in B"</button>
+    </form>
+</div>
+{% endif %}
+<div class="card">
+    <h3>Lists ({{ lists|length }})</h3>
+    <table>
+        <thead><tr><th>Name</th><th>Leads</th><th>Source</th><th></th></tr></thead>
+        <tbody>
+        {% for l in lists %}
+        <tr>
+            <td><a href="/lists/{{ l.id }}/leads" style="color:var(--accent)">{{ l.name }}</a></td>
+            <td>{{ "{:,}".format(l.count) }}</td>
+            <td style="font-size:11px;color:var(--fg2)">{{ l.file_origin or '-' }}</td>
+            <td><form method="post" action="/lists/{{ l.id }}/delete" style="display:inline" onsubmit="return confirm('Delete?')">
+                <button class="btn btn-danger btn-sm">Del</button></form></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+<div class="grid-2">
+    <div class="card">
+        <h3>Import</h3>
+        <form method="post" action="/lists/import" enctype="multipart/form-data">
+            <label>Files</label><input type="file" name="files" multiple accept=".txt,.csv" required>
+            <label>Exclude Rules</label><textarea name="exclude_rules" rows="4" style="font-size:11px">{{ default_excludes }}</textarea>
+            <button class="btn btn-primary" style="margin-top:10px">Import</button>
+        </form>
+    </div>
+    <div class="card">
+        <h3>Compare</h3>
+        <form method="post" action="/lists/compare">
+            <label>List A</label><select name="list_a">{% for l in lists %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select>
+            <label>List B</label><select name="list_b">{% for l in lists %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select>
+            <button class="btn btn-primary" style="margin-top:10px">Compare</button>
+        </form>
+    </div>
+</div>
 {% endblock %}

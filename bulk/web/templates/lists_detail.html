@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block content %}
+<h1>{{ list_name }} <span style="font-size:14px;color:var(--fg2)">({{ "{:,}".format(stats.total) }} leads)</span></h1>
+<a href="/lists" class="btn btn-secondary btn-sm" style="margin-bottom:15px">← Back</a>
+
+<div class="grid-3" style="margin-bottom:20px">
+    <div class="metric"><div class="value">{{ "{:,}".format(stats.PENDING) }}</div><div class="label">Pending</div></div>
+    <div class="metric"><div class="value" style="color:var(--green)">{{ "{:,}".format(stats.SENT) }}</div><div class="label">Sent</div></div>
+    <div class="metric"><div class="value" style="color:var(--red)">{{ "{:,}".format(stats.FAILED) }}</div><div class="label">Failed</div></div>
+</div>
+
+<div class="card">
+    <div style="display:flex;gap:10px;margin-bottom:15px">
+        <form method="get" action="/lists/{{ lid }}/leads" style="display:flex;gap:8px;flex:1">
+            <input name="q" value="{{ query }}" placeholder="Search emails..." style="flex:1">
+            <button class="btn btn-primary btn-sm">Search</button>
+        </form>
+        <form method="post" action="/lists/{{ lid }}/delete-domain" style="display:flex;gap:8px">
+            <input name="domain" placeholder="domain.com" style="width:150px">
+            <button class="btn btn-danger btn-sm">Delete @domain</button>
+        </form>
+    </div>
+    <table>
+        <thead><tr><th>ID</th><th>Email</th><th>State</th></tr></thead>
+        <tbody>
+        {% for l in leads %}
+        <tr><td>{{ l.id }}</td><td>{{ l.email }}</td><td>{{ l.state }}</td></tr>
+        {% endfor %}
+        {% if leads|length >= 500 %}<tr><td colspan="3" style="color:var(--fg2)">Showing first 500...</td></tr>{% endif %}
+        </tbody>
+    </table>
+</div>
+{% endblock %}
