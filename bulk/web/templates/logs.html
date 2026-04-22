@@ -1,5 +1,66 @@
 {% extends "base.html" %}
+{% block title %} — Logs{% endblock %}
 {% block content %}
 <h1>Logs</h1>
-<div class="card"><p>Coming soon...</p></div>
+
+<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin-bottom:0">SMTP Error Log</h3>
+        <div style="display:flex;gap:10px">
+            <button class="btn btn-secondary btn-sm"
+                    hx-get="/logs/tail" hx-target="#log-container" hx-swap="innerHTML">
+                Refresh
+            </button>
+            <form method="post" action="/logs/clear" style="display:inline"
+                  onsubmit="return confirm('Clear the entire log?')">
+                <button class="btn btn-danger btn-sm">Clear Log</button>
+            </form>
+        </div>
+    </div>
+    <div id="log-container" hx-get="/logs/tail" hx-trigger="every 10s" hx-swap="innerHTML">
+        <pre class="log">{{ log_text }}</pre>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Mailing History</h3>
+    {% if history %}
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Status</th>
+                <th>Domain</th>
+                <th>SMTP</th>
+                <th>Total</th>
+                <th>Sent</th>
+                <th>Failed</th>
+                <th>Excluded</th>
+                <th>Started</th>
+                <th>Finished</th>
+            </tr>
+        </thead>
+        <tbody>
+        {% for m in history %}
+        <tr>
+            <td>{{ m.id }}</td>
+            <td>{{ m.name or '-' }}</td>
+            <td><span class="badge badge-{{ m.status|lower if m.status else 'draft' }}">{{ m.status or 'DRAFT' }}</span></td>
+            <td style="font-size:12px">{{ m.domain or '-' }}</td>
+            <td style="font-size:12px">{{ m.smtp_name or '-' }}</td>
+            <td>{{ "{:,}".format(m.total_leads or 0) }}</td>
+            <td style="color:var(--green)">{{ "{:,}".format(m.sent or 0) }}</td>
+            <td style="color:var(--red)">{{ "{:,}".format(m.failed or 0) }}</td>
+            <td>{{ "{:,}".format(m.excluded or 0) }}</td>
+            <td style="font-size:11px;color:var(--fg2)">{{ m.started_at or '-' }}</td>
+            <td style="font-size:11px;color:var(--fg2)">{{ m.finished_at or '-' }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color:var(--fg2)">No mailing history yet.</p>
+    {% endif %}
+</div>
 {% endblock %}

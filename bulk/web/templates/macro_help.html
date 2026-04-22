@@ -1,5 +1,129 @@
 {% extends "base.html" %}
+{% block title %} — Macro Help{% endblock %}
 {% block content %}
-<h1>Macro_help</h1>
-<div class="card"><p>Coming soon...</p></div>
+<h1>Macro Reference</h1>
+
+<div class="card">
+    <h3>Built-in Variables</h3>
+    <table>
+        <thead><tr><th>Macro</th><th>Description</th><th>Example Output</th></tr></thead>
+        <tbody>
+            <tr><td><code>{email}</code></td><td>Full recipient email address</td><td>john.doe@example.com</td></tr>
+            <tr><td><code>{email_user}</code></td><td>Local part (before @)</td><td>john.doe</td></tr>
+            <tr><td><code>{domain}</code></td><td>Domain part (after @)</td><td>example.com</td></tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h3>Custom Macros — <code>{macro_name}</code></h3>
+    <p style="margin-bottom:10px;color:var(--fg2)">
+        Custom macros are defined on the <a href="/macros" style="color:var(--accent)">Macros</a> page.
+        Each macro has a name and a list of values. Use <code>{name}</code> anywhere in subjects, from names, or HTML bodies.
+    </p>
+    <table>
+        <thead><tr><th>Feature</th><th>Syntax</th><th>Behavior</th></tr></thead>
+        <tbody>
+            <tr>
+                <td>Random pick</td>
+                <td><code>{greeting}</code></td>
+                <td>Randomly selects one value from the macro's value list for each send. Set <strong>Rotate Every = 0</strong>.</td>
+            </tr>
+            <tr>
+                <td>Rotation</td>
+                <td><code>{greeting}</code></td>
+                <td>Cycles through values in order. Set <strong>Rotate Every = N</strong> to use value #1 for N sends, then value #2 for N sends, etc.</td>
+            </tr>
+            <tr>
+                <td>Where usable</td>
+                <td colspan="2">Subject line, From Name, HTML body, sender rotation list, PDF macro fields</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h3>Random Strings — <code>[RANDSTR:...]</code></h3>
+    <p style="margin-bottom:10px;color:var(--fg2)">
+        Generate random strings inline. Useful for unique IDs, tracking tokens, or link parameters.
+    </p>
+    <table>
+        <thead><tr><th>Syntax</th><th>Description</th><th>Example Output</th></tr></thead>
+        <tbody>
+            <tr><td><code>[RANDSTR:8:a-z:lower]</code></td><td>8 lowercase letters</td><td>jfkwmxpq</td></tr>
+            <tr><td><code>[RANDSTR:12:a-z0-9:lower]</code></td><td>12 alphanumeric lowercase</td><td>k3mf9x2wp4hn</td></tr>
+            <tr><td><code>[RANDSTR:6:A-Z0-9:upper]</code></td><td>6 uppercase alphanumeric</td><td>X8K3MF</td></tr>
+            <tr><td><code>[RANDSTR:16:a-zA-Z0-9:lower]</code></td><td>16 mixed-case alphanumeric</td><td>kF3mX9wP4hN2jR7q</td></tr>
+            <tr><td><code>[RANDSTR:10:0-9:lower]</code></td><td>10 digits</td><td>4829173650</td></tr>
+        </tbody>
+    </table>
+    <div style="margin-top:10px;padding:10px;background:var(--bg);border-radius:var(--radius);font-size:12px">
+        <strong>Format:</strong> <code>[RANDSTR:length:charset:case]</code><br>
+        <strong>Charsets:</strong> <code>a-z</code>, <code>A-Z</code>, <code>0-9</code>, <code>a-z0-9</code>, <code>A-Z0-9</code>, <code>a-zA-Z</code>, <code>a-zA-Z0-9</code><br>
+        <strong>Case:</strong> <code>lower</code>, <code>upper</code>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Sender / Subject Rotation</h3>
+    <p style="margin-bottom:10px;color:var(--fg2)">
+        Configured per-template on the <a href="/composer" style="color:var(--accent)">Composer</a> page.
+    </p>
+    <table>
+        <thead><tr><th>Feature</th><th>Description</th></tr></thead>
+        <tbody>
+            <tr>
+                <td><strong>Subject Macro</strong></td>
+                <td>The subject field in a template supports all macros: <code>{greeting} — News for {email_user}</code></td>
+            </tr>
+            <tr>
+                <td><strong>HTML Rotation</strong></td>
+                <td>List multiple HTML file paths. Set <em>Rotate Every</em> to cycle between them every N sends.</td>
+            </tr>
+            <tr>
+                <td><strong>Sender Rotation</strong></td>
+                <td>List multiple <code>Name &lt;email&gt;</code> entries. Rotates the From header every N sends to distribute across sender identities.</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h3>PDF Macros</h3>
+    <p style="margin-bottom:10px;color:var(--fg2)">
+        When <strong>PDF Macro Enabled</strong> is turned on for a template, PDF form fields are filled dynamically per recipient.
+    </p>
+    <table>
+        <thead><tr><th>Feature</th><th>Description</th></tr></thead>
+        <tbody>
+            <tr>
+                <td><strong>Field matching</strong></td>
+                <td>PDF form field names are matched to macro names. A field named <code>greeting</code> is filled with the resolved <code>{greeting}</code> macro.</td>
+            </tr>
+            <tr>
+                <td><strong>Built-in fields</strong></td>
+                <td><code>email</code>, <code>email_user</code>, <code>domain</code> fields are filled with recipient data.</td>
+            </tr>
+            <tr>
+                <td><strong>Unique per recipient</strong></td>
+                <td>Each recipient gets a unique PDF attachment with personalized field values.</td>
+            </tr>
+        </tbody>
+    </table>
+</div>
+
+<div class="card">
+    <h3>Usage Examples</h3>
+    <div style="padding:12px;background:var(--bg);border-radius:var(--radius);font-family:Consolas,monospace;font-size:12px;line-height:1.8">
+        <div><strong>Subject:</strong> <code>{greeting}, {email_user} — [RANDSTR:4:a-z0-9:lower]</code></div>
+        <div><strong>From Name:</strong> <code>{sender_name}</code></div>
+        <div><strong>HTML body:</strong></div>
+        <div style="padding-left:20px;color:var(--fg2)">
+            <code>&lt;p&gt;{greeting} {email_user},&lt;/p&gt;</code><br>
+            <code>&lt;p&gt;{body_text}&lt;/p&gt;</code><br>
+            <code>&lt;a href="https://example.com/track/[RANDSTR:16:a-zA-Z0-9:lower]"&gt;Read More&lt;/a&gt;</code><br>
+            <code>&lt;p&gt;{signoff}&lt;/p&gt;</code>
+        </div>
+    </div>
+</div>
 {% endblock %}

@@ -1,5 +1,103 @@
 {% extends "base.html" %}
+{% block title %} — Cloudflare{% endblock %}
 {% block content %}
-<h1>Cloudflare</h1>
-<div class="card"><p>Coming soon...</p></div>
+<h1>Cloudflare Accounts</h1>
+
+<div class="card">
+    <h3>Add Account</h3>
+    <form method="post" action="/cloudflare/add-account">
+        <div class="grid-2">
+            <div>
+                <label>Account Name</label>
+                <input name="name" placeholder="e.g. Main CF Account" required>
+
+                <label>Auth Type</label>
+                <select name="auth_type" id="cf-auth-type" onchange="
+                    document.getElementById('cf-token').style.display = this.value === 'token' ? 'block' : 'none';
+                    document.getElementById('cf-global').style.display = this.value === 'global' ? 'block' : 'none';
+                ">
+                    <option value="token">API Token</option>
+                    <option value="global">Global API Key</option>
+                </select>
+
+                <div id="cf-token">
+                    <label>API Token</label>
+                    <input name="api_token" type="password" placeholder="Bearer token">
+                </div>
+
+                <div id="cf-global" style="display:none">
+                    <label>Global API Key</label>
+                    <input name="global_api_key" type="password" placeholder="Global key">
+                    <label>Auth Email</label>
+                    <input name="auth_email" placeholder="cf-login@example.com">
+                </div>
+            </div>
+            <div>
+                <label>Account ID</label>
+                <input name="account_id" placeholder="32-char hex ID">
+
+                <label>R2 Access Key (optional)</label>
+                <input name="r2_access_key" placeholder="Access Key ID">
+
+                <label>R2 Secret Key (optional)</label>
+                <input name="r2_secret_key" type="password" placeholder="Secret Access Key">
+            </div>
+        </div>
+        <button class="btn btn-primary" style="margin-top:15px">Add Account</button>
+    </form>
+</div>
+
+{% for a in accounts %}
+<div class="card">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <h3 style="margin-bottom:0">
+            {{ a.name }}
+            <span style="font-size:11px;color:var(--fg2);margin-left:10px">{{ a.auth_type }} auth</span>
+            {% if a.account_id %}
+            <span style="font-size:11px;color:var(--fg2);margin-left:8px">ID: {{ a.account_id[:12] }}...</span>
+            {% endif %}
+        </h3>
+        <div style="display:flex;gap:8px">
+            <button class="btn btn-primary btn-sm"
+                    hx-post="/cloudflare/{{ a.id }}/pull-domains"
+                    hx-target="#cf-domains-{{ a.id }}"
+                    hx-swap="innerHTML"
+                    hx-indicator="#cf-loading-{{ a.id }}">
+                Pull Domains
+            </button>
+            <form method="post" action="/cloudflare/{{ a.id }}/delete" style="display:inline"
+                  onsubmit="return confirm('Delete account {{ a.name }}?')">
+                <button class="btn btn-danger btn-sm">Delete</button>
+            </form>
+        </div>
+    </div>
+
+    <div style="font-size:12px;color:var(--fg2);margin-bottom:8px" id="cf-loading-{{ a.id }}">
+        {% if a.domains %}{{ a.domains|length }} domains cached{% else %}Click "Pull Domains" to fetch zones{% endif %}
+    </div>
+
+    <div id="cf-domains-{{ a.id }}">
+        {% if a.domains %}
+        <table>
+            <thead><tr><th>Domain</th><th>Status</th><th>In Brands</th></tr></thead>
+            <tbody>
+            {% for d in a.domains %}
+            <tr>
+                <td>{{ d.name }}</td>
+                <td>{{ d.status }}</td>
+                <td>{% if d.in_brands %}<span class="badge badge-running">Brands</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+    </div>
+</div>
+{% endfor %}
+
+{% if not accounts %}
+<div class="card">
+    <p style="color:var(--fg2)">No Cloudflare accounts configured. Add one above.</p>
+</div>
+{% endif %}
 {% endblock %}
