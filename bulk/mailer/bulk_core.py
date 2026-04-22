@@ -131,6 +131,15 @@ class BulkMailerCore:
         c = self._db._conn()
         total_in_list = c.execute("SELECT COUNT(*) FROM leads WHERE list_id=?", (list_id_db,)).fetchone()[0]
         pending_count = c.execute("SELECT COUNT(*) FROM leads WHERE list_id=? AND state='PENDING'", (list_id_db,)).fetchone()[0]
+
+        if pending_count == 0 and total_in_list > 0:
+            logger.info("Mailing %d: 0 pending but %d leads exist — resetting all to PENDING",
+                         self._mailing_id, total_in_list)
+            c.execute("UPDATE leads SET state='PENDING' WHERE list_id=?", (list_id_db,))
+            c.execute("UPDATE mailings SET sent=0, failed=0, excluded=0 WHERE id=?", (self._mailing_id,))
+            c.commit()
+            pending_count = total_in_list
+
         states = c.execute("SELECT state, COUNT(*) FROM leads WHERE list_id=? GROUP BY state", (list_id_db,)).fetchall()
         state_str = ", ".join(f"{s[0]}={s[1]}" for s in states) if states else "no leads"
         logger.info("Mailing %d starting: list_id=%d, total_in_list=%d, pending=%d, states=[%s], "
