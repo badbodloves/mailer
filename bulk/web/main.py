@@ -1,8 +1,11 @@
 """Bulk Mailer Web — FastAPI + HTMX + Jinja2."""
 import sys
 import os
+import logging
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
