@@ -208,11 +208,22 @@ class CloudflareTab(QWidget):
         global_key = QLineEdit()
         global_key.setEchoMode(QLineEdit.Password)
         global_key.setPlaceholderText("Global API Key")
+        global_key.setVisible(False)
         fl.addRow("Global Key:", global_key)
 
         email_in = QLineEdit()
-        email_in.setPlaceholderText("Cloudflare login email (for Global Key)")
+        email_in.setPlaceholderText("Cloudflare login email")
+        email_in.setVisible(False)
         fl.addRow("Auth Email:", email_in)
+
+        def toggle_auth():
+            is_global = rb_global.isChecked()
+            token_in.setVisible(not is_global)
+            global_key.setVisible(is_global)
+            email_in.setVisible(is_global)
+
+        rb_token.toggled.connect(lambda: toggle_auth())
+        rb_global.toggled.connect(lambda: toggle_auth())
 
         acct_in = QLineEdit()
         acct_in.setPlaceholderText("Account ID")

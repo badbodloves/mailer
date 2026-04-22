@@ -129,8 +129,11 @@ class R2Manager:
         return {"Authorization": f"Bearer {self._api_token}",
                 "Content-Type": "application/json"}
 
+    def _has_cf_auth(self) -> bool:
+        return bool(self._api_token or (self._global_api_key and self._auth_email))
+
     def enable_public_access(self, bucket: str) -> bool:
-        if not HAS_REQUESTS or not self._api_token:
+        if not HAS_REQUESTS or not self._has_cf_auth():
             return False
         try:
             url = f"{CF_API}/accounts/{self._account_id}/r2/buckets/{bucket}/domains/managed"
@@ -142,7 +145,7 @@ class R2Manager:
             return False
 
     def add_custom_domain(self, bucket: str, domain: str) -> bool:
-        if not HAS_REQUESTS or not self._api_token:
+        if not HAS_REQUESTS or not self._has_cf_auth():
             return False
         try:
             url = f"{CF_API}/accounts/{self._account_id}/r2/buckets/{bucket}/domains/custom"
@@ -154,7 +157,7 @@ class R2Manager:
             return False
 
     def list_zones(self) -> List[dict]:
-        if not HAS_REQUESTS or not self._api_token:
+        if not HAS_REQUESTS or not self._has_cf_auth():
             return []
         try:
             resp = _requests.get(f"{CF_API}/zones", headers=self._cf_headers(),

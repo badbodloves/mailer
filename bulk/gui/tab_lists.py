@@ -5,7 +5,8 @@ from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
                                  QGroupBox, QListWidget, QListWidgetItem,
                                  QTableWidget, QTableWidgetItem, QPushButton,
                                  QLineEdit, QLabel, QFileDialog, QMessageBox,
-                                 QHeaderView, QInputDialog, QCheckBox, QTextEdit)
+                                 QHeaderView, QInputDialog, QCheckBox, QTextEdit,
+                                 QComboBox)
 from PySide6.QtCore import Qt
 
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
@@ -91,6 +92,34 @@ class ListsTab(QWidget):
         stats.addWidget(del_sel_btn)
         rl.addLayout(stats)
 
+        # Compare lists
+        cmp_box = QGroupBox("Compare Lists")
+        cmp_l = QVBoxLayout(cmp_box)
+        cmp_row = QHBoxLayout()
+        cmp_row.addWidget(QLabel("List A:"))
+        self.cmp_a = QComboBox()
+        cmp_row.addWidget(self.cmp_a)
+        cmp_row.addWidget(QLabel("List B:"))
+        self.cmp_b = QComboBox()
+        cmp_row.addWidget(self.cmp_b)
+        cmp_btn = QPushButton("Compare")
+        cmp_btn.clicked.connect(self._compare)
+        cmp_row.addWidget(cmp_btn)
+        cmp_l.addLayout(cmp_row)
+        self.cmp_result = QTextEdit()
+        self.cmp_result.setReadOnly(True)
+        self.cmp_result.setMaximumHeight(100)
+        cmp_l.addWidget(self.cmp_result)
+        cmp_save_row = QHBoxLayout()
+        save_only_a = QPushButton("Save 'Only in A' as new list")
+        save_only_a.clicked.connect(lambda: self._save_compare("a"))
+        cmp_save_row.addWidget(save_only_a)
+        save_only_b = QPushButton("Save 'Only in B' as new list")
+        save_only_b.clicked.connect(lambda: self._save_compare("b"))
+        cmp_save_row.addWidget(save_only_b)
+        cmp_l.addLayout(cmp_save_row)
+        rl.addWidget(cmp_box)
+
         splitter = QSplitter(Qt.Horizontal)
         splitter.addWidget(left)
         splitter.addWidget(right)
@@ -101,11 +130,16 @@ class ListsTab(QWidget):
 
     def _refresh(self):
         self.list_widget.clear()
+        self.cmp_a.clear()
+        self.cmp_b.clear()
         for lst in self.db.get_lists():
             count = self.db.get_list_lead_count(lst["id"])
-            item = QListWidgetItem(f"{lst['name']}  ({count:,} leads)")
+            label = f"{lst['name']}  ({count:,} leads)"
+            item = QListWidgetItem(label)
             item.setData(Qt.UserRole, lst["id"])
             self.list_widget.addItem(item)
+            self.cmp_a.addItem(lst["name"], lst["id"])
+            self.cmp_b.addItem(lst["name"], lst["id"])
 
     def _get_exclude_rules(self) -> list:
         rules = []
@@ -219,3 +253,36 @@ class ListsTab(QWidget):
             if self._current_list_id:
                 self._load_leads(self._current_list_id)
             self._refresh()
+
+    def _compare(self):
+        a_id = self.cmp_a.currentData()
+        b_id = self.cmp_b.currentData()
+        if not a_id or not b_id:
+            return
+        if a_id == b_id:
+            self.cmp_result.setPlainText("Same list selected.")
+            return
+        c = self.db._conn()
+        a_emails = {r[0] for r in c.execute("SELECT email FROM leads WHERE list_id=?", (a_id,)).fetchall()}
+        b_emails = {r[0] for r in c.execute("SELECT email FROM leads WHERE list_id=?", (b_id,)).fetchall()}
+        only_a = a_emails - b_emails
+        only_b = b_emails - a_emails
+        both = a_emails & b_emails
+        self._compare_only_a = only_a
+        self._compare_only_b = only_b
+        self.cmp_result.setPlainText(
+            f"In both: {len(both):,}\n"
+            f"Only in A ({self.cmp_a.currentText()}): {len(only_a):,}\n"
+            f"Only in B ({self.cmp_b.currentText()}): {len(only_b):,}")
+
+    def _save_compare(self, which):
+        emails = self._compare_only_a if which == "a" else getattr(self, "_compare_only_b", set())
+        if not emails:
+            QMessageBox.information(self, "Empty", "No unique emails to save")
+            return
+        label = self.cmp_a.currentText() if which == "a" else self.cmp_b.currentText()
+        name = f"only_in_{label}"
+        list_id = self.db.create_list(name)
+        self.db.import_leads(list_id, list(emails))
+        QMessageBox.information(self, "Saved", f"Saved {len(emails):,} leads as '{name}'")
+        self._refresh()
