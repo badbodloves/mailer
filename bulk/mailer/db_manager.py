@@ -165,6 +165,13 @@ class BulkDBManager:
                     logo_path TEXT DEFAULT '',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS llm_config (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    api_url TEXT DEFAULT 'https://api.openai.com/v1/chat/completions',
+                    api_key TEXT DEFAULT '',
+                    model TEXT DEFAULT 'gpt-4o-mini',
+                    language TEXT DEFAULT 'de'
+                );
                 CREATE TABLE IF NOT EXISTS dynadot_config (
                     id INTEGER PRIMARY KEY CHECK(id=1),
                     api_key TEXT DEFAULT '',
@@ -762,6 +769,23 @@ class BulkDBManager:
             "SELECT a.*, s.email FROM warmup_actions a "
             "JOIN warmup_seeds s ON a.seed_id=s.id "
             "ORDER BY a.scheduled_at DESC LIMIT ?", (limit,)).fetchall()
+
+    # --- LLM ---
+    def get_llm_config(self) -> dict:
+        c = self._conn()
+        r = c.execute("SELECT * FROM llm_config WHERE id=1").fetchone()
+        if not r:
+            c.execute("INSERT OR IGNORE INTO llm_config (id) VALUES (1)")
+            c.commit()
+            return {"api_url": "https://api.openai.com/v1/chat/completions",
+                    "api_key": "", "model": "gpt-4o-mini", "language": "de"}
+        return dict(r)
+
+    def save_llm_config(self, api_url: str, api_key: str, model: str, language: str = "de"):
+        c = self._conn()
+        c.execute("INSERT OR REPLACE INTO llm_config (id, api_url, api_key, model, language) "
+                  "VALUES (1,?,?,?,?)", (api_url, api_key, model, language))
+        c.commit()
 
     # --- Dynadot ---
     def get_dynadot_config(self) -> dict:

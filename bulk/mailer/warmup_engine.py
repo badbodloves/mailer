@@ -163,12 +163,20 @@ class WarmupEngine:
                             smtp_row["username"], smtp_row["password"],
                             proxy=smtp_row.get("proxy", ""))
 
+        from .warmup_ai import generate_warmup_email
+
         from_email = camp["from_email"]
         from_name = camp.get("from_name", "") or "Newsletter"
         domain = camp["sending_domain"]
-        subject = f"Newsletter {datetime.date.today().strftime('%d.%m.%Y')}"
 
-        html_body = "<p>Hello,</p><p>Newsletter content here.</p>"
+        llm_cfg = self._db.get_llm_config()
+        ai_email = generate_warmup_email(
+            llm_cfg.get("api_url", ""), llm_cfg.get("api_key", ""),
+            llm_cfg.get("model", ""), domain, llm_cfg.get("language", "de"))
+
+        subject = ai_email.get("subject", f"Newsletter {datetime.date.today().strftime('%d.%m.%Y')}")
+        html_body = ai_email.get("html", "<p>Newsletter content</p>")
+
         if template_row:
             html_files = json.loads(template_row.get("html_files_json", "[]") or "[]")
             if html_files:
@@ -223,6 +231,7 @@ class WarmupEngine:
         if not actions:
             return 0
 
+        llm_cfg = self._db.get_llm_config()
         executed = 0
         for action in actions:
             if self._shutdown.is_set():
@@ -238,6 +247,7 @@ class WarmupEngine:
                 proxy=action.get("proxy", ""),
                 provider=action.get("provider", ""),
                 user_agent=action.get("user_agent", ""),
+                llm_config=llm_cfg,
             )
 
             if not worker.connect():

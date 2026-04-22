@@ -10,7 +10,7 @@ import smtplib
 from email.mime.text import MIMEText
 from typing import Optional
 
-from .warmup_providers import get_provider_config, REPLY_TEMPLATES_DE
+from .warmup_providers import get_provider_config
 
 logger = logging.getLogger("bulk.warmup.imap")
 
@@ -67,7 +67,8 @@ class IMAPWorker:
                  imap_host: str, imap_port: int = 993,
                  smtp_host: str = "", smtp_port: int = 587,
                  proxy: str = "", provider: str = "",
-                 user_agent: str = ""):
+                 user_agent: str = "",
+                 llm_config: dict = None):
         self._email = email_addr
         self._password = password
         self._imap_host = imap_host
@@ -78,6 +79,7 @@ class IMAPWorker:
         self._provider = provider
         self._user_agent = user_agent
         self._prov_cfg = get_provider_config(provider)
+        self._llm = llm_config or {}
         self._imap = None
 
     def connect(self) -> bool:
@@ -237,7 +239,14 @@ class IMAPWorker:
             if not subject.lower().startswith("re:"):
                 subject = f"Re: {subject}"
 
-            body_text = random.choice(REPLY_TEMPLATES_DE)
+            from .warmup_ai import generate_reply, _fallback_reply
+            if self._llm.get("api_key"):
+                body_text = generate_reply(
+                    self._llm.get("api_url", ""), self._llm["api_key"],
+                    self._llm.get("model", ""), subject,
+                    language=self._llm.get("language", "de"))
+            else:
+                body_text = _fallback_reply(self._llm.get("language", "de"))
             reply = MIMEText(body_text, "plain", "utf-8")
             reply["From"] = self._email
             reply["To"] = reply_to

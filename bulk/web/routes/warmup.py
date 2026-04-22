@@ -54,11 +54,13 @@ async def warmup_page(request: Request):
         p = s.get("provider", "")
         provider_counts[p] = provider_counts.get(p, 0) + 1
 
+    llm_cfg = db.get_llm_config()
     return request.app.state.templates.TemplateResponse(request, "warmup.html", {
         "active": "warmup", "seeds": seeds, "campaigns": campaigns,
         "actions": actions, "smtps": smtps, "templates": templates,
         "providers": providers, "provider_counts": provider_counts,
         "curves": list(WARMUP_CURVES.keys()), "db": db,
+        "llm": llm_cfg,
     })
 
 
@@ -202,6 +204,33 @@ async def delete_campaign(request: Request, cid: int):
         _engines.pop(cid, None)
     request.app.state.db.delete_warmup_campaign(cid)
     return RedirectResponse("/warmup", status_code=303)
+
+
+@router.post("/warmup/llm/save")
+async def save_llm_config(request: Request,
+                          api_url: str = Form(""),
+                          api_key: str = Form(""),
+                          model: str = Form(""),
+                          language: str = Form("de")):
+    request.app.state.db.save_llm_config(
+        api_url.strip() or "https://api.openai.com/v1/chat/completions",
+        api_key.strip(), model.strip() or "gpt-4o-mini", language)
+    return RedirectResponse("/warmup", status_code=303)
+
+
+@router.post("/warmup/llm/test", response_class=HTMLResponse)
+async def test_llm(request: Request):
+    db = request.app.state.db
+    cfg = db.get_llm_config()
+    if not cfg.get("api_key"):
+        return HTMLResponse('<span style="color:var(--red)">No API key configured</span>')
+    from bulk.mailer.warmup_ai import generate_reply
+    reply = generate_reply(cfg["api_url"], cfg["api_key"], cfg["model"],
+                           "Newsletter Update", language=cfg.get("language", "de"))
+    if reply:
+        from html import escape
+        return HTMLResponse(f'<span style="color:var(--green)">&#10003; LLM works: "{escape(reply)}"</span>')
+    return HTMLResponse('<span style="color:var(--red)">&#10007; LLM call failed</span>')
 
 
 @router.get("/warmup/log", response_class=HTMLResponse)
