@@ -135,6 +135,7 @@ class ListsTab(QWidget):
             return
 
         rules = self._get_exclude_rules()
+        summary = []
 
         for path in paths:
             name = os.path.splitext(os.path.basename(path))[0]
@@ -147,10 +148,11 @@ class ListsTab(QWidget):
             filtered = [e for e in all_emails if not self._should_exclude(e, rules)]
             excluded_count = len(all_emails) - len(filtered)
             added = self.db.import_leads(list_id, filtered)
-            QMessageBox.information(self, "Imported",
-                                     f"{name}: {added:,} leads imported"
-                                     + (f" ({excluded_count} excluded by rules)" if excluded_count else ""))
+            summary.append(f"{name}: {added:,} leads" + (f" ({excluded_count} excluded)" if excluded_count else ""))
+
         self._refresh()
+        QMessageBox.information(self, "Import Complete",
+                                 f"{len(summary)} list(s) imported:\n\n" + "\n".join(summary))
 
     def _delete_list(self):
         item = self.list_widget.currentItem()
