@@ -142,10 +142,13 @@ class BulkMIMEBuilder:
         entity_ref = str(uuid.uuid4())
 
         verp_tag = recipient_id or secrets.token_hex(8)
-        b_domain = bounce_domain or f"bounce.{domain}"
-        envelope_from = f"bounce+{verp_tag}@{b_domain}"
-
         is_ses = provider_type.lower() in ("ses", "aws", "amazon")
+
+        if is_ses:
+            envelope_from = from_email
+        else:
+            b_domain = bounce_domain or f"bounce.{domain}"
+            envelope_from = f"bounce+{verp_tag}@{b_domain}"
 
         headers = [f"From: {from_header}"]
         if reply_to_email:

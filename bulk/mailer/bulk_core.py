@@ -60,18 +60,27 @@ class BulkMailerCore:
         macros = {r["name"]: json.loads(r["values_json"]) for r in self._db.get_macros()}
         engine = BulkContentEngine(macros)
 
+        proxy_str = smtp_row.get("proxy", "")
+        proxy_required = bool(proxy_str and smtp_row.get("proxy_required", False))
         smtp = SMTPClient(smtp_row["host"], smtp_row["port"],
                           smtp_row["username"], smtp_row["password"],
-                          proxy=smtp_row.get("proxy", ""))
+                          proxy=proxy_str, proxy_required=proxy_required)
 
         daily_limit = mailing["daily_limit"] or smtp_row.get("daily_limit", 0) or 0
         limiter = RateLimiter(daily_limit=daily_limit)
 
         domain = domain_row["domain"]
         from_email = domain_row["from_email"] or f"newsletter@{domain}"
-        reply_to = domain_row.get("reply_to_email", "") or from_email
+        reply_to = domain_row.get("reply_to_email", "") or ""
         list_id_label = f"newsletter.{domain}"
-        bounce_sub = domain_row.get("bounce_subdomain") or domain_row.get("send_subdomain") or "mail"
+        provider = smtp_row.get("provider_type", "generic")
+        is_ses = provider.lower() in ("ses", "aws", "amazon")
+
+        if is_ses:
+            bounce_domain = ""
+        else:
+            bounce_sub = domain_row.get("bounce_subdomain") or domain_row.get("send_subdomain") or "mail"
+            bounce_domain = f"{bounce_sub}.{domain}"
 
         html_files = json.loads(template_row["html_files_json"] or "[]")
         html_rotate = template_row["html_rotate_every"] or 0
@@ -149,13 +158,9 @@ class BulkMailerCore:
                 plain_body = engine.html_to_plaintext(html_body)
 
                 unsub_token = f"{lead_id}-{self._mailing_id}"
-                if domain_row.get("unsub_worker_deployed"):
-                    unsub_domain = domain_row.get("unsub_domain") or f"unsub.{domain}"
-                    unsub_url = f"https://{unsub_domain}/u/{unsub_token}"
-                    unsub_mailto = f"unsub-{unsub_token}@{domain}"
-                else:
-                    unsub_url = ""
-                    unsub_mailto = ""
+                unsub_domain = domain_row.get("unsub_domain") or f"unsub.{domain}"
+                unsub_url = f"https://{unsub_domain}/u/{unsub_token}"
+                unsub_mailto = f"unsub-{unsub_token}@{domain}"
 
                 feedback_id = f"{feedback_base}:{domain.replace('.', '-')[:15]}"
 
@@ -168,11 +173,12 @@ class BulkMailerCore:
                         attachment = (os.path.basename(pdf_path), pdf_bytes)
 
                 try:
+                    effective_reply = reply_to if reply_to and reply_to != from_email else ""
                     raw_msg, envelope_from, verp_tag = BulkMIMEBuilder.build_email(
                         from_name=engine.process(cur_from_name, email),
                         from_email=from_email,
                         reply_to_name="",
-                        reply_to_email=reply_to,
+                        reply_to_email=effective_reply,
                         to_email=email,
                         subject=cur_subject,
                         html_body=html_body,
@@ -182,13 +188,13 @@ class BulkMailerCore:
                         unsubscribe_url=unsub_url,
                         unsubscribe_mailto=unsub_mailto,
                         feedback_id=feedback_id,
-                        bounce_domain=f"{bounce_sub}.{domain}",
+                        bounce_domain=bounce_domain,
                         recipient_id=str(lead_id),
                         attachment=attachment,
-                        provider_type=smtp_row.get("provider_type", "generic"),
+                        provider_type=provider,
                     )
 
-                    date_line = f"Date: {formatdate(localtime=True)}\r\n"
+                    date_line = f"Date: {formatdate(localtime=True, usegmt=False)}\r\n"
                     raw_msg = date_line + raw_msg
 
                     success, error, code = smtp.send(envelope_from, email, raw_msg)
@@ -202,17 +208,17 @@ class BulkMailerCore:
                                 test_raw, test_env, _ = BulkMIMEBuilder.build_email(
                                     from_name=engine.process(cur_from_name, test_email),
                                     from_email=from_email,
-                                    reply_to_name="", reply_to_email=reply_to,
+                                    reply_to_name="", reply_to_email=effective_reply,
                                     to_email=test_email, subject=f"[TEST #{sent}] {cur_subject}",
                                     html_body=html_body, plain_body=plain_body,
                                     list_id_token=list_id_label,
                                     unsubscribe_url=unsub_url, unsubscribe_mailto=unsub_mailto,
                                     feedback_id=feedback_id,
-                                    bounce_domain=f"{bounce_sub}.{domain}",
+                                    bounce_domain=bounce_domain,
                                     recipient_id="test",
-                                    provider_type=smtp_row.get("provider_type", "generic"),
+                                    provider_type=provider,
                                 )
-                                test_raw = f"Date: {formatdate(localtime=True)}\r\n" + test_raw
+                                test_raw = f"Date: {formatdate(localtime=True, usegmt=False)}\r\n" + test_raw
                                 smtp.send(test_env, test_email, test_raw)
                                 logger.info("Test mail #%d sent to %s", sent, test_email)
                             except Exception as te:

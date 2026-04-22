@@ -40,16 +40,58 @@ class SMTPClient:
     MAX_AGE = 300.0
 
     def __init__(self, host: str, port: int, username: str, password: str,
-                 timeout: int = 30, proxy: str = ""):
+                 timeout: int = 30, proxy: str = "",
+                 proxy_required: bool = False):
         self._host = host
         self._port = port
         self._username = username
         self._password = password
         self._timeout = timeout
+        self._proxy_str = proxy
         self._proxy = _parse_proxy(proxy)
+        self._proxy_required = proxy_required
         self._local = threading.local()
 
+    @property
+    def has_proxy(self) -> bool:
+        return self._proxy is not None
+
+    def test_connection(self) -> tuple:
+        """Test SMTP connection (with proxy if configured).
+        Returns (success: bool, message: str)."""
+        try:
+            server = self._connect()
+            server.quit()
+            proxy_info = f" via proxy {self._proxy[0]}:{self._proxy[1]}" if self._proxy else ""
+            return True, f"Connected to {self._host}:{self._port}{proxy_info}"
+        except Exception as exc:
+            return False, str(exc)
+
+    def test_proxy(self) -> tuple:
+        """Test proxy connectivity only (without SMTP auth).
+        Returns (success: bool, message: str)."""
+        if not self._proxy:
+            return False, "No proxy configured"
+        if not HAS_SOCKS:
+            return False, "PySocks not installed (pip install pysocks)"
+        try:
+            s = self._make_proxy_socket()
+            if s:
+                s.close()
+                return True, f"Proxy {self._proxy[0]}:{self._proxy[1]} reachable"
+        except Exception as exc:
+            return False, f"Proxy error: {exc}"
+        return False, "Proxy connection failed"
+
     def send(self, envelope_from: str, to_email: str, raw_message: str) -> tuple:
+        if self._proxy_required and self._proxy:
+            try:
+                s = self._make_proxy_socket()
+                if s:
+                    s.close()
+            except Exception as exc:
+                logger.error("PROXY DOWN (killswitch): %s", exc)
+                return False, f"PROXY_DOWN: {exc}", 0
         server = self._get_conn()
         try:
             if server is None:

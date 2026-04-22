@@ -70,9 +70,11 @@
                     <div>
                         <label>Reply-To Email</label>
                         <input name="reply_to_email" value="{{ d.reply_to_email or '' }}" placeholder="reply@{{ d.domain }}">
+                        <div class="form-help">Leave empty to omit Reply-To (From is used by default)</div>
 
-                        <label>Mail Subdomain</label>
+                        <label>Bounce Subdomain</label>
                         <input name="send_subdomain" value="{{ d.send_subdomain or 'mail' }}" placeholder="mail">
+                        <div class="form-help">Only for generic SMTP. SES handles this automatically.</div>
                     </div>
                 </div>
                 <div style="margin-top:12px" class="btn-group">

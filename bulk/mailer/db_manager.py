@@ -66,6 +66,7 @@ class BulkDBManager:
                     sent_today INTEGER DEFAULT 0,
                     last_reset_date TEXT DEFAULT '',
                     proxy TEXT DEFAULT '',
+                    proxy_required INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
@@ -166,7 +167,20 @@ class BulkDBManager:
                 );
             """)
             c.commit()
+            self._migrate(c)
             self._initialized = True
+
+    def _migrate(self, c):
+        """Add columns that may be missing in older databases."""
+        existing = {r[1] for r in c.execute("PRAGMA table_info(smtp_presets)").fetchall()}
+        if "proxy_required" not in existing:
+            c.execute("ALTER TABLE smtp_presets ADD COLUMN proxy_required INTEGER DEFAULT 0")
+        existing = {r[1] for r in c.execute("PRAGMA table_info(domains)").fetchall()}
+        if "unsub_domain" not in existing:
+            c.execute("ALTER TABLE domains ADD COLUMN unsub_domain TEXT DEFAULT ''")
+        if "unsub_worker_deployed" not in existing:
+            c.execute("ALTER TABLE domains ADD COLUMN unsub_worker_deployed INTEGER DEFAULT 0")
+        c.commit()
 
     # --- Users / Auth ---
     def get_user(self, username: str):
@@ -250,11 +264,13 @@ class BulkDBManager:
     # --- SMTP Presets ---
     def add_smtp(self, name: str, host: str, port: int, username: str,
                  password: str, provider_type: str = "generic",
-                 daily_limit: int = 0, proxy: str = "") -> int:
+                 daily_limit: int = 0, proxy: str = "",
+                 proxy_required: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO smtp_presets (name,host,port,username,password,provider_type,daily_limit,proxy) "
-                  "VALUES (?,?,?,?,?,?,?,?)",
-                  (name, host, port, username, password, provider_type, daily_limit, proxy))
+        c.execute("INSERT INTO smtp_presets (name,host,port,username,password,provider_type,"
+                  "daily_limit,proxy,proxy_required) VALUES (?,?,?,?,?,?,?,?,?)",
+                  (name, host, port, username, password, provider_type,
+                   daily_limit, proxy, proxy_required))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
