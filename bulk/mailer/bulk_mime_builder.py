@@ -131,8 +131,8 @@ class BulkMIMEBuilder:
             raise ValueError(f"Invalid list_id_token (use domain-style, no @ or spaces): {list_id_token!r}")
 
         if list_id_name:
-            encoded_name = cls._encode_header(list_id_name)
-            list_id_str = f"{encoded_name} <{list_id_token}>"
+            safe_name = list_id_name.replace("\\", "\\\\").replace('"', '\\"')
+            list_id_str = f'"{safe_name}" <{list_id_token}>'
         else:
             list_id_str = f"<{list_id_token}>"
 
