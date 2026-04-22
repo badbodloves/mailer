@@ -1,0 +1,237 @@
+{% extends "base.html" %}
+{% block title %} — Warmup{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Warmup</h1>
+</div>
+
+<div class="card tab-wrap">
+    <div class="tabs">
+        <button class="tab-btn active" onclick="showTab('warmup-tabs', 'tab-seeds')">Seed Accounts <span class="count">{{ seeds|length }}</span></button>
+        <button class="tab-btn" onclick="showTab('warmup-tabs', 'tab-campaigns')">Campaigns <span class="count">{{ campaigns|length }}</span></button>
+        <button class="tab-btn" onclick="showTab('warmup-tabs', 'tab-log')">Activity Log</button>
+    </div>
+
+    <div id="warmup-tabs">
+        <!-- Seed Accounts -->
+        <div id="tab-seeds" class="tab-content active">
+            <!-- Provider Overview -->
+            <div class="grid-4" style="margin-bottom:16px">
+                {% for p in providers %}
+                <div class="metric">
+                    <div class="value" style="font-size:18px">{{ provider_counts.get(p, 0) }}</div>
+                    <div class="label">{{ p }}</div>
+                </div>
+                {% endfor %}
+            </div>
+
+            <!-- Seeds Table -->
+            {% if seeds %}
+            <div style="overflow-x:auto;margin-bottom:16px">
+            <table>
+                <thead><tr><th>Provider</th><th>Email</th><th>Proxy</th><th>Open/Click/Reply</th><th>Active</th><th></th></tr></thead>
+                <tbody>
+                {% for s in seeds %}
+                <tr>
+                    <td><span class="badge badge-info">{{ s.provider }}</span></td>
+                    <td style="font-family:monospace;font-size:12px">{{ s.email }}</td>
+                    <td style="font-size:11px;color:var(--fg2)">{{ s.proxy[:25] ~ '...' if s.proxy and s.proxy|length > 25 else s.proxy or '—' }}</td>
+                    <td style="font-size:12px">{{ (s.open_rate * 100)|int }}% / {{ (s.click_rate * 100)|int }}% / {{ (s.reply_rate * 100)|int }}%</td>
+                    <td><span class="badge badge-{{ 'running' if s.is_active else 'draft' }}">{{ 'On' if s.is_active else 'Off' }}</span></td>
+                    <td>
+                        <div class="btn-group">
+                            <button class="btn btn-secondary btn-xs"
+                                    hx-post="/warmup/seeds/{{ s.id }}/test"
+                                    hx-target="#seed-test-{{ s.id }}"
+                                    hx-swap="innerHTML">Test</button>
+                            <form method="post" action="/warmup/seeds/{{ s.id }}/delete"
+                                  onsubmit="return confirm('Delete?')">
+                                <button class="btn btn-danger btn-xs">Del</button>
+                            </form>
+                        </div>
+                        <div id="seed-test-{{ s.id }}" style="margin-top:4px;font-size:11px"></div>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% else %}
+            <div class="empty-state" style="margin-bottom:16px">
+                <p>No seed accounts. Add single seeds or bulk import below.</p>
+            </div>
+            {% endif %}
+
+            <div class="grid-2" style="align-items:start">
+                <!-- Add Single -->
+                <details>
+                    <summary>Add Seed Account</summary>
+                    <div class="details-body" style="padding-top:12px">
+                        <form method="post" action="/warmup/seeds/add">
+                            <label>Provider</label>
+                            <select name="provider">
+                                {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+                            </select>
+                            <label>Email</label>
+                            <input name="email" placeholder="seed@t-online.de" required>
+                            <label>Password</label>
+                            <input name="password" type="password" required>
+                            <label>SOCKS5 Proxy (residential, sticky)</label>
+                            <input name="proxy" placeholder="socks5://ip:port:user:pass">
+                            <div style="margin-top:12px">
+                                <button class="btn btn-primary btn-sm">Add Seed</button>
+                            </div>
+                        </form>
+                    </div>
+                </details>
+
+                <!-- Bulk Import -->
+                <details>
+                    <summary>Bulk Import Seeds</summary>
+                    <div class="details-body" style="padding-top:12px">
+                        <form hx-post="/warmup/seeds/bulk-add"
+                              hx-target="#bulk-result"
+                              hx-swap="innerHTML">
+                            <label>Provider (all seeds in this batch)</label>
+                            <select name="provider">
+                                {% for p in providers %}<option value="{{ p }}">{{ p }}</option>{% endfor %}
+                            </select>
+                            <label>Accounts (one per line: email:password)</label>
+                            <textarea name="accounts" rows="6" placeholder="seed1@t-online.de:password1&#10;seed2@t-online.de:password2" style="font-family:monospace;font-size:12px"></textarea>
+                            <label>SOCKS5 Proxy (shared for all in this batch)</label>
+                            <input name="proxy" placeholder="socks5://ip:port:user:pass">
+                            <div style="margin-top:12px">
+                                <button class="btn btn-primary btn-sm">Import All</button>
+                            </div>
+                        </form>
+                        <div id="bulk-result" style="margin-top:10px"></div>
+                    </div>
+                </details>
+            </div>
+        </div>
+
+        <!-- Campaigns -->
+        <div id="tab-campaigns" class="tab-content">
+            {% if campaigns %}
+            {% for c in campaigns %}
+            <details>
+                <summary>
+                    <strong>{{ c.name }}</strong>
+                    <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+                        <span class="badge badge-{{ c.status|lower }}">{{ c.status }}</span>
+                        <span style="font-size:12px;color:var(--fg2)">{{ c.sending_domain }}</span>
+                        <span style="font-size:12px;color:var(--fg2)">Day {{ c.current_day }}</span>
+                        <span style="font-size:12px;color:var(--fg2)">{{ c.sent_today }} sent today</span>
+                    </span>
+                </summary>
+                <div class="details-body" style="padding-top:12px">
+                    <div class="grid-3" style="margin-bottom:12px">
+                        <div class="metric">
+                            <div class="value">{{ c.current_day }}</div>
+                            <div class="label">Day</div>
+                        </div>
+                        <div class="metric">
+                            <div class="value">{{ c.daily_target }}</div>
+                            <div class="label">Daily Target</div>
+                        </div>
+                        <div class="metric">
+                            <div class="value">{{ c.seed_pct }}%</div>
+                            <div class="label">Seed %</div>
+                        </div>
+                    </div>
+                    <div class="btn-group" style="margin-bottom:12px">
+                        {% if c.status != 'RUNNING' %}
+                        <button class="btn btn-success btn-sm"
+                                hx-post="/warmup/campaigns/{{ c.id }}/run"
+                                hx-target="#camp-status-{{ c.id }}"
+                                hx-swap="innerHTML">Run Today</button>
+                        {% endif %}
+                        <form method="post" action="/warmup/campaigns/{{ c.id }}/delete"
+                              onsubmit="return confirm('Delete campaign?')">
+                            <button class="btn btn-danger btn-sm">Delete</button>
+                        </form>
+                    </div>
+                    <div id="camp-status-{{ c.id }}"></div>
+                </div>
+            </details>
+            {% endfor %}
+            {% else %}
+            <div class="empty-state" style="margin-bottom:16px">
+                <p>No warmup campaigns. Create one below.</p>
+            </div>
+            {% endif %}
+
+            <details {{ 'open' if not campaigns }}>
+                <summary>Create Campaign</summary>
+                <div class="details-body" style="padding-top:12px">
+                    <form method="post" action="/warmup/campaigns/add">
+                        <div class="grid-2">
+                            <div>
+                                <label>Campaign Name</label>
+                                <input name="name" placeholder="vw-can.de Warmup" required>
+                                <label>Sending Domain</label>
+                                <input name="sending_domain" placeholder="vw-can.de" required>
+                                <label>From Email</label>
+                                <input name="from_email" placeholder="newsletter@vw-can.de">
+                                <label>From Name</label>
+                                <input name="from_name" placeholder="Newsletter">
+                            </div>
+                            <div>
+                                <label>SMTP Preset</label>
+                                <select name="smtp_preset_id">
+                                    <option value="0">— Select —</option>
+                                    {% for s in smtps %}<option value="{{ s.id }}">{{ s.name }}</option>{% endfor %}
+                                </select>
+                                <label>Template (optional)</label>
+                                <select name="template_id">
+                                    <option value="0">— Default warmup email —</option>
+                                    {% for t in templates %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}
+                                </select>
+                                <label>Ramp Curve</label>
+                                <select name="curve_type">
+                                    {% for cv in curves %}<option value="{{ cv }}">{{ cv }}</option>{% endfor %}
+                                </select>
+                                <div class="form-help">turbo = 3 weeks to full volume, conservative = 8 weeks</div>
+                            </div>
+                        </div>
+                        <div style="margin-top:16px">
+                            <button class="btn btn-primary">Create Campaign</button>
+                        </div>
+                    </form>
+                </div>
+            </details>
+        </div>
+
+        <!-- Activity Log -->
+        <div id="tab-log" class="tab-content">
+            <div hx-get="/warmup/log" hx-trigger="every 5s" hx-swap="innerHTML" id="warmup-log-content">
+                {% if actions %}
+                <table>
+                    <thead><tr><th>Time</th><th>Seed</th><th>Action</th><th>Result</th></tr></thead>
+                    <tbody>
+                    {% for a in actions %}
+                    <tr>
+                        <td style="font-size:11px;color:var(--fg2)">{{ a.scheduled_at }}</td>
+                        <td style="font-family:monospace;font-size:12px">{{ a.email }}</td>
+                        <td><span class="badge badge-info">{{ a.action_type }}</span></td>
+                        <td style="font-size:12px">
+                            {% if a.executed_at %}
+                            <span style="color:{{ 'var(--green)' if 'error' not in (a.result or '') else 'var(--red)' }}">{{ a.result or 'ok' }}</span>
+                            {% else %}
+                            <span style="color:var(--fg2)">pending</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                {% else %}
+                <div class="empty-state">
+                    <p>No activity yet. Start a campaign to see engagement actions.</p>
+                </div>
+                {% endif %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

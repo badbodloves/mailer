@@ -181,6 +181,57 @@ class BulkDBManager:
                     status TEXT DEFAULT 'registered',
                     purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS warmup_seeds (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    provider TEXT NOT NULL,
+                    email TEXT NOT NULL UNIQUE,
+                    password TEXT NOT NULL,
+                    imap_host TEXT NOT NULL,
+                    imap_port INTEGER DEFAULT 993,
+                    smtp_host TEXT DEFAULT '',
+                    smtp_port INTEGER DEFAULT 587,
+                    proxy TEXT DEFAULT '',
+                    user_agent TEXT DEFAULT '',
+                    open_rate REAL DEFAULT 0.7,
+                    click_rate REAL DEFAULT 0.2,
+                    reply_rate REAL DEFAULT 0.03,
+                    active_start INTEGER DEFAULT 7,
+                    active_end INTEGER DEFAULT 22,
+                    is_active INTEGER DEFAULT 1,
+                    last_checked TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS warmup_campaigns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    sending_domain TEXT NOT NULL,
+                    smtp_preset_id INTEGER REFERENCES smtp_presets(id),
+                    template_id INTEGER REFERENCES message_templates(id),
+                    from_email TEXT DEFAULT '',
+                    from_name TEXT DEFAULT '',
+                    status TEXT DEFAULT 'IDLE',
+                    curve_type TEXT DEFAULT 'turbo',
+                    start_date TEXT DEFAULT '',
+                    current_day INTEGER DEFAULT 0,
+                    seed_pct INTEGER DEFAULT 100,
+                    daily_target INTEGER DEFAULT 50,
+                    sent_today INTEGER DEFAULT 0,
+                    last_send_date TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS warmup_actions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    campaign_id INTEGER REFERENCES warmup_campaigns(id) ON DELETE CASCADE,
+                    seed_id INTEGER REFERENCES warmup_seeds(id) ON DELETE CASCADE,
+                    message_id TEXT DEFAULT '',
+                    action_type TEXT NOT NULL,
+                    scheduled_at TIMESTAMP NOT NULL,
+                    executed_at TIMESTAMP,
+                    result TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_warmup_actions_sched ON warmup_actions(scheduled_at);
+                CREATE INDEX IF NOT EXISTS idx_warmup_actions_camp ON warmup_actions(campaign_id);
             """)
             c.commit()
             self._migrate(c)
@@ -606,6 +657,111 @@ class BulkDBManager:
         import secrets
         short = secrets.token_hex(4)
         return f"c{campaign_id}-{short}.{domain}"
+
+    # --- Warmup Seeds ---
+    def add_seed(self, provider: str, email: str, password: str,
+                 imap_host: str, imap_port: int = 993,
+                 smtp_host: str = "", smtp_port: int = 587,
+                 proxy: str = "", **kw) -> int:
+        c = self._conn()
+        cols = ["provider", "email", "password", "imap_host", "imap_port",
+                "smtp_host", "smtp_port", "proxy"]
+        vals = [provider, email, password, imap_host, imap_port,
+                smtp_host, smtp_port, proxy]
+        for k in ("user_agent", "open_rate", "click_rate", "reply_rate",
+                   "active_start", "active_end"):
+            if k in kw:
+                cols.append(k)
+                vals.append(kw[k])
+        ph = ",".join("?" for _ in vals)
+        c.execute(f"INSERT OR IGNORE INTO warmup_seeds ({','.join(cols)}) VALUES ({ph})", vals)
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_seeds(self, active_only: bool = False) -> list:
+        sql = "SELECT * FROM warmup_seeds"
+        if active_only:
+            sql += " WHERE is_active=1"
+        return self._conn().execute(sql + " ORDER BY provider, email").fetchall()
+
+    def update_seed(self, seed_id: int, **kw):
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in kw)
+        c.execute(f"UPDATE warmup_seeds SET {sets} WHERE id=?",
+                  list(kw.values()) + [seed_id])
+        c.commit()
+
+    def delete_seed(self, seed_id: int):
+        c = self._conn()
+        c.execute("DELETE FROM warmup_seeds WHERE id=?", (seed_id,))
+        c.commit()
+
+    # --- Warmup Campaigns ---
+    def create_warmup_campaign(self, **kw) -> int:
+        c = self._conn()
+        cols = list(kw.keys())
+        vals = list(kw.values())
+        ph = ",".join("?" for _ in vals)
+        c.execute(f"INSERT INTO warmup_campaigns ({','.join(cols)}) VALUES ({ph})", vals)
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_warmup_campaigns(self) -> list:
+        return self._conn().execute(
+            "SELECT * FROM warmup_campaigns ORDER BY created_at DESC").fetchall()
+
+    def get_warmup_campaign(self, cid: int):
+        return self._conn().execute(
+            "SELECT * FROM warmup_campaigns WHERE id=?", (cid,)).fetchone()
+
+    def update_warmup_campaign(self, cid: int, **kw):
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in kw)
+        c.execute(f"UPDATE warmup_campaigns SET {sets} WHERE id=?",
+                  list(kw.values()) + [cid])
+        c.commit()
+
+    def delete_warmup_campaign(self, cid: int):
+        c = self._conn()
+        c.execute("DELETE FROM warmup_campaigns WHERE id=?", (cid,))
+        c.commit()
+
+    # --- Warmup Actions ---
+    def schedule_warmup_action(self, campaign_id: int, seed_id: int,
+                                action_type: str, scheduled_at: str,
+                                message_id: str = "") -> int:
+        c = self._conn()
+        c.execute("INSERT INTO warmup_actions (campaign_id,seed_id,action_type,"
+                  "scheduled_at,message_id) VALUES (?,?,?,?,?)",
+                  (campaign_id, seed_id, action_type, scheduled_at, message_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_pending_actions(self, limit: int = 50) -> list:
+        return self._conn().execute(
+            "SELECT a.*, s.email, s.password, s.imap_host, s.imap_port, "
+            "s.smtp_host, s.smtp_port, s.proxy, s.provider, s.user_agent "
+            "FROM warmup_actions a JOIN warmup_seeds s ON a.seed_id=s.id "
+            "WHERE a.executed_at IS NULL AND a.scheduled_at <= datetime('now') "
+            "ORDER BY a.scheduled_at LIMIT ?", (limit,)).fetchall()
+
+    def mark_action_done(self, action_id: int, result: str = "ok"):
+        c = self._conn()
+        c.execute("UPDATE warmup_actions SET executed_at=CURRENT_TIMESTAMP, "
+                  "result=? WHERE id=?", (result, action_id))
+        c.commit()
+
+    def get_warmup_log(self, campaign_id: int = 0, limit: int = 100) -> list:
+        if campaign_id:
+            return self._conn().execute(
+                "SELECT a.*, s.email FROM warmup_actions a "
+                "JOIN warmup_seeds s ON a.seed_id=s.id "
+                "WHERE a.campaign_id=? ORDER BY a.scheduled_at DESC LIMIT ?",
+                (campaign_id, limit)).fetchall()
+        return self._conn().execute(
+            "SELECT a.*, s.email FROM warmup_actions a "
+            "JOIN warmup_seeds s ON a.seed_id=s.id "
+            "ORDER BY a.scheduled_at DESC LIMIT ?", (limit,)).fetchall()
 
     # --- Dynadot ---
     def get_dynadot_config(self) -> dict:
