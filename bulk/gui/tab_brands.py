@@ -169,9 +169,13 @@ class BrandsTab(QWidget):
                 self.edit_from_email.setText(row["from_email"] or "")
                 self.edit_reply.setText(row["reply_to_email"] or "")
                 self.edit_mail_sub.setText(row["send_subdomain"] or "mail")
-                self.lbl_unsub.setText(
-                    f"✓ Deployed ({row['unsub_domain']})" if row["unsub_worker_deployed"]
-                    else "Not deployed")
+                if row["unsub_worker_deployed"]:
+                    self.lbl_unsub.setText(f"✓ Deployed ({row['unsub_domain']})")
+                else:
+                    self.lbl_unsub.setText("Checking...")
+                    import threading
+                    threading.Thread(target=self._check_unsub_remote,
+                                     args=(data[1], row["domain"]), daemon=True).start()
             if self._current_brand_id:
                 self._load_list_usage(self._current_brand_id)
 
@@ -188,6 +192,34 @@ class BrandsTab(QWidget):
         c.commit()
         self._refresh()
         QMessageBox.information(self, "Saved", "Domain settings saved")
+
+    def _check_unsub_remote(self, domain_id, domain):
+        cf_accounts = self.db.get_cf_accounts()
+        if not cf_accounts:
+            self.lbl_unsub.setText("Not deployed")
+            return
+        acct = dict(cf_accounts[0])
+        account_id = acct.get("account_id", "")
+        if not account_id:
+            self.lbl_unsub.setText("Not deployed")
+            return
+        if acct.get("global_api_key") and acct.get("auth_email"):
+            headers = {"X-Auth-Key": acct["global_api_key"], "X-Auth-Email": acct["auth_email"]}
+        else:
+            headers = {"Authorization": f"Bearer {acct.get('api_token', '')}"}
+        worker_name = f"unsub-{domain.replace('.', '-')}"
+        try:
+            import requests
+            resp = requests.get(
+                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}",
+                headers=headers, timeout=10)
+            if resp.status_code == 200:
+                self.db.mark_unsub_deployed(domain_id, f"unsub.{domain}")
+                self.lbl_unsub.setText(f"✓ Found on CF (unsub.{domain})")
+            else:
+                self.lbl_unsub.setText("Not deployed")
+        except Exception:
+            self.lbl_unsub.setText("Not deployed")
 
     def _deploy_unsub(self):
         if not self._current_domain_id:

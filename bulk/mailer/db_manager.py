@@ -135,6 +135,7 @@ class BulkDBManager:
 
                 CREATE TABLE IF NOT EXISTS mailings (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT DEFAULT '',
                     brand_id INTEGER REFERENCES brands(id),
                     domain_id INTEGER REFERENCES domains(id),
                     smtp_preset_id INTEGER REFERENCES smtp_presets(id),

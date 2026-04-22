@@ -46,7 +46,7 @@ class CloudflareTab(QWidget):
         self.cf_domain_list = QListWidget()
         dl.addWidget(self.cf_domain_list)
         sync_btn = QPushButton("Pull Domains from Cloudflare")
-        sync_btn.clicked.connect(self._pull_domains)
+        sync_btn.clicked.connect(lambda: threading.Thread(target=self._pull_domains_bg, daemon=True).start())
         dl.addWidget(sync_btn)
         al.addWidget(domain_box)
 
@@ -178,6 +178,9 @@ class CloudflareTab(QWidget):
 
     def _on_account_change(self):
         self._r2 = None
+        self.bucket_cb.clear()
+        self.cf_domain_list.clear()
+        self.status_label.setText("Account changed — click Connect")
 
     def _add_account(self):
         from PySide6.QtWidgets import QDialog, QFormLayout, QDialogButtonBox, QRadioButton, QButtonGroup
@@ -298,9 +301,10 @@ class CloudflareTab(QWidget):
             self.status_label.setText("Connected (no R2 keys)")
             self.status_label.setStyleSheet("color:orange; font-weight:bold")
         self._refresh_zones()
-        self._pull_domains()
+        self.status_label.setText(self.status_label.text() + " — pulling domains...")
+        threading.Thread(target=self._pull_domains_bg, daemon=True).start()
 
-    def _pull_domains(self):
+    def _pull_domains_bg(self):
         acct = self._get_current_account()
         if not acct:
             return

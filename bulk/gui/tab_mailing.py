@@ -34,7 +34,7 @@ class MailingTab(QWidget):
         self.table = QTableWidget()
         self.table.setColumnCount(8)
         self.table.setHorizontalHeaderLabels(
-            ["ID", "Status", "Progress", "Total", "Sent", "Failed", "Schedule", "Test Every"])
+            ["Name", "Status", "Progress", "Total", "Sent", "Failed", "Schedule", "Test Every"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.itemClicked.connect(self._on_select)
@@ -80,7 +80,7 @@ class MailingTab(QWidget):
             test_every = md.get("test_interval", 0) or 0
 
             for j, val in enumerate([
-                f"#{md['id']}", md.get("status", ""), pct,
+                md.get("name") or f"#{md['id']}", md.get("status", ""), pct,
                 f"{total:,}", f"{sent:,}", f"{failed:,}",
                 schedule, str(test_every) if test_every else "-"]):
                 item = QTableWidgetItem(val)
@@ -110,6 +110,10 @@ class MailingTab(QWidget):
         dlg.setWindowTitle("Edit Mailing" if existing else "New Mailing")
         dlg.setMinimumWidth(550)
         fl = QFormLayout(dlg)
+
+        name_input = QLineEdit()
+        name_input.setPlaceholderText("e.g. KN-News.de April 2026")
+        fl.addRow("Mailing Name:", name_input)
 
         brand_cb = QComboBox()
         domain_cb = QComboBox()
@@ -186,6 +190,7 @@ class MailingTab(QWidget):
         fl.addRow("Schedule (HH:MM):", schedule_input)
 
         if existing:
+            name_input.setText(existing.get("name", ""))
             for i in range(brand_cb.count()):
                 if brand_cb.itemData(i) == existing.get("brand_id"):
                     brand_cb.setCurrentIndex(i)
@@ -233,6 +238,7 @@ class MailingTab(QWidget):
                      "500/hour": 12000, "1,000/hour": 24000, "5,000/hour": 120000,
                      "Custom...": daily_spin.value()}
         return {
+            "name": name_input.text().strip() or f"Mailing {time.strftime('%Y-%m-%d')}",
             "brand_id": brand_cb.currentData(),
             "domain_id": domain_cb.currentData(),
             "list_id": list_cb.currentData(),
