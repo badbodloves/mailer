@@ -61,9 +61,10 @@ class BulkMailerCore:
         engine = BulkContentEngine(macros)
 
         smtp = SMTPClient(smtp_row["host"], smtp_row["port"],
-                          smtp_row["username"], smtp_row["password"])
+                          smtp_row["username"], smtp_row["password"],
+                          proxy=smtp_row.get("proxy", ""))
 
-        daily_limit = mailing["daily_limit"] or smtp_row["daily_limit"] or 0
+        daily_limit = mailing["daily_limit"] or smtp_row.get("daily_limit", 0) or 0
         limiter = RateLimiter(daily_limit=daily_limit)
 
         domain = domain_row["domain"]
@@ -95,6 +96,8 @@ class BulkMailerCore:
         list_id_db = mailing["list_id"]
 
         feedback_base = f"newsletter:{domain}:m{self._mailing_id}"
+        test_email = mailing.get("test_email", "")
+        test_interval = mailing.get("test_interval", 0) or 0
 
         self._db.update_mailing_status(self._mailing_id, "RUNNING")
         self._db.reset_in_progress(list_id_db)
@@ -194,6 +197,26 @@ class BulkMailerCore:
                         self._db.mark_sent(lead_id)
                         self._db.increment_smtp_sent(smtp_row["id"])
                         sent += 1
+                        if test_interval > 0 and test_email and sent % test_interval == 0:
+                            try:
+                                test_raw, test_env, _ = BulkMIMEBuilder.build_email(
+                                    from_name=engine.process(cur_from_name, test_email),
+                                    from_email=from_email,
+                                    reply_to_name="", reply_to_email=reply_to,
+                                    to_email=test_email, subject=f"[TEST #{sent}] {cur_subject}",
+                                    html_body=html_body, plain_body=plain_body,
+                                    list_id_token=list_id_label,
+                                    unsubscribe_url=unsub_url, unsubscribe_mailto=unsub_mailto,
+                                    feedback_id=feedback_id,
+                                    bounce_domain=f"{bounce_sub}.{domain}",
+                                    recipient_id="test",
+                                    provider_type=smtp_row.get("provider_type", "generic"),
+                                )
+                                test_raw = f"Date: {formatdate(localtime=True)}\r\n" + test_raw
+                                smtp.send(test_env, test_email, test_raw)
+                                logger.info("Test mail #%d sent to %s", sent, test_email)
+                            except Exception as te:
+                                logger.error("Test mail failed: %s", te)
                     elif error.startswith("FATAL:"):
                         self._db.mark_failed(lead_id, error)
                         failed += 1

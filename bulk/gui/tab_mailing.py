@@ -119,12 +119,18 @@ class MailingTab(QWidget):
         sender_input = QLineEdit()
         sender_input.setPlaceholderText("Display name or {macro}")
 
+        speed_group = QGroupBox("Send Speed")
+        sg = QFormLayout(speed_group)
         daily_cb = QComboBox()
-        daily_cb.addItems(["Use SMTP limit", "10,000", "25,000", "50,000", "100,000", "Custom..."])
+        daily_cb.addItems(["Use SMTP limit", "10,000/day", "25,000/day", "50,000/day",
+                           "100,000/day", "500/hour", "1,000/hour", "5,000/hour", "Custom..."])
         daily_spin = QSpinBox()
         daily_spin.setRange(0, 999999)
+        daily_spin.setSuffix(" mails/day")
         daily_spin.setVisible(False)
         daily_cb.currentTextChanged.connect(lambda t: daily_spin.setVisible(t == "Custom..."))
+        sg.addRow("Speed:", daily_cb)
+        sg.addRow("Custom:", daily_spin)
 
         exclude_input = QLineEdit()
         exclude_input.setPlaceholderText("yahoo.de, aol.com")
@@ -158,14 +164,22 @@ class MailingTab(QWidget):
         for t in self.db.get_templates():
             tmpl_cb.addItem(t["name"], t["id"])
 
+        sender_row = QHBoxLayout()
+        sender_row.addWidget(sender_input)
+        macro_btn = QPushButton("Macro")
+        def _insert_macro():
+            from .macro_insert import insert_macro_into
+            insert_macro_into(self.db, sender_input, dlg)
+        macro_btn.clicked.connect(_insert_macro)
+        sender_row.addWidget(macro_btn)
+
         fl.addRow("Brand:", brand_cb)
         fl.addRow("Domain:", domain_cb)
-        fl.addRow("Sender Name:", sender_input)
+        fl.addRow("Sender Name:", sender_row)
         fl.addRow("Mailing List:", list_cb)
         fl.addRow("SMTP:", smtp_cb)
         fl.addRow("Template:", tmpl_cb)
-        fl.addRow("Daily Limit:", daily_cb)
-        fl.addRow("Custom Limit:", daily_spin)
+        fl.addRow(speed_group)
         fl.addRow("Exclude Domains:", exclude_input)
         fl.addRow("Test Mail To:", test_email)
         fl.addRow("Test Every N:", test_interval)
@@ -214,8 +228,10 @@ class MailingTab(QWidget):
         if dlg.exec() != QDialog.Accepted:
             return None
 
-        limit_map = {"Use SMTP limit": 0, "10,000": 10000, "25,000": 25000,
-                     "50,000": 50000, "100,000": 100000, "Custom...": daily_spin.value()}
+        limit_map = {"Use SMTP limit": 0, "10,000/day": 10000, "25,000/day": 25000,
+                     "50,000/day": 50000, "100,000/day": 100000,
+                     "500/hour": 12000, "1,000/hour": 24000, "5,000/hour": 120000,
+                     "Custom...": daily_spin.value()}
         return {
             "brand_id": brand_cb.currentData(),
             "domain_id": domain_cb.currentData(),
