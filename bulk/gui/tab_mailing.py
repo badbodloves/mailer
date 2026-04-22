@@ -1,273 +1,259 @@
-"""Mailing control — select brand/domain/list/smtp/template → Start."""
+"""Mailing control — multi-mailing with table overview."""
 import json
 import time
 import threading
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
                                  QComboBox, QPushButton, QLabel, QSpinBox,
                                  QLineEdit, QProgressBar, QTextEdit,
-                                 QMessageBox, QFormLayout, QSplitter)
-from PySide6.QtCore import Qt, QTimer
+                                 QMessageBox, QFormLayout, QSplitter,
+                                 QTableWidget, QTableWidgetItem, QHeaderView,
+                                 QInputDialog, QTimeEdit)
+from PySide6.QtCore import Qt, QTimer, QTime
 
 
 class MailingTab(QWidget):
     def __init__(self, db):
         super().__init__()
         self.db = db
-        self._thread = None
-        self._core = None
-        self._running = False
-        self._started_at = 0.0
-        layout = QHBoxLayout(self)
+        self._threads = {}
+        self._cores = {}
+        layout = QVBoxLayout(self)
 
-        left = QWidget()
-        ll = QVBoxLayout(left)
+        # Top: mailing list table
+        top = QGroupBox("Mailings")
+        tl = QVBoxLayout(top)
+        btn_row = QHBoxLayout()
+        for text, fn in [("Add...", self._add_mailing), ("Start", self._start_selected),
+                         ("Stop", self._stop_selected), ("Delete", self._delete_selected),
+                         ("Refresh", self._refresh_table)]:
+            b = QPushButton(text)
+            b.clicked.connect(fn)
+            btn_row.addWidget(b)
+        tl.addLayout(btn_row)
 
-        setup = QGroupBox("Mailing Setup")
-        form = QFormLayout(setup)
+        self.table = QTableWidget()
+        self.table.setColumnCount(7)
+        self.table.setHorizontalHeaderLabels(["Name", "Status", "Progress", "Total", "Sent", "Failed", "ETA"])
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.itemClicked.connect(self._on_select)
+        tl.addWidget(self.table)
+        layout.addWidget(top)
 
-        self.brand_cb = QComboBox()
-        self.brand_cb.currentIndexChanged.connect(self._on_brand_change)
-        form.addRow("Brand:", self.brand_cb)
+        # Bottom: selected mailing details
+        bottom = QSplitter(Qt.Horizontal)
 
-        self.domain_cb = QComboBox()
-        form.addRow("Sender Domain:", self.domain_cb)
+        detail = QGroupBox("Mailing Details")
+        dl = QVBoxLayout(detail)
+        self.detail_text = QTextEdit()
+        self.detail_text.setReadOnly(True)
+        self.detail_text.setMaximumHeight(200)
+        dl.addWidget(self.detail_text)
+        bottom.addWidget(detail)
 
-        sender_row = QHBoxLayout()
-        self.sender_name_input = QLineEdit()
-        self.sender_name_input.setPlaceholderText("Display name or {macro}")
-        sender_row.addWidget(self.sender_name_input)
-        insert_sender_btn = QPushButton("Insert Macro")
-        insert_sender_btn.clicked.connect(self._insert_sender_macro)
-        sender_row.addWidget(insert_sender_btn)
-        form.addRow("Sender Name:", sender_row)
+        events = QGroupBox("Events Log")
+        el = QVBoxLayout(events)
+        self.events_text = QTextEdit()
+        self.events_text.setReadOnly(True)
+        self.events_text.setStyleSheet("background:#1e1e1e; color:#d4d4d4; font-family:Consolas")
+        el.addWidget(self.events_text)
+        bottom.addWidget(events)
 
-        self.list_cb = QComboBox()
-        form.addRow("Mailing List:", self.list_cb)
-
-        self.smtp_cb = QComboBox()
-        form.addRow("SMTP Preset:", self.smtp_cb)
-
-        self.tmpl_cb = QComboBox()
-        form.addRow("Message:", self.tmpl_cb)
-
-        self.daily_limit = QSpinBox()
-        self.daily_limit.setRange(0, 999999)
-        self.daily_limit.setSpecialValueText("Use SMTP limit")
-        form.addRow("Daily Limit:", self.daily_limit)
-
-        self.exclude_input = QLineEdit()
-        self.exclude_input.setPlaceholderText("yahoo.de, aol.com")
-        form.addRow("Exclude Domains:", self.exclude_input)
-
-        ll.addWidget(setup)
-
-        ctrl = QGroupBox("Control")
-        cl = QHBoxLayout(ctrl)
-        self.btn_start = QPushButton("▶ START")
-        self.btn_start.clicked.connect(self._start)
-        self.btn_pause = QPushButton("⏸ PAUSE")
-        self.btn_pause.clicked.connect(self._pause)
-        self.btn_pause.setEnabled(False)
-        self.btn_stop = QPushButton("⏹ STOP")
-        self.btn_stop.clicked.connect(self._stop)
-        self.btn_stop.setEnabled(False)
-        self.btn_refresh = QPushButton("Refresh")
-        self.btn_refresh.clicked.connect(self._refresh_all)
-        cl.addWidget(self.btn_start)
-        cl.addWidget(self.btn_pause)
-        cl.addWidget(self.btn_stop)
-        cl.addWidget(self.btn_refresh)
-        ll.addWidget(ctrl)
-
-        stats = QGroupBox("Delivery Info")
-        sl = QVBoxLayout(stats)
-        self.status_label = QLabel("Status: Idle")
-        self.status_label.setStyleSheet("font-weight:bold; font-size:14px")
-        sl.addWidget(self.status_label)
-        self.progress = QProgressBar()
-        sl.addWidget(self.progress)
-
-        metrics = QHBoxLayout()
-        self._metric_labels = {}
-        for key in ["Total", "Sent", "Failed", "Excluded", "Speed", "Elapsed", "ETA"]:
-            metrics.addWidget(QLabel(f"{key}:"))
-            lbl = QLabel("0")
-            lbl.setStyleSheet("font-weight:bold")
-            metrics.addWidget(lbl)
-            self._metric_labels[key] = lbl
-        sl.addLayout(metrics)
-        ll.addWidget(stats)
-
-        right = QGroupBox("Events Log")
-        rl = QVBoxLayout(right)
-        self.events = QTextEdit()
-        self.events.setReadOnly(True)
-        self.events.setStyleSheet("background:#1e1e1e; color:#d4d4d4; font-family:Consolas")
-        rl.addWidget(self.events)
-
-        splitter = QSplitter(Qt.Horizontal)
-        splitter.addWidget(left)
-        splitter.addWidget(right)
-        splitter.setSizes([600, 400])
-        layout.addWidget(splitter)
+        layout.addWidget(bottom)
 
         self._poll_timer = QTimer()
-        self._poll_timer.timeout.connect(self._poll)
-        self._poll_timer.start(2000)
+        self._poll_timer.timeout.connect(self._refresh_table)
+        self._poll_timer.start(3000)
 
-        self._refresh_all()
+        self._refresh_table()
 
     def _log(self, msg):
-        self.events.append(f"{time.strftime('%H:%M:%S')}  {msg}")
+        self.events_text.append(f"{time.strftime('%H:%M:%S')}  {msg}")
 
-    def _refresh_all(self):
-        self.brand_cb.blockSignals(True)
-        self.brand_cb.clear()
+    def _refresh_table(self):
+        mailings = self.db.get_mailings()
+        self.table.setRowCount(len(mailings))
+        for i, m in enumerate(mailings):
+            total = m["total_leads"] or 0
+            sent = m["sent"] or 0
+            failed = m["failed"] or 0
+            pct = f"{(sent+failed)/total*100:.0f}%" if total > 0 else "0%"
+
+            self.table.setItem(i, 0, QTableWidgetItem(f"Mailing #{m['id']}"))
+            status_item = QTableWidgetItem(m["status"])
+            self.table.setItem(i, 1, status_item)
+            self.table.setItem(i, 2, QTableWidgetItem(pct))
+            self.table.setItem(i, 3, QTableWidgetItem(f"{total:,}"))
+            self.table.setItem(i, 4, QTableWidgetItem(f"{sent:,}"))
+            self.table.setItem(i, 5, QTableWidgetItem(f"{failed:,}"))
+            self.table.setItem(i, 6, QTableWidgetItem(""))
+            for j in range(7):
+                item = self.table.item(i, j)
+                if item:
+                    item.setData(Qt.UserRole, m["id"])
+
+    def _get_selected_id(self):
+        row = self.table.currentRow()
+        if row < 0:
+            return None
+        item = self.table.item(row, 0)
+        return item.data(Qt.UserRole) if item else None
+
+    def _on_select(self):
+        mid = self._get_selected_id()
+        if not mid:
+            return
+        m = self.db._conn().execute("SELECT * FROM mailings WHERE id=?", (mid,)).fetchone()
+        if not m:
+            return
+        info = (f"Mailing #{m['id']}  Status: {m['status']}\n"
+                f"Brand: {m['brand_id']}  Domain: {m['domain_id']}  SMTP: {m['smtp_preset_id']}\n"
+                f"List: {m['list_id']}  Template: {m['template_id']}\n"
+                f"Daily Limit: {m['daily_limit']}\n"
+                f"Excludes: {m['exclude_domains_json']}\n"
+                f"Created: {m['created_at']}  Started: {m['started_at'] or '-'}\n"
+                f"Sent: {m['sent']}  Failed: {m['failed']}  Excluded: {m['excluded']}")
+        self.detail_text.setPlainText(info)
+
+    def _add_mailing(self):
+        from PySide6.QtWidgets import QDialog, QDialogButtonBox
+        dlg = QDialog(self)
+        dlg.setWindowTitle("New Mailing")
+        dlg.setMinimumWidth(500)
+        fl = QFormLayout(dlg)
+
+        brand_cb = QComboBox()
+        domain_cb = QComboBox()
+        list_cb = QComboBox()
+        smtp_cb = QComboBox()
+        tmpl_cb = QComboBox()
+        sender_input = QLineEdit()
+        sender_input.setPlaceholderText("Display name or {macro}")
+
+        daily_cb = QComboBox()
+        daily_cb.addItems(["Use SMTP limit", "10,000", "25,000", "50,000", "100,000", "Custom..."])
+        daily_spin = QSpinBox()
+        daily_spin.setRange(0, 999999)
+        daily_spin.setVisible(False)
+        daily_cb.currentTextChanged.connect(lambda t: daily_spin.setVisible(t == "Custom..."))
+
+        exclude_input = QLineEdit()
+        exclude_input.setPlaceholderText("yahoo.de, aol.com")
+        test_input = QLineEdit()
+        test_input.setPlaceholderText("test@inbox.com")
+        test_interval = QSpinBox()
+        test_interval.setRange(0, 999999)
+        test_interval.setValue(1000)
+        test_interval.setSpecialValueText("Disabled")
+        schedule_time = QTimeEdit()
+        schedule_time.setDisplayFormat("HH:mm")
+
         for b in self.db.get_brands():
-            self.brand_cb.addItem(b["name"], b["id"])
-        self.brand_cb.blockSignals(False)
+            brand_cb.addItem(b["name"], b["id"])
+        def on_brand():
+            domain_cb.clear()
+            bid = brand_cb.currentData()
+            if bid:
+                for d in self.db.get_domains(bid):
+                    domain_cb.addItem(d["domain"], d["id"])
+        brand_cb.currentIndexChanged.connect(on_brand)
+        on_brand()
 
-        self.smtp_cb.clear()
+        for l in self.db.get_lists():
+            cnt = self.db.get_list_lead_count(l["id"])
+            list_cb.addItem(f"{l['name']} ({cnt:,})", l["id"])
         self.db.reset_daily_counts()
         for s in self.db.get_smtps():
-            remaining = self.db.get_smtp_remaining(s["id"])
-            proxy = " [proxy]" if s.get("proxy") else ""
-            self.smtp_cb.addItem(f"{s['name']} ({remaining:,} left){proxy}", s["id"])
-
-        self.tmpl_cb.clear()
+            rem = self.db.get_smtp_remaining(s["id"])
+            smtp_cb.addItem(f"{s['name']} ({rem:,} left)", s["id"])
         for t in self.db.get_templates():
-            self.tmpl_cb.addItem(t["name"], t["id"])
+            tmpl_cb.addItem(t["name"], t["id"])
 
-        self.list_cb.clear()
-        for l in self.db.get_lists():
-            count = self.db.get_list_lead_count(l["id"])
-            self.list_cb.addItem(f"{l['name']} ({count:,})", l["id"])
+        fl.addRow("Brand:", brand_cb)
+        fl.addRow("Domain:", domain_cb)
+        fl.addRow("Sender Name:", sender_input)
+        fl.addRow("Mailing List:", list_cb)
+        fl.addRow("SMTP:", smtp_cb)
+        fl.addRow("Template:", tmpl_cb)
+        fl.addRow("Daily Limit:", daily_cb)
+        fl.addRow("Custom Limit:", daily_spin)
+        fl.addRow("Exclude Domains:", exclude_input)
+        fl.addRow("Test Mail To:", test_input)
+        fl.addRow("Test Every N:", test_interval)
+        fl.addRow("Schedule:", schedule_time)
 
-        if self.brand_cb.count() > 0:
-            self.brand_cb.setCurrentIndex(0)
-            self._on_brand_change()
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.accepted.connect(dlg.accept)
+        btns.rejected.connect(dlg.reject)
+        fl.addRow(btns)
 
-    def _on_brand_change(self):
-        self.domain_cb.clear()
-        bid = self.brand_cb.currentData()
-        if not bid:
-            return
-        for d in self.db.get_domains(bid):
-            label = d["domain"]
-            if d.get("from_email"):
-                label += f" ({d['from_email']})"
-            self.domain_cb.addItem(label, d["id"])
-
-    def _insert_sender_macro(self):
-        from .macro_insert import insert_macro_into
-        insert_macro_into(self.db, self.sender_name_input, self)
-
-    def _start(self):
-        if self._running:
-            return
-        brand_id = self.brand_cb.currentData()
-        domain_id = self.domain_cb.currentData()
-        list_id = self.list_cb.currentData()
-        smtp_id = self.smtp_cb.currentData()
-        tmpl_id = self.tmpl_cb.currentData()
-
-        missing = []
-        if not brand_id: missing.append("Brand")
-        if not domain_id: missing.append("Domain")
-        if not list_id: missing.append("List")
-        if not smtp_id: missing.append("SMTP")
-        if not tmpl_id: missing.append("Template")
-        if missing:
-            QMessageBox.warning(self, "Missing", f"Select: {', '.join(missing)}")
+        if dlg.exec() != QDialog.Accepted:
             return
 
-        excludes = [d.strip() for d in self.exclude_input.text().split(",") if d.strip()]
+        limit_map = {"Use SMTP limit": 0, "10,000": 10000, "25,000": 25000,
+                     "50,000": 50000, "100,000": 100000, "Custom...": daily_spin.value()}
+        daily = limit_map.get(daily_cb.currentText(), 0)
+        excludes = [d.strip() for d in exclude_input.text().split(",") if d.strip()]
 
-        mailing_id = self.db.create_mailing(
-            brand_id=brand_id, domain_id=domain_id, list_id=list_id,
-            smtp_preset_id=smtp_id, template_id=tmpl_id,
-            daily_limit=self.daily_limit.value(),
+        mid = self.db.create_mailing(
+            brand_id=brand_cb.currentData(),
+            domain_id=domain_cb.currentData(),
+            list_id=list_cb.currentData(),
+            smtp_preset_id=smtp_cb.currentData(),
+            template_id=tmpl_cb.currentData(),
+            daily_limit=daily,
             exclude_domains_json=json.dumps(excludes),
-            total_leads=self.db.get_list_lead_count(list_id),
+            total_leads=self.db.get_list_lead_count(list_cb.currentData() or 0),
         )
+        self._log(f"Mailing #{mid} created")
+        self._refresh_table()
 
-        self._log(f"Mailing #{mailing_id} created")
+    def _start_selected(self):
+        mid = self._get_selected_id()
+        if not mid:
+            return
+        if mid in self._cores:
+            QMessageBox.warning(self, "Running", "This mailing is already running")
+            return
 
         from bulk.mailer.bulk_core import BulkMailerCore
-        self._core = BulkMailerCore(self.db, mailing_id)
+        core = BulkMailerCore(self.db, mid)
+        self._cores[mid] = core
 
         def run():
             try:
-                self._core.run()
-                self._log("Mailing finished")
+                core.run()
+                self._log(f"Mailing #{mid} finished")
             except Exception as e:
-                self._log(f"ERROR: {e}")
+                self._log(f"Mailing #{mid} ERROR: {e}")
             finally:
-                self._running = False
-                self._core = None
+                self._cores.pop(mid, None)
 
-        self._running = True
-        self._started_at = time.time()
-        self._thread = threading.Thread(target=run, daemon=True)
-        self._thread.start()
+        t = threading.Thread(target=run, daemon=True)
+        t.start()
+        self._threads[mid] = t
+        self._log(f"Mailing #{mid} started")
+        self._refresh_table()
 
-        self.btn_start.setEnabled(False)
-        self.btn_pause.setEnabled(True)
-        self.btn_stop.setEnabled(True)
-        self.status_label.setText("Status: Running")
-        self._log("Mailing started")
-
-    def _pause(self):
-        if self._core:
-            self._core.stop()
-            self.status_label.setText("Status: Paused")
-            self.btn_start.setEnabled(True)
-            self.btn_pause.setEnabled(False)
-            self._log("Paused")
-
-    def _stop(self):
-        if self._core:
-            self._core.stop()
-        self._running = False
-        self.status_label.setText("Status: Stopped")
-        self.btn_start.setEnabled(True)
-        self.btn_pause.setEnabled(False)
-        self.btn_stop.setEnabled(False)
-        self._log("Stopped")
-
-    def _poll(self):
-        list_id = self.list_cb.currentData()
-        if not list_id:
+    def _stop_selected(self):
+        mid = self._get_selected_id()
+        if not mid:
             return
-        stats = self.db.mailing_stats(list_id)
-        total = stats["total"]
-        sent = stats["SENT"]
-        failed = stats["FAILED"]
-        excluded = stats.get("EXCLUDED", 0)
-        processed = sent + failed + excluded
+        core = self._cores.get(mid)
+        if core:
+            core.stop()
+            self._log(f"Mailing #{mid} stopped")
+        self._refresh_table()
 
-        self._metric_labels["Total"].setText(f"{total:,}")
-        self._metric_labels["Sent"].setText(f"{sent:,}")
-        self._metric_labels["Failed"].setText(f"{failed:,}")
-        self._metric_labels["Excluded"].setText(f"{excluded:,}")
-
-        pct = int(processed / total * 100) if total > 0 else 0
-        self.progress.setValue(pct)
-
-        elapsed = time.time() - self._started_at if self._running else 0
-        speed = processed / elapsed if elapsed > 1 else 0
-        self._metric_labels["Speed"].setText(f"{speed:.1f}/s")
-
-        m, s = divmod(int(elapsed), 60)
-        h, m = divmod(m, 60)
-        self._metric_labels["Elapsed"].setText(f"{h}:{m:02d}:{s:02d}")
-
-        remaining = (total - processed) / speed if speed > 0 else 0
-        m, s = divmod(int(remaining), 60)
-        h, m = divmod(m, 60)
-        self._metric_labels["ETA"].setText(f"{h}:{m:02d}:{s:02d}" if speed > 0 else "--:--")
-
-        if not self._running and not self.btn_start.isEnabled():
-            self.btn_start.setEnabled(True)
-            self.btn_pause.setEnabled(False)
-            self.btn_stop.setEnabled(False)
+    def _delete_selected(self):
+        mid = self._get_selected_id()
+        if not mid:
+            return
+        if mid in self._cores:
+            QMessageBox.warning(self, "Running", "Stop the mailing first")
+            return
+        if QMessageBox.question(self, "Delete", f"Delete mailing #{mid}?") == QMessageBox.Yes:
+            c = self.db._conn()
+            c.execute("DELETE FROM mailings WHERE id=?", (mid,))
+            c.commit()
+            self._refresh_table()

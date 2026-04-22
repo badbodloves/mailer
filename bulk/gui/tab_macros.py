@@ -3,7 +3,7 @@ import json
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QSplitter,
                                  QGroupBox, QListWidget, QListWidgetItem,
                                  QTextEdit, QPushButton, QLineEdit, QLabel,
-                                 QMessageBox, QFileDialog, QHeaderView)
+                                 QMessageBox, QFileDialog, QHeaderView, QSpinBox)
 from PySide6.QtCore import Qt
 
 
@@ -52,6 +52,16 @@ class MacrosTab(QWidget):
         self.info_label = QLabel("")
         rl.addWidget(self.info_label)
 
+        rot_row = QHBoxLayout()
+        rot_row.addWidget(QLabel("Rotate every:"))
+        self.rotate_spin = QSpinBox()
+        self.rotate_spin.setRange(0, 99999)
+        self.rotate_spin.setSpecialValueText("Random (0)")
+        rot_row.addWidget(self.rotate_spin)
+        rot_row.addWidget(QLabel("emails (0 = random pick each time)"))
+        rot_row.addStretch()
+        rl.addLayout(rot_row)
+
         save_btn = QPushButton("Save Macro")
         save_btn.clicked.connect(self._save)
         rl.addWidget(save_btn)
@@ -80,6 +90,7 @@ class MacrosTab(QWidget):
             self.name_input.setText(row["name"])
             vals = json.loads(row["values_json"])
             self.editor.setPlainText("\n".join(vals))
+            self.rotate_spin.setValue(row["rotate_every"] if row["rotate_every"] else 0)
             self.info_label.setText(f"{len(vals)} values | Use as {{{{" + row['name'] + "}}}}")
 
     def _new(self):
@@ -100,11 +111,10 @@ class MacrosTab(QWidget):
         text = self.editor.toPlainText()
         values = [line.strip() for line in text.splitlines() if line.strip()]
         self.db.update_macro(self._current_id, values)
-        self.name_input.text()
         name = self.name_input.text().strip()
         if name:
-            self.db._conn().execute("UPDATE macros SET name=? WHERE id=?",
-                                     (name, self._current_id))
+            self.db._conn().execute("UPDATE macros SET name=?, rotate_every=? WHERE id=?",
+                                     (name, self.rotate_spin.value(), self._current_id))
             self.db._conn().commit()
         self._refresh()
         self.info_label.setText(f"Saved: {len(values)} values")

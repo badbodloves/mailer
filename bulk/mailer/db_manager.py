@@ -115,6 +115,7 @@ class BulkDBManager:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
                     values_json TEXT NOT NULL DEFAULT '[]',
+                    rotate_every INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 

@@ -2,7 +2,7 @@
 from PySide6.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
                                  QTableWidget, QTableWidgetItem, QPushButton,
                                  QFormLayout, QLineEdit, QSpinBox, QMessageBox,
-                                 QHeaderView, QDialog, QDialogButtonBox)
+                                 QHeaderView, QDialog, QDialogButtonBox, QComboBox)
 from PySide6.QtCore import Qt
 
 
@@ -72,8 +72,8 @@ class SMTPTab(QWidget):
         if dlg.exec() == QDialog.Accepted:
             d = dlg.get_data()
             c = self.db._conn()
-            c.execute("UPDATE smtp_presets SET name=?,host=?,port=?,username=?,password=?,daily_limit=? WHERE id=?",
-                      (d["name"], d["host"], d["port"], d["username"], d["password"], d["daily_limit"], sid))
+            c.execute("UPDATE smtp_presets SET name=?,host=?,port=?,username=?,password=?,provider_type=?,daily_limit=?,proxy=? WHERE id=?",
+                      (d["name"], d["host"], d["port"], d["username"], d["password"], d["provider_type"], d["daily_limit"], d["proxy"], sid))
             c.commit()
             self._refresh()
 

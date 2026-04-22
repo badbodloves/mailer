@@ -254,7 +254,10 @@ class CloudflareTab(QWidget):
         cf_id = self.acct_cb.currentData()
         if not cf_id:
             return None
-        return self.db._conn().execute("SELECT * FROM cf_accounts WHERE id=?", (cf_id,)).fetchone()
+        row = self.db._conn().execute("SELECT * FROM cf_accounts WHERE id=?", (cf_id,)).fetchone()
+        if not row:
+            return None
+        return dict(row)
 
     def _get_r2(self):
         if self._r2 and self._r2.enabled:
