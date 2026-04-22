@@ -11,46 +11,80 @@
     </div>
 
     {% if smtps %}
-    <table>
-        <thead>
-            <tr><th>Name</th><th>Host</th><th>Port</th><th>Provider</th><th>Username</th><th>Daily Limit</th><th>Sent Today</th><th>Proxy</th><th></th></tr>
-        </thead>
-        <tbody>
-        {% for s in smtps %}
-        <tr>
-            <td style="font-weight:500">{{ s.name }}</td>
-            <td>{{ s.host }}</td>
-            <td>{{ s.port }}</td>
-            <td><span class="badge badge-info">{{ s.get('provider_type','generic') }}</span></td>
-            <td style="font-size:12px">{{ s.username }}</td>
-            <td>{{ "{:,}".format(s.daily_limit) }}</td>
-            <td>{{ "{:,}".format(s.sent_today or 0) }}</td>
-            <td style="font-size:12px">
+    {% for s in smtps %}
+    <details>
+        <summary>
+            <strong>{{ s.name }}</strong>
+            <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+                <span class="badge badge-info">{{ s.get('provider_type','generic') }}</span>
+                <span style="font-size:12px;color:var(--fg2)">{{ s.host }}:{{ s.port }}</span>
+                <span style="font-size:12px;color:var(--fg2)">{{ "{:,}".format(s.sent_today or 0) }} / {{ "{:,}".format(s.daily_limit) }}</span>
                 {% if s.get('proxy','') %}
-                <span class="badge badge-{{ 'running' if s.get('proxy_required') else 'info' }}">
-                    {{ 'Killswitch' if s.get('proxy_required') else 'Optional' }}
+                <span class="badge badge-{{ 'running' if s.get('proxy_required') else 'draft' }}">
+                    {{ 'Killswitch' if s.get('proxy_required') else 'Proxy' }}
                 </span>
-                {% else %}
-                <span style="color:var(--fg2)">—</span>
                 {% endif %}
-            </td>
-            <td>
-                <div class="btn-group">
-                    <button class="btn btn-secondary btn-xs"
+            </span>
+        </summary>
+        <div class="details-body" style="padding-top:12px">
+            <form method="post" action="/smtp/{{ s.id }}/save">
+                <div class="grid-2">
+                    <div>
+                        <label>Name</label>
+                        <input name="name" value="{{ s.name }}" required>
+
+                        <label>Host</label>
+                        <input name="host" value="{{ s.host }}" required>
+
+                        <label>Port</label>
+                        <input name="port" type="number" value="{{ s.port }}">
+
+                        <label>Username</label>
+                        <input name="username" value="{{ s.username }}" required>
+
+                        <label>Password</label>
+                        <input name="password" type="password" placeholder="Leave empty to keep current">
+                        <div class="form-help">Only fill in if you want to change the password</div>
+                    </div>
+                    <div>
+                        <label>Provider Type</label>
+                        <select name="provider_type">
+                            {% for p in ['generic','ses','sendgrid','mailgun','postmark'] %}
+                            <option value="{{ p }}" {{ 'selected' if s.get('provider_type','generic') == p }}>{{ p }}</option>
+                            {% endfor %}
+                        </select>
+
+                        <label>Daily Limit</label>
+                        <input name="daily_limit" type="number" value="{{ s.daily_limit }}">
+
+                        <label>SOCKS5 Proxy</label>
+                        <input name="proxy" value="{{ s.get('proxy','') or '' }}" placeholder="socks5://ip:port:user:pass">
+
+                        <div style="margin-top:12px">
+                            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                                <input type="checkbox" name="proxy_required" value="1"
+                                       {{ 'checked' if s.get('proxy_required') }} style="width:auto">
+                                <span>Proxy Killswitch</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+                <div style="margin-top:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+                    <button class="btn btn-primary btn-sm">Save</button>
+                    <button type="button" class="btn btn-secondary btn-sm"
                             hx-post="/smtp/{{ s.id }}/test"
                             hx-target="#smtp-test-{{ s.id }}"
-                            hx-swap="innerHTML">Test</button>
+                            hx-swap="innerHTML">Test Connection</button>
                     <form method="post" action="/smtp/{{ s.id }}/delete"
-                          onsubmit="return confirm('Delete SMTP {{ s.name }}?')">
-                        <button class="btn btn-danger btn-xs">Delete</button>
+                          onsubmit="return confirm('Delete {{ s.name }}?')">
+                        <button class="btn btn-danger btn-sm">Delete</button>
                     </form>
+                    <div id="smtp-test-{{ s.id }}" style="margin-left:8px"></div>
                 </div>
-                <div id="smtp-test-{{ s.id }}" style="margin-top:4px"></div>
-            </td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table>
+            </form>
+        </div>
+    </details>
+    {% endfor %}
     {% else %}
     <div class="empty-state">
         <div class="icon">&#9993;</div>
@@ -94,7 +128,7 @@
                     <input name="daily_limit" type="number" value="50000">
                     <div class="form-help">0 = unlimited</div>
 
-                    <label>SOCKS5 Proxy (optional)</label>
+                    <label>SOCKS5 Proxy</label>
                     <input name="proxy" placeholder="socks5://ip:port:user:pass">
 
                     <div style="margin-top:12px">
@@ -102,7 +136,6 @@
                             <input type="checkbox" name="proxy_required" value="1" style="width:auto">
                             <span>Proxy Killswitch — block sending if proxy is down</span>
                         </label>
-                        <div class="form-help">When enabled, mailing stops immediately if the proxy connection fails (like a VPN killswitch).</div>
                     </div>
                 </div>
             </div>

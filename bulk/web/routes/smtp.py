@@ -1,4 +1,4 @@
-"""SMTP Presets page — CRUD + connection testing."""
+"""SMTP Presets page — CRUD + editing + connection testing."""
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -25,6 +25,29 @@ async def add_smtp(request: Request, name: str = Form(""), host: str = Form(""),
     return RedirectResponse("/smtp", status_code=303)
 
 
+@router.post("/smtp/{sid}/save")
+async def save_smtp(request: Request, sid: int,
+                    name: str = Form(""), host: str = Form(""),
+                    port: int = Form(587), username: str = Form(""),
+                    password: str = Form(""), provider_type: str = Form("generic"),
+                    daily_limit: int = Form(0), proxy: str = Form(""),
+                    proxy_required: int = Form(0)):
+    db = request.app.state.db
+    c = db._conn()
+    if password.strip():
+        c.execute("UPDATE smtp_presets SET name=?,host=?,port=?,username=?,password=?,"
+                  "provider_type=?,daily_limit=?,proxy=?,proxy_required=? WHERE id=?",
+                  (name, host, port, username, password, provider_type,
+                   daily_limit, proxy, proxy_required, sid))
+    else:
+        c.execute("UPDATE smtp_presets SET name=?,host=?,port=?,username=?,"
+                  "provider_type=?,daily_limit=?,proxy=?,proxy_required=? WHERE id=?",
+                  (name, host, port, username, provider_type,
+                   daily_limit, proxy, proxy_required, sid))
+    c.commit()
+    return RedirectResponse("/smtp", status_code=303)
+
+
 @router.post("/smtp/{sid}/delete")
 async def delete_smtp(request: Request, sid: int):
     request.app.state.db.delete_smtp(sid)
@@ -33,7 +56,6 @@ async def delete_smtp(request: Request, sid: int):
 
 @router.post("/smtp/{sid}/test", response_class=HTMLResponse)
 async def test_smtp(request: Request, sid: int):
-    """Test SMTP connection (with proxy if configured)."""
     db = request.app.state.db
     row = db._conn().execute("SELECT * FROM smtp_presets WHERE id=?", (sid,)).fetchone()
     if not row:

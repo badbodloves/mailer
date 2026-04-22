@@ -48,13 +48,35 @@ async def cloudflare_page(request: Request):
     for a in db.get_cf_accounts():
         ad = dict(a)
         ad["domains"] = _pull_results.get(a["id"], [])
-        r2, _ = _get_r2(db, a["id"])
-        ad["r2_enabled"] = r2.enabled if r2 else False
-        ad["buckets"] = r2.list_buckets() if r2 and r2.enabled else []
+        ad["r2_enabled"] = bool(ad.get("r2_access_key") and ad.get("r2_secret_key") and ad.get("account_id"))
+        ad["buckets"] = []
         accounts.append(ad)
     return tpl.TemplateResponse(request, "cloudflare.html", {
         "active": "cloudflare", "accounts": accounts, "db": db,
     })
+
+
+@router.get("/cloudflare/{cid}/r2/buckets", response_class=HTMLResponse)
+async def r2_list_buckets(request: Request, cid: int):
+    """HTMX: load bucket list on demand."""
+    r2, _ = _get_r2(request.app.state.db, cid)
+    if not r2 or not r2.enabled:
+        return HTMLResponse('<p style="color:var(--fg2);font-size:13px">R2 not configured (missing keys).</p>')
+    buckets = r2.list_buckets()
+    if not buckets:
+        return HTMLResponse('<p style="color:var(--fg2);font-size:13px">No buckets found.</p>')
+    html = ""
+    for b in buckets:
+        html += (f'<div style="display:flex;align-items:center;gap:8px;padding:8px 0;'
+                 f'border-bottom:1px solid var(--border-light)">'
+                 f'<span style="font-weight:500;flex:1">{b}</span>'
+                 f'<button class="btn btn-secondary btn-xs" '
+                 f'hx-get="/cloudflare/{cid}/r2/{b}/files" '
+                 f'hx-target="#r2-files-{cid}" hx-swap="innerHTML">Browse</button>'
+                 f'<form method="post" action="/cloudflare/{cid}/r2/enable-public" style="display:inline">'
+                 f'<input type="hidden" name="bucket" value="{b}">'
+                 f'<button class="btn btn-secondary btn-xs">Public</button></form></div>')
+    return HTMLResponse(html)
 
 
 # ─── Account CRUD ────────────────────────────────────────

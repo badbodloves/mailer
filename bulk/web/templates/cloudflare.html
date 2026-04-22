@@ -110,79 +110,59 @@
     {% if a.r2_enabled %}
     <div id="cf-r2-tab-{{ a.id }}" class="tab-content">
         <div class="grid-2" style="align-items:start">
-            <!-- Buckets -->
             <div>
-                <h3 style="font-size:14px">Buckets <span class="count">{{ a.buckets|length }}</span></h3>
-                {% if a.buckets %}
-                {% for b in a.buckets %}
-                <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-light)">
-                    <span style="font-weight:500;flex:1">{{ b }}</span>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+                    <h3 style="font-size:14px;margin:0">Buckets</h3>
                     <button class="btn btn-secondary btn-xs"
-                            hx-get="/cloudflare/{{ a.id }}/r2/{{ b }}/files"
-                            hx-target="#r2-files-{{ a.id }}"
-                            hx-swap="innerHTML">Browse</button>
-                    <form method="post" action="/cloudflare/{{ a.id }}/r2/enable-public" style="display:inline">
-                        <input type="hidden" name="bucket" value="{{ b }}">
-                        <button class="btn btn-secondary btn-xs">Public</button>
-                    </form>
+                            hx-get="/cloudflare/{{ a.id }}/r2/buckets"
+                            hx-target="#r2-buckets-{{ a.id }}"
+                            hx-swap="innerHTML">Load Buckets</button>
                 </div>
-                {% endfor %}
-                {% else %}
-                <p style="color:var(--fg2);font-size:13px">No buckets.</p>
-                {% endif %}
-
-                <div style="margin-top:12px">
-                    <form method="post" action="/cloudflare/{{ a.id }}/r2/create-bucket" class="form-row">
-                        <div><input name="bucket_name" placeholder="new-bucket-name" required style="margin:0"></div>
-                        <div class="shrink"><button class="btn btn-primary btn-sm">Create</button></div>
-                    </form>
+                <div id="r2-buckets-{{ a.id }}"
+                     hx-get="/cloudflare/{{ a.id }}/r2/buckets"
+                     hx-trigger="intersect once"
+                     hx-swap="innerHTML">
+                    <p style="color:var(--fg2);font-size:13px">Loading buckets...</p>
                 </div>
 
-                <div style="margin-top:8px">
-                    <form method="post" action="/cloudflare/{{ a.id }}/r2/add-domain" class="form-row">
-                        <div><input name="domain" placeholder="cdn.yourdomain.com" style="margin:0">
-                        <input type="hidden" name="bucket" value="{{ a.buckets[0] if a.buckets else '' }}"></div>
-                        <div class="shrink"><button class="btn btn-secondary btn-sm">Add Domain</button></div>
-                    </form>
-                </div>
+                <div class="divider"></div>
+                <form method="post" action="/cloudflare/{{ a.id }}/r2/create-bucket" class="form-row">
+                    <div><input name="bucket_name" placeholder="new-bucket-name" required style="margin:0"></div>
+                    <div class="shrink"><button class="btn btn-primary btn-sm">Create Bucket</button></div>
+                </form>
+                <form method="post" action="/cloudflare/{{ a.id }}/r2/add-domain" class="form-row" style="margin-top:8px">
+                    <div><input name="domain" placeholder="cdn.yourdomain.com" style="margin:0">
+                    <input type="hidden" name="bucket" value=""></div>
+                    <div class="shrink"><button class="btn btn-secondary btn-sm">Add Domain</button></div>
+                </form>
             </div>
 
-            <!-- Upload -->
             <div>
                 <h3 style="font-size:14px">Upload Files</h3>
-                {% if a.buckets %}
-                <form hx-post="/cloudflare/{{ a.id }}/r2/{{ a.buckets[0] }}/upload"
-                      hx-target="#r2-upload-{{ a.id }}"
-                      hx-swap="innerHTML"
-                      hx-encoding="multipart/form-data">
-                    <label>Target Bucket</label>
-                    <select name="target_bucket" style="margin-bottom:8px">
-                        {% for b in a.buckets %}
-                        <option value="{{ b }}">{{ b }}</option>
-                        {% endfor %}
-                    </select>
+                <form hx-encoding="multipart/form-data" id="r2-upload-form-{{ a.id }}">
+                    <label>Bucket Name</label>
+                    <input name="bucket" placeholder="Enter bucket name" style="margin-bottom:8px" required
+                           id="r2-bucket-input-{{ a.id }}">
 
-                    <label>Prefix (optional subfolder)</label>
+                    <label>Prefix (optional)</label>
                     <input name="prefix" placeholder="logos/" style="margin-bottom:8px">
 
                     <label>Files (multi-select)</label>
                     <input type="file" name="files" multiple required>
 
                     <div style="margin-top:10px">
-                        <button class="btn btn-primary btn-sm">Upload</button>
+                        <button type="button" class="btn btn-primary btn-sm"
+                                onclick="var f=document.getElementById('r2-upload-form-{{ a.id }}');var b=document.getElementById('r2-bucket-input-{{ a.id }}').value;if(b){htmx.ajax('POST','/cloudflare/{{ a.id }}/r2/'+b+'/upload',{source:f,target:'#r2-upload-{{ a.id }}',swap:'innerHTML'})}else{alert('Enter bucket name')}">Upload</button>
                     </div>
                 </form>
                 <div id="r2-upload-{{ a.id }}" style="margin-top:10px"></div>
-                {% else %}
-                <p style="color:var(--fg2);font-size:13px">Create a bucket first.</p>
-                {% endif %}
             </div>
         </div>
 
         <div class="divider"></div>
         <h3 style="font-size:14px">File Browser</h3>
         <div id="r2-files-{{ a.id }}">
-            <p style="color:var(--fg2);font-size:13px">Click "Browse" next to a bucket.</p>
+            <p style="color:var(--fg2);font-size:13px">Click "Browse" next to a bucket above.</p>
         </div>
     </div>
     {% endif %}

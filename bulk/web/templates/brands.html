@@ -66,23 +66,36 @@
 
                         <label>From Email</label>
                         <input name="from_email" value="{{ d.from_email or '' }}" placeholder="news@{{ d.domain }}">
-                    </div>
-                    <div>
+
                         <label>Reply-To Email</label>
                         <input name="reply_to_email" value="{{ d.reply_to_email or '' }}" placeholder="reply@{{ d.domain }}">
-                        <div class="form-help">Leave empty to omit Reply-To (From is used by default)</div>
-
+                        <div class="form-help">Leave empty to omit (From is used by default)</div>
+                    </div>
+                    <div>
                         <label>Bounce Subdomain</label>
                         <input name="send_subdomain" value="{{ d.send_subdomain or 'mail' }}" placeholder="mail">
                         <div class="form-help">Only for generic SMTP. SES handles this automatically.</div>
+
+                        <label>Unsub Domain</label>
+                        <input name="unsub_domain" value="{{ d.unsub_domain or '' }}" placeholder="unsub.{{ d.domain }}">
+                        <div class="form-help">Where the unsub worker runs. Default: unsub.{{ d.domain }}</div>
                     </div>
                 </div>
-                <div style="margin-top:12px" class="btn-group">
+                <div style="margin-top:14px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
                     <button class="btn btn-primary btn-sm">Save</button>
+                    <button type="button" class="btn btn-secondary btn-sm"
+                            hx-post="/domains/{{ d.id }}/check-unsub"
+                            hx-target="#unsub-status-{{ d.id }}"
+                            hx-swap="innerHTML">Check Unsub Worker</button>
                     <form method="post" action="/domains/{{ d.id }}/delete"
                           onsubmit="return confirm('Delete domain {{ d.domain }}?')">
                         <button class="btn btn-danger btn-sm">Delete</button>
                     </form>
+                </div>
+                <div id="unsub-status-{{ d.id }}" style="margin-top:8px">
+                    {% if d.unsub_worker_deployed %}
+                    <span class="badge badge-running">Unsub Worker Active</span>
+                    {% endif %}
                 </div>
             </form>
         </div>
