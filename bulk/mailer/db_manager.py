@@ -156,9 +156,61 @@ class BulkDBManager:
                     finished_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL UNIQUE,
+                    password_hash TEXT NOT NULL,
+                    display_name TEXT DEFAULT '',
+                    logo_path TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             c.commit()
             self._initialized = True
+
+    # --- Users / Auth ---
+    def get_user(self, username: str):
+        return self._conn().execute(
+            "SELECT * FROM users WHERE username=?", (username,)).fetchone()
+
+    def get_user_by_id(self, uid: int):
+        return self._conn().execute(
+            "SELECT * FROM users WHERE id=?", (uid,)).fetchone()
+
+    def create_user(self, username: str, password_hash: str,
+                    display_name: str = "") -> int:
+        c = self._conn()
+        c.execute("INSERT INTO users (username, password_hash, display_name) "
+                  "VALUES (?,?,?)", (username, password_hash, display_name))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def update_user_profile(self, uid: int, display_name: str = "",
+                            logo_path: str = ""):
+        c = self._conn()
+        c.execute("UPDATE users SET display_name=?, logo_path=? WHERE id=?",
+                  (display_name, logo_path, uid))
+        c.commit()
+
+    def update_user_password(self, uid: int, password_hash: str):
+        c = self._conn()
+        c.execute("UPDATE users SET password_hash=? WHERE id=?",
+                  (password_hash, uid))
+        c.commit()
+
+    def get_all_users(self) -> list:
+        return self._conn().execute(
+            "SELECT id, username, display_name, logo_path, created_at "
+            "FROM users ORDER BY username").fetchall()
+
+    def delete_user(self, uid: int):
+        c = self._conn()
+        c.execute("DELETE FROM users WHERE id=?", (uid,))
+        c.commit()
+
+    def user_count(self) -> int:
+        r = self._conn().execute("SELECT COUNT(*) FROM users").fetchone()
+        return r[0] if r else 0
 
     # --- Brands ---
     def add_brand(self, name: str) -> int:

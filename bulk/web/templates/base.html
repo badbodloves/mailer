@@ -10,8 +10,20 @@
 <body>
     <nav class="sidebar">
         <div class="sidebar-brand">
+            {% set u = request.state.user %}
+            {% if u and u.logo_path %}
+            <a href="/profile" style="display:block;margin-bottom:10px;text-align:center">
+                <img src="{{ u.logo_path }}" alt="Logo"
+                     style="max-width:140px;max-height:50px;object-fit:contain">
+            </a>
+            {% else %}
             <h2>Bulk Mailer</h2>
+            {% endif %}
+            {% if u and u.display_name %}
+            <small>{{ u.display_name }}</small>
+            {% else %}
             <small>Campaign Manager</small>
+            {% endif %}
         </div>
 
         <div class="sidebar-section">Campaigns</div>
@@ -53,6 +65,16 @@
         <a href="/help" class="{{ 'active' if active == 'help' }}">
             <span class="nav-icon">?</span><span>Macro Ref</span>
         </a>
+
+        <div style="flex:1"></div>
+        <div style="border-top:1px solid var(--border-light);padding:10px 12px">
+            <a href="/profile" class="{{ 'active' if active == 'profile' }}" style="font-size:12px">
+                <span class="nav-icon">&#9881;</span><span>Profile</span>
+            </a>
+            <a href="/logout" style="font-size:12px;color:var(--red)">
+                <span class="nav-icon">&#10140;</span><span>Logout</span>
+            </a>
+        </div>
     </nav>
     <div class="main">
         {% block content %}{% endblock %}
