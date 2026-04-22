@@ -40,8 +40,8 @@ async def logs_page(request: Request):
     tpl = request.app.state.templates
     log_text = _read_log_tail(LOG_FILE, 50)
     history = _get_mailing_history(db)
-    return tpl.TemplateResponse("logs.html", {
-        "request": request, "active": "logs", "db": db,
+    return tpl.TemplateResponse(request, "logs.html", {
+        "active": "logs", "db": db,
         "log_text": log_text, "history": history,
     })
 

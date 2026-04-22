@@ -24,8 +24,8 @@ async def mailings_page(request: Request):
         m["pct"] = int((sent + failed) / total * 100) if total > 0 else 0
         m["running"] = m["id"] in _cores
         mailings.append(m)
-    return tpl.TemplateResponse("mailings.html", {
-        "request": request, "active": "mailings", "mailings": mailings,
+    return tpl.TemplateResponse(request, "mailings.html", {
+        "active": "mailings", "mailings": mailings,
         "brands": db.get_brands(), "domains": db.get_domains(),
         "lists": db.get_lists(), "smtps": db.get_smtps(),
         "templates": db.get_templates(), "db": db,

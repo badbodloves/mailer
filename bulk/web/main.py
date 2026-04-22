@@ -41,8 +41,8 @@ app.include_router(macro_help.router)
 
 @app.get("/")
 async def index(request: Request):
-    return templates.TemplateResponse("mailings.html", {
-        "request": request, "active": "mailings", "mailings": [], "db": db,
+    return templates.TemplateResponse(request, "mailings.html", {
+        "active": "mailings", "mailings": [], "db": db,
         "brands": db.get_brands(), "domains": db.get_domains(),
         "lists": db.get_lists(), "smtps": db.get_smtps(),
         "templates": db.get_templates(),

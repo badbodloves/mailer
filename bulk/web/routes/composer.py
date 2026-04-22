@@ -17,8 +17,8 @@ async def composer_page(request: Request):
         td["sender_rotate"] = json.loads(td.get("sender_rotate_json") or "[]")
         td["settings"] = json.loads(td.get("settings_json") or "{}")
         templates.append(td)
-    return tpl.TemplateResponse("composer.html", {
-        "request": request, "active": "composer", "templates": templates, "db": db,
+    return tpl.TemplateResponse(request, "composer.html", {
+        "active": "composer", "templates": templates, "db": db,
     })
 
 

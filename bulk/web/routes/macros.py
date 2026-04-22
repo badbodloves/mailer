@@ -15,8 +15,8 @@ async def macros_page(request: Request):
         md = dict(m)
         md["values"] = json.loads(md.get("values_json") or "[]")
         macros.append(md)
-    return tpl.TemplateResponse("macros.html", {
-        "request": request, "active": "macros", "macros": macros, "db": db,
+    return tpl.TemplateResponse(request, "macros.html", {
+        "active": "macros", "macros": macros, "db": db,
     })
 
 
@@ -73,7 +73,7 @@ async def import_macros(request: Request, file: UploadFile = File(...)):
         md = dict(m)
         md["values"] = json.loads(md.get("values_json") or "[]")
         macros.append(md)
-    return request.app.state.templates.TemplateResponse("macros.html", {
-        "request": request, "active": "macros", "macros": macros, "db": db,
+    return request.app.state.templates.TemplateResponse(request, "macros.html", {
+        "active": "macros", "macros": macros, "db": db,
         "flash": f"Imported {added} macros" if added else "Import failed — invalid JSON",
     })

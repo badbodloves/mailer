@@ -14,8 +14,8 @@ async def preview_page(request: Request):
     db = request.app.state.db
     tpl = request.app.state.templates
     templates = [dict(t) for t in db.get_templates()]
-    return tpl.TemplateResponse("preview.html", {
-        "request": request, "active": "preview", "db": db,
+    return tpl.TemplateResponse(request, "preview.html", {
+        "active": "preview", "db": db,
         "providers": PROVIDERS, "templates": templates,
         "result": None,
     })
@@ -87,8 +87,8 @@ async def preview_build(request: Request,
         text_ratio = 0
 
     templates_list = [dict(t) for t in db.get_templates()]
-    return tpl.TemplateResponse("preview.html", {
-        "request": request, "active": "preview", "db": db,
+    return tpl.TemplateResponse(request, "preview.html", {
+        "active": "preview", "db": db,
         "providers": PROVIDERS, "templates": templates_list,
         "result": {
             "headers": headers_text,

@@ -18,8 +18,8 @@ async def cloudflare_page(request: Request):
         ad = dict(a)
         ad["domains"] = _pull_results.get(a["id"], [])
         accounts.append(ad)
-    return tpl.TemplateResponse("cloudflare.html", {
-        "request": request, "active": "cloudflare", "accounts": accounts, "db": db,
+    return tpl.TemplateResponse(request, "cloudflare.html", {
+        "active": "cloudflare", "accounts": accounts, "db": db,
     })
 
 

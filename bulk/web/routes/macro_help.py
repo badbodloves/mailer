@@ -7,6 +7,6 @@ router = APIRouter()
 
 @router.get("/help", response_class=HTMLResponse)
 async def help_page(request: Request):
-    return request.app.state.templates.TemplateResponse("macro_help.html", {
-        "request": request, "active": "help", "db": request.app.state.db,
+    return request.app.state.templates.TemplateResponse(request, "macro_help.html", {
+        "active": "help", "db": request.app.state.db,
     })

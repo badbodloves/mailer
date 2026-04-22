@@ -27,8 +27,8 @@ async def lists_page(request: Request):
         ld = dict(l)
         ld["count"] = db.get_list_lead_count(l["id"])
         lists_data.append(ld)
-    return request.app.state.templates.TemplateResponse("lists.html", {
-        "request": request, "active": "lists", "lists": lists_data, "db": db,
+    return request.app.state.templates.TemplateResponse(request, "lists.html", {
+        "active": "lists", "lists": lists_data, "db": db,
         "default_excludes": DEFAULT_EXCLUDES,
     })
 
@@ -47,8 +47,8 @@ async def import_lists(request: Request, exclude_rules: str = Form(""),
         added = db.import_leads(list_id, filtered)
         excluded = len(all_emails) - len(filtered)
         summary.append(f"{name}: {added:,} leads" + (f" ({excluded} excluded)" if excluded else ""))
-    return request.app.state.templates.TemplateResponse("lists.html", {
-        "request": request, "active": "lists", "summary": summary,
+    return request.app.state.templates.TemplateResponse(request, "lists.html", {
+        "active": "lists", "summary": summary,
         "lists": [dict(l, count=db.get_list_lead_count(l["id"])) for l in db.get_lists()],
         "db": db, "default_excludes": DEFAULT_EXCLUDES,
     })
@@ -63,8 +63,8 @@ async def list_leads(request: Request, lid: int, q: str = ""):
             "SELECT id, email, state FROM leads WHERE list_id=? LIMIT 500", (lid,)).fetchall()]
     stats = db.mailing_stats(lid)
     list_name = db._conn().execute("SELECT name FROM lead_lists WHERE id=?", (lid,)).fetchone()
-    return request.app.state.templates.TemplateResponse("lists_detail.html", {
-        "request": request, "active": "lists", "leads": leads, "stats": stats,
+    return request.app.state.templates.TemplateResponse(request, "lists_detail.html", {
+        "active": "lists", "leads": leads, "stats": stats,
         "lid": lid, "query": q, "list_name": list_name["name"] if list_name else str(lid),
     })
 
@@ -85,8 +85,8 @@ async def compare_lists(request: Request, list_a: int = Form(0), list_b: int = F
     c = db._conn()
     a_emails = {r[0] for r in c.execute("SELECT email FROM leads WHERE list_id=?", (list_a,)).fetchall()}
     b_emails = {r[0] for r in c.execute("SELECT email FROM leads WHERE list_id=?", (list_b,)).fetchall()}
-    return request.app.state.templates.TemplateResponse("lists.html", {
-        "request": request, "active": "lists", "db": db, "default_excludes": DEFAULT_EXCLUDES,
+    return request.app.state.templates.TemplateResponse(request, "lists.html", {
+        "active": "lists", "db": db, "default_excludes": DEFAULT_EXCLUDES,
         "lists": [dict(l, count=db.get_list_lead_count(l["id"])) for l in db.get_lists()],
         "compare": {"both": len(a_emails & b_emails), "only_a": len(a_emails - b_emails),
                      "only_b": len(b_emails - a_emails), "list_a": list_a, "list_b": list_b},

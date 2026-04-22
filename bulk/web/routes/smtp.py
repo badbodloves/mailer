@@ -9,8 +9,8 @@ async def smtp_page(request: Request):
     db = request.app.state.db
     db.reset_daily_counts()
     smtps = [dict(s) for s in db.get_smtps()]
-    return request.app.state.templates.TemplateResponse("smtp.html",
-        {"request": request, "active": "smtp", "smtps": smtps, "db": db})
+    return request.app.state.templates.TemplateResponse(request, "smtp.html",
+        {"active": "smtp", "smtps": smtps, "db": db})
 
 @router.post("/smtp/add")
 async def add_smtp(request: Request, name: str = Form(""), host: str = Form(""),

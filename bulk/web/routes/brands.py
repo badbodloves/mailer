@@ -16,7 +16,7 @@ async def brands_page(request: Request):
         bd["used"] = len(db.get_used_lists(b["id"]))
         bd["unused"] = len(db.get_unused_lists(b["id"]))
         brand_data.append(bd)
-    return tpl.TemplateResponse("brands.html", {"request": request, "active": "brands", "brands": brand_data})
+    return tpl.TemplateResponse(request, "brands.html", {"active": "brands", "brands": brand_data})
 
 @router.post("/brands/add")
 async def add_brand(request: Request, name: str = Form("")):
