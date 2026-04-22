@@ -13,7 +13,8 @@ from bulk.mailer.db_manager import BulkDBManager
 
 from .routes import mailings, brands, smtp, lists, composer, macros, preview, cloudflare, logs, macro_help
 
-db = BulkDBManager("bulk.db")
+_project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+db = BulkDBManager(os.path.join(_project_root, "bulk.db"))
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -40,5 +41,9 @@ app.include_router(macro_help.router)
 
 @app.get("/")
 async def index(request: Request):
-    return templates.TemplateResponse("mailings.html", {"request": request, "active": "mailings",
-                                                          "mailings": [], "db": db})
+    return templates.TemplateResponse("mailings.html", {
+        "request": request, "active": "mailings", "mailings": [], "db": db,
+        "brands": db.get_brands(), "domains": db.get_domains(),
+        "lists": db.get_lists(), "smtps": db.get_smtps(),
+        "templates": db.get_templates(),
+    })
