@@ -35,17 +35,18 @@ class SMTPTab(QWidget):
         rows = self.db.get_smtps()
         self.table.setRowCount(len(rows))
         for i, r in enumerate(rows):
-            self.table.setItem(i, 0, QTableWidgetItem(r["name"]))
-            self.table.setItem(i, 1, QTableWidgetItem(r["host"]))
-            self.table.setItem(i, 2, QTableWidgetItem(str(r["port"])))
-            self.table.setItem(i, 3, QTableWidgetItem(r.get("provider_type", "generic")))
-            self.table.setItem(i, 4, QTableWidgetItem(r["username"]))
-            self.table.setItem(i, 5, QTableWidgetItem(str(r["daily_limit"])))
-            self.table.setItem(i, 6, QTableWidgetItem(str(r["sent_today"])))
+            rd = dict(r)
+            self.table.setItem(i, 0, QTableWidgetItem(rd.get("name", "")))
+            self.table.setItem(i, 1, QTableWidgetItem(rd.get("host", "")))
+            self.table.setItem(i, 2, QTableWidgetItem(str(rd.get("port", 587))))
+            self.table.setItem(i, 3, QTableWidgetItem(rd.get("provider_type", "generic")))
+            self.table.setItem(i, 4, QTableWidgetItem(rd.get("username", "")))
+            self.table.setItem(i, 5, QTableWidgetItem(str(rd.get("daily_limit", 0))))
+            self.table.setItem(i, 6, QTableWidgetItem(str(rd.get("sent_today", 0))))
             for j in range(7):
                 item = self.table.item(i, j)
                 if item:
-                    item.setData(Qt.UserRole, r["id"])
+                    item.setData(Qt.UserRole, rd["id"])
 
     def _get_selected_id(self):
         row = self.table.currentRow()
@@ -68,7 +69,7 @@ class SMTPTab(QWidget):
         row = self.db._conn().execute("SELECT * FROM smtp_presets WHERE id=?", (sid,)).fetchone()
         if not row:
             return
-        dlg = SMTPDialog(self, row)
+        dlg = SMTPDialog(self, dict(row))
         if dlg.exec() == QDialog.Accepted:
             d = dlg.get_data()
             c = self.db._conn()

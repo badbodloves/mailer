@@ -52,6 +52,10 @@ class BrandsTab(QWidget):
         save_btn = QPushButton("Save Domain")
         save_btn.clicked.connect(self._save_domain)
         df.addRow(save_btn)
+
+        deploy_btn = QPushButton("Deploy Unsub Worker for this Domain")
+        deploy_btn.clicked.connect(self._deploy_unsub)
+        df.addRow(deploy_btn)
         rl.addWidget(dom_box)
 
         # List usage overview
@@ -184,6 +188,100 @@ class BrandsTab(QWidget):
         c.commit()
         self._refresh()
         QMessageBox.information(self, "Saved", "Domain settings saved")
+
+    def _deploy_unsub(self):
+        if not self._current_domain_id:
+            QMessageBox.warning(self, "Select", "Select a domain first")
+            return
+        row = self.db._conn().execute("SELECT * FROM domains WHERE id=?",
+                                       (self._current_domain_id,)).fetchone()
+        if not row:
+            return
+        domain = row["domain"]
+        unsub_domain = f"unsub.{domain}"
+
+        cf_accounts = self.db.get_cf_accounts()
+        if not cf_accounts:
+            QMessageBox.warning(self, "Cloudflare", "Add a Cloudflare account first (Cloudflare tab)")
+            return
+
+        acct = dict(cf_accounts[0])
+        account_id = acct.get("account_id", "")
+        if acct.get("global_api_key") and acct.get("auth_email"):
+            headers = {"X-Auth-Key": acct["global_api_key"],
+                       "X-Auth-Email": acct["auth_email"],
+                       "Content-Type": "application/json"}
+            upload_headers = {"X-Auth-Key": acct["global_api_key"],
+                              "X-Auth-Email": acct["auth_email"]}
+        else:
+            token = acct.get("api_token", "")
+            headers = {"Authorization": f"Bearer {token}",
+                       "Content-Type": "application/json"}
+            upload_headers = {"Authorization": f"Bearer {token}"}
+
+        if not account_id:
+            QMessageBox.warning(self, "Cloudflare", "Account ID missing")
+            return
+
+        import threading
+        def deploy():
+            import requests, json as j, os
+            worker_name = f"unsub-{domain.replace('.', '-')}"
+            kv_name = f"unsub-{domain.replace('.', '-')}"
+
+            # Step 1: KV
+            resp = requests.post(
+                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/storage/kv/namespaces",
+                headers=headers, json={"title": kv_name}, timeout=30)
+            if resp.status_code == 200 and resp.json().get("success"):
+                ns_id = resp.json()["result"]["id"]
+            else:
+                ns_list = requests.get(
+                    f"https://api.cloudflare.com/client/v4/accounts/{account_id}/storage/kv/namespaces",
+                    headers=headers, timeout=30).json()
+                ns_id = next((n["id"] for n in ns_list.get("result", []) if n["title"] == kv_name), None)
+            if not ns_id:
+                QMessageBox.warning(self, "Error", "Could not create KV namespace")
+                return
+
+            # Step 2: Worker
+            worker_path = os.path.join(os.path.dirname(__file__), "..", "cloudflare", "unsubscribe-worker.js")
+            if not os.path.isfile(worker_path):
+                QMessageBox.warning(self, "Error", f"Worker script not found: {worker_path}")
+                return
+            with open(worker_path, "r") as f:
+                code = f.read()
+            metadata = j.dumps({"main_module": "worker.mjs", "compatibility_date": "2026-04-01",
+                                 "bindings": [{"type": "kv_namespace", "name": "UNSUB_KV", "namespace_id": ns_id}]})
+            resp = requests.put(
+                f"https://api.cloudflare.com/client/v4/accounts/{account_id}/workers/scripts/{worker_name}",
+                headers=upload_headers,
+                files={"metadata": ("metadata.json", metadata, "application/json"),
+                       "worker.mjs": ("worker.mjs", code, "application/javascript+module")},
+                timeout=30)
+            if not (resp.status_code == 200 and resp.json().get("success")):
+                QMessageBox.warning(self, "Error", f"Worker deploy failed: {resp.text[:200]}")
+                return
+
+            # Step 3: Route
+            zones = requests.get(f"https://api.cloudflare.com/client/v4/zones",
+                                  headers=headers, params={"name": domain}, timeout=15).json()
+            zone_id = None
+            for z in zones.get("result", []):
+                if z["name"] == domain:
+                    zone_id = z["id"]
+                    break
+            if zone_id:
+                requests.post(f"https://api.cloudflare.com/client/v4/zones/{zone_id}/workers/routes",
+                              headers=headers,
+                              json={"pattern": f"{unsub_domain}/*", "script": worker_name}, timeout=15)
+
+            self.db.mark_unsub_deployed(self._current_domain_id, unsub_domain)
+            self.lbl_unsub.setText(f"✓ Deployed ({unsub_domain})")
+            self._refresh()
+            QMessageBox.information(self, "Done", f"Unsub worker deployed for {unsub_domain}")
+
+        threading.Thread(target=deploy, daemon=True).start()
 
     def _load_list_usage(self, brand_id):
         used = self.db.get_used_lists(brand_id)
