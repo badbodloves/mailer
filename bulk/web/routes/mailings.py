@@ -1,4 +1,4 @@
-"""Mailings page — list, add, edit, start, stop, delete."""
+"""Mailings page — persistent campaigns with edit, start, stop, resend."""
 import json
 import time
 import threading
@@ -8,6 +8,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 router = APIRouter()
 _cores = {}
 _threads = {}
+_speed = {}
 
 
 @router.get("/mailings", response_class=HTMLResponse)
@@ -23,6 +24,20 @@ async def mailings_page(request: Request):
         failed = m.get("failed", 0) or 0
         m["pct"] = int((sent + failed) / total * 100) if total > 0 else 0
         m["running"] = m["id"] in _cores
+        m["speed"] = _speed.get(m["id"], 0)
+        m["remaining"] = max(0, total - sent - failed)
+        try:
+            sm = db._conn().execute("SELECT name FROM smtp_presets WHERE id=?",
+                                     (m["smtp_preset_id"],)).fetchone()
+            m["smtp_name"] = sm["name"] if sm else "—"
+        except Exception:
+            m["smtp_name"] = "—"
+        try:
+            dm = db._conn().execute("SELECT domain FROM domains WHERE id=?",
+                                     (m["domain_id"],)).fetchone()
+            m["domain_name"] = dm["domain"] if dm else "—"
+        except Exception:
+            m["domain_name"] = "—"
         mailings.append(m)
     return tpl.TemplateResponse(request, "mailings.html", {
         "active": "mailings", "mailings": mailings,
@@ -54,6 +69,44 @@ async def add_mailing(request: Request,
     return RedirectResponse("/mailings", status_code=303)
 
 
+@router.post("/mailings/{mid}/save")
+async def save_mailing(request: Request, mid: int,
+                       name: str = Form(""), brand_id: int = Form(0),
+                       domain_id: int = Form(0), list_id: int = Form(0),
+                       smtp_preset_id: int = Form(0), template_id: int = Form(0),
+                       daily_limit: int = Form(0), exclude_domains: str = Form(""),
+                       test_email: str = Form(""), test_interval: int = Form(0),
+                       schedule_time: str = Form("")):
+    db = request.app.state.db
+    excludes = [d.strip() for d in exclude_domains.split(",") if d.strip()]
+    c = db._conn()
+    c.execute("UPDATE mailings SET name=?,brand_id=?,domain_id=?,list_id=?,"
+              "smtp_preset_id=?,template_id=?,daily_limit=?,exclude_domains_json=?,"
+              "test_email=?,test_interval=?,schedule_time=?,total_leads=? WHERE id=?",
+              (name, brand_id, domain_id, list_id, smtp_preset_id, template_id,
+               daily_limit, json.dumps(excludes), test_email, test_interval,
+               schedule_time, db.get_list_lead_count(list_id), mid))
+    c.commit()
+    return RedirectResponse("/mailings", status_code=303)
+
+
+@router.post("/mailings/{mid}/reset")
+async def reset_mailing(request: Request, mid: int):
+    """Reset all leads to PENDING so mailing can be re-sent."""
+    if mid in _cores:
+        return RedirectResponse("/mailings", status_code=303)
+    db = request.app.state.db
+    m = db._conn().execute("SELECT list_id FROM mailings WHERE id=?", (mid,)).fetchone()
+    if m:
+        c = db._conn()
+        c.execute("UPDATE leads SET state='PENDING' WHERE list_id=? AND state IN ('SENT','FAILED','EXCLUDED')",
+                  (m["list_id"],))
+        c.execute("UPDATE mailings SET sent=0,failed=0,excluded=0,status='DRAFT',"
+                  "started_at=NULL,finished_at=NULL WHERE id=?", (mid,))
+        c.commit()
+    return RedirectResponse("/mailings", status_code=303)
+
+
 @router.post("/mailings/{mid}/start")
 async def start_mailing(request: Request, mid: int):
     db = request.app.state.db
@@ -63,6 +116,7 @@ async def start_mailing(request: Request, mid: int):
     from bulk.mailer.bulk_core import BulkMailerCore
     core = BulkMailerCore(db, mid)
     _cores[mid] = core
+    _speed[mid] = 0
 
     def run():
         try:
@@ -82,12 +136,42 @@ async def start_mailing(request: Request, mid: int):
                         wait = (target - datetime.now()).total_seconds()
                 except ValueError:
                     pass
+
+            last_check = time.monotonic()
+            last_sent = 0
+
+            original_run = core.run
+
+            def tracked_run():
+                nonlocal last_check, last_sent
+                original_run()
+
+            def speed_tracker():
+                nonlocal last_check, last_sent
+                while mid in _cores:
+                    time.sleep(5)
+                    try:
+                        m = db._conn().execute("SELECT sent FROM mailings WHERE id=?", (mid,)).fetchone()
+                        now_sent = m["sent"] if m else 0
+                        now_t = time.monotonic()
+                        elapsed = now_t - last_check
+                        if elapsed > 0:
+                            rate = (now_sent - last_sent) / elapsed * 3600
+                            _speed[mid] = int(rate)
+                        last_check = now_t
+                        last_sent = now_sent
+                    except Exception:
+                        pass
+
+            st = threading.Thread(target=speed_tracker, daemon=True)
+            st.start()
             core.run()
         except Exception as e:
             import logging
             logging.getLogger("bulk.web").error("Mailing %d error: %s", mid, e)
         finally:
             _cores.pop(mid, None)
+            _speed.pop(mid, None)
 
     t = threading.Thread(target=run, daemon=True)
     t.start()
@@ -117,25 +201,30 @@ async def delete_mailing(request: Request, mid: int):
 
 @router.get("/mailings/{mid}/stats", response_class=HTMLResponse)
 async def mailing_stats(request: Request, mid: int):
-    """HTMX polling endpoint for live stats."""
     db = request.app.state.db
     m = db._conn().execute("SELECT * FROM mailings WHERE id=?", (mid,)).fetchone()
     if not m:
-        return "<div>Not found</div>"
+        return HTMLResponse("<div>Not found</div>")
     md = dict(m)
     total = md.get("total_leads", 0) or 0
     sent = md.get("sent", 0) or 0
     failed = md.get("failed", 0) or 0
+    remaining = max(0, total - sent - failed)
     pct = int((sent + failed) / total * 100) if total > 0 else 0
     running = mid in _cores
-    return f"""
-    <div class="grid-3" style="margin-bottom:15px">
-        <div class="metric"><div class="value">{sent:,}</div><div class="label">Sent</div></div>
-        <div class="metric"><div class="value">{failed:,}</div><div class="label">Failed</div></div>
-        <div class="metric"><div class="value">{total-sent-failed:,}</div><div class="label">Remaining</div></div>
+    speed = _speed.get(mid, 0)
+    speed_str = f"{speed:,}/h" if speed else "—"
+    status = md.get("status", "DRAFT")
+
+    return HTMLResponse(f"""
+    <div class="grid-4" style="margin-bottom:12px">
+        <div class="metric"><div class="value" style="color:var(--green)">{sent:,}</div><div class="label">Sent</div></div>
+        <div class="metric"><div class="value" style="color:var(--red)">{failed:,}</div><div class="label">Failed</div></div>
+        <div class="metric"><div class="value">{remaining:,}</div><div class="label">Remaining</div></div>
+        <div class="metric"><div class="value">{speed_str}</div><div class="label">Speed</div></div>
     </div>
     <div class="progress"><div class="progress-bar" style="width:{pct}%">{pct}%</div></div>
     <p style="margin-top:8px;font-size:12px;color:var(--fg2)">
-        Status: <span class="badge badge-{'running' if running else md.get('status','draft').lower()}">{md.get('status','DRAFT')}</span>
+        Status: <span class="badge badge-{'running' if running else status.lower()}">{status}</span>
     </p>
-    """
+    """)

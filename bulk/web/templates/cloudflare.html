@@ -72,9 +72,7 @@
 
     <div class="tabs">
         <button class="tab-btn active" onclick="showTab(this.closest('.card'), 'cf-domains-tab-{{ a.id }}')">Domains</button>
-        {% if a.r2_enabled %}
-        <button class="tab-btn" onclick="showTab(this.closest('.card'), 'cf-r2-tab-{{ a.id }}')">R2 Storage</button>
-        {% endif %}
+        <button class="tab-btn" onclick="showTab(this.closest('.card'), 'cf-r2-tab-{{ a.id }}')">R2 Buckets</button>
         <button class="tab-btn" onclick="showTab(this.closest('.card'), 'cf-worker-tab-{{ a.id }}')">Unsub Worker</button>
     </div>
 
@@ -107,8 +105,12 @@
     </div>
 
     <!-- R2 Storage Tab -->
-    {% if a.r2_enabled %}
     <div id="cf-r2-tab-{{ a.id }}" class="tab-content">
+    {% if not a.r2_enabled %}
+        <div class="alert alert-warning">
+            R2 credentials not configured. Add R2 Access Key and Secret Key to this account to use R2 storage.
+        </div>
+    {% else %}
         <div class="grid-2" style="align-items:start">
             <div>
                 <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
@@ -164,8 +166,8 @@
         <div id="r2-files-{{ a.id }}">
             <p style="color:var(--fg2);font-size:13px">Click "Browse" next to a bucket above.</p>
         </div>
-    </div>
     {% endif %}
+    </div>
 
     <!-- Unsub Worker Tab -->
     <div id="cf-worker-tab-{{ a.id }}" class="tab-content">

@@ -26,9 +26,20 @@ async def lists_page(request: Request):
     for l in db.get_lists():
         ld = dict(l)
         ld["count"] = db.get_list_lead_count(l["id"])
+        ld["used_by"] = []
+        rows = db._conn().execute(
+            "SELECT b.name, u.used_at FROM brand_list_usage u "
+            "JOIN brands b ON b.id=u.brand_id WHERE u.list_id=?", (l["id"],)).fetchall()
+        ld["used_by"] = [dict(r) for r in rows]
         lists_data.append(ld)
+
+    brands = [dict(b) for b in db.get_brands()]
+    for bd in brands:
+        bd["used_lists"] = [dict(r) for r in db.get_used_lists(bd["id"])]
+        bd["unused_lists"] = [dict(r) for r in db.get_unused_lists(bd["id"])]
+
     return request.app.state.templates.TemplateResponse(request, "lists.html", {
-        "active": "lists", "lists": lists_data, "db": db,
+        "active": "lists", "lists": lists_data, "brands": brands, "db": db,
         "default_excludes": DEFAULT_EXCLUDES,
     })
 

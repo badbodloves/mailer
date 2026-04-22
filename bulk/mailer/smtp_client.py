@@ -146,9 +146,12 @@ class SMTPClient:
 
         if self._port == 465:
             if proxy_sock:
+                wrapped = ctx.wrap_socket(proxy_sock, server_hostname=self._host)
                 server = smtplib.SMTP_SSL(context=ctx)
-                server.sock = ctx.wrap_socket(proxy_sock, server_hostname=self._host)
+                server.sock = wrapped
                 server._host = self._host
+                server.file = server.sock.makefile("rb")
+                server.getreply()
             else:
                 server = smtplib.SMTP_SSL(self._host, self._port,
                                            timeout=self._timeout, context=ctx)
@@ -158,6 +161,8 @@ class SMTPClient:
                 server = smtplib.SMTP()
                 server.sock = proxy_sock
                 server._host = self._host
+                server.file = server.sock.makefile("rb")
+                server.getreply()
             else:
                 server = smtplib.SMTP(self._host, self._port, timeout=self._timeout)
             server.ehlo()
