@@ -1,44 +1,91 @@
 {% extends "base.html" %}
+{% block title %} — SMTP{% endblock %}
 {% block content %}
-<h1>SMTP Presets</h1>
+<div class="page-header">
+    <h1>SMTP Presets</h1>
+</div>
+
 <div class="card">
+    <div class="card-header">
+        <h3>Configured Servers <span class="count">{{ smtps|length }}</span></h3>
+    </div>
+
+    {% if smtps %}
     <table>
-        <thead><tr><th>Name</th><th>Host</th><th>Port</th><th>Provider</th><th>User</th><th>Limit</th><th>Sent Today</th><th>Proxy</th><th></th></tr></thead>
+        <thead>
+            <tr><th>Name</th><th>Host</th><th>Port</th><th>Provider</th><th>Username</th><th>Daily Limit</th><th>Sent Today</th><th>Proxy</th><th></th></tr>
+        </thead>
         <tbody>
         {% for s in smtps %}
         <tr>
-            <td>{{ s.name }}</td><td>{{ s.host }}</td><td>{{ s.port }}</td>
-            <td>{{ s.get('provider_type','generic') }}</td>
-            <td>{{ s.username }}</td><td>{{ "{:,}".format(s.daily_limit) }}</td>
-            <td>{{ s.sent_today }}</td><td>{{ s.get('proxy','') or '—' }}</td>
-            <td><form method="post" action="/smtp/{{ s.id }}/delete" onsubmit="return confirm('Delete?')">
-                <button class="btn btn-danger btn-sm">Del</button></form></td>
+            <td style="font-weight:500">{{ s.name }}</td>
+            <td>{{ s.host }}</td>
+            <td>{{ s.port }}</td>
+            <td><span class="badge badge-info">{{ s.get('provider_type','generic') }}</span></td>
+            <td style="font-size:12px">{{ s.username }}</td>
+            <td>{{ "{:,}".format(s.daily_limit) }}</td>
+            <td>{{ "{:,}".format(s.sent_today or 0) }}</td>
+            <td style="font-size:12px;color:var(--fg2)">{{ s.get('proxy','') or '—' }}</td>
+            <td>
+                <form method="post" action="/smtp/{{ s.id }}/delete" onsubmit="return confirm('Delete SMTP {{ s.name }}?')">
+                    <button class="btn btn-danger btn-xs">Delete</button>
+                </form>
+            </td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
+    {% else %}
+    <div class="empty-state">
+        <div class="icon">&#9993;</div>
+        <p>No SMTP servers configured. Add one below.</p>
+    </div>
+    {% endif %}
 </div>
-<div class="card">
-    <h3>Add SMTP</h3>
-    <form method="post" action="/smtp/add">
-        <div class="grid-2">
-            <div>
-                <label>Name</label><input name="name" required>
-                <label>Host</label><input name="host" required>
-                <label>Port</label><input name="port" type="number" value="587">
-                <label>Username</label><input name="username" required>
+
+<details {{ 'open' if not smtps }}>
+    <summary>Add SMTP Server</summary>
+    <div class="details-body" style="padding-top:16px">
+        <form method="post" action="/smtp/add">
+            <div class="grid-2">
+                <div>
+                    <label>Preset Name</label>
+                    <input name="name" placeholder="e.g. SES Frankfurt" required>
+
+                    <label>SMTP Host</label>
+                    <input name="host" placeholder="email-smtp.eu-central-1.amazonaws.com" required>
+
+                    <label>Port</label>
+                    <input name="port" type="number" value="587">
+
+                    <label>Username</label>
+                    <input name="username" placeholder="SMTP username" required>
+                </div>
+                <div>
+                    <label>Password</label>
+                    <input name="password" type="password" required>
+
+                    <label>Provider Type</label>
+                    <select name="provider_type">
+                        <option value="generic">Generic SMTP</option>
+                        <option value="ses">Amazon SES</option>
+                        <option value="sendgrid">SendGrid</option>
+                        <option value="mailgun">Mailgun</option>
+                        <option value="postmark">Postmark</option>
+                    </select>
+
+                    <label>Daily Limit</label>
+                    <input name="daily_limit" type="number" value="50000">
+                    <div class="form-help">0 = unlimited</div>
+
+                    <label>SOCKS5 Proxy (optional)</label>
+                    <input name="proxy" placeholder="socks5://ip:port:user:pass">
+                </div>
             </div>
-            <div>
-                <label>Password</label><input name="password" type="password" required>
-                <label>Provider</label>
-                <select name="provider_type">
-                    <option>generic</option><option>ses</option><option>sendgrid</option><option>mailgun</option>
-                </select>
-                <label>Daily Limit</label><input name="daily_limit" type="number" value="50000">
-                <label>Proxy (optional)</label><input name="proxy" placeholder="socks5://ip:port:user:pass">
+            <div style="margin-top:16px">
+                <button class="btn btn-primary">Add SMTP Server</button>
             </div>
-        </div>
-        <button class="btn btn-primary" style="margin-top:15px">Add SMTP</button>
-    </form>
-</div>
+        </form>
+    </div>
+</details>
 {% endblock %}

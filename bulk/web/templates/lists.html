@@ -1,63 +1,112 @@
 {% extends "base.html" %}
+{% block title %} — Lists{% endblock %}
 {% block content %}
-<h1>Mailing Lists</h1>
+<div class="page-header">
+    <h1>Mailing Lists</h1>
+</div>
+
 {% if summary %}
-<div class="card" style="border-color:var(--green)">
-    <h3>Import Complete</h3>
-    {% for s in summary %}<p>{{ s }}</p>{% endfor %}
+<div class="alert alert-success">
+    <strong>Import Complete</strong>
+    {% for s in summary %}<div>{{ s }}</div>{% endfor %}
 </div>
 {% endif %}
+
 {% if compare %}
-<div class="card" style="border-color:var(--accent)">
-    <h3>Compare Result</h3>
+<div class="card">
+    <div class="card-header">
+        <h3>Compare Result</h3>
+    </div>
     <div class="grid-3">
         <div class="metric"><div class="value">{{ "{:,}".format(compare.both) }}</div><div class="label">In Both</div></div>
         <div class="metric"><div class="value">{{ "{:,}".format(compare.only_a) }}</div><div class="label">Only in A</div></div>
         <div class="metric"><div class="value">{{ "{:,}".format(compare.only_b) }}</div><div class="label">Only in B</div></div>
     </div>
-    <form method="post" action="/lists/compare/save" style="margin-top:10px;display:inline">
-        <input type="hidden" name="list_a" value="{{ compare.list_a }}"><input type="hidden" name="list_b" value="{{ compare.list_b }}">
-        <input type="hidden" name="which" value="a"><button class="btn btn-primary btn-sm">Save "Only in A"</button>
-    </form>
-    <form method="post" action="/lists/compare/save" style="display:inline">
-        <input type="hidden" name="list_a" value="{{ compare.list_a }}"><input type="hidden" name="list_b" value="{{ compare.list_b }}">
-        <input type="hidden" name="which" value="b"><button class="btn btn-primary btn-sm">Save "Only in B"</button>
-    </form>
+    <div style="margin-top:12px" class="btn-group">
+        <form method="post" action="/lists/compare/save" style="display:inline">
+            <input type="hidden" name="list_a" value="{{ compare.list_a }}"><input type="hidden" name="list_b" value="{{ compare.list_b }}">
+            <input type="hidden" name="which" value="a">
+            <button class="btn btn-primary btn-sm">Save "Only in A" as new list</button>
+        </form>
+        <form method="post" action="/lists/compare/save" style="display:inline">
+            <input type="hidden" name="list_a" value="{{ compare.list_a }}"><input type="hidden" name="list_b" value="{{ compare.list_b }}">
+            <input type="hidden" name="which" value="b">
+            <button class="btn btn-primary btn-sm">Save "Only in B" as new list</button>
+        </form>
+    </div>
 </div>
 {% endif %}
+
 <div class="card">
-    <h3>Lists ({{ lists|length }})</h3>
+    <div class="card-header">
+        <h3>All Lists <span class="count">{{ lists|length }}</span></h3>
+    </div>
+
+    {% if lists %}
     <table>
-        <thead><tr><th>Name</th><th>Leads</th><th>Source</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Leads</th><th>Source File</th><th></th></tr></thead>
         <tbody>
         {% for l in lists %}
         <tr>
-            <td><a href="/lists/{{ l.id }}/leads" style="color:var(--accent)">{{ l.name }}</a></td>
+            <td><a href="/lists/{{ l.id }}/leads" style="color:var(--accent);font-weight:500;text-decoration:none">{{ l.name }}</a></td>
             <td>{{ "{:,}".format(l.count) }}</td>
-            <td style="font-size:11px;color:var(--fg2)">{{ l.file_origin or '-' }}</td>
-            <td><form method="post" action="/lists/{{ l.id }}/delete" style="display:inline" onsubmit="return confirm('Delete?')">
-                <button class="btn btn-danger btn-sm">Del</button></form></td>
+            <td style="font-size:12px;color:var(--fg2)">{{ l.file_origin or '—' }}</td>
+            <td>
+                <form method="post" action="/lists/{{ l.id }}/delete" style="display:inline"
+                      onsubmit="return confirm('Delete list {{ l.name }}?')">
+                    <button class="btn btn-danger btn-xs">Delete</button>
+                </form>
+            </td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
+    {% else %}
+    <div class="empty-state">
+        <div class="icon">&#9776;</div>
+        <p>No lists yet. Import leads below.</p>
+    </div>
+    {% endif %}
 </div>
-<div class="grid-2">
-    <div class="card">
-        <h3>Import</h3>
-        <form method="post" action="/lists/import" enctype="multipart/form-data">
-            <label>Files</label><input type="file" name="files" multiple accept=".txt,.csv" required>
-            <label>Exclude Rules</label><textarea name="exclude_rules" rows="4" style="font-size:11px">{{ default_excludes }}</textarea>
-            <button class="btn btn-primary" style="margin-top:10px">Import</button>
-        </form>
-    </div>
-    <div class="card">
-        <h3>Compare</h3>
-        <form method="post" action="/lists/compare">
-            <label>List A</label><select name="list_a">{% for l in lists %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select>
-            <label>List B</label><select name="list_b">{% for l in lists %}<option value="{{ l.id }}">{{ l.name }}</option>{% endfor %}</select>
-            <button class="btn btn-primary" style="margin-top:10px">Compare</button>
-        </form>
-    </div>
+
+<div class="grid-2" style="align-items:start">
+    <details open>
+        <summary>Import Leads</summary>
+        <div class="details-body" style="padding-top:12px">
+            <form method="post" action="/lists/import" enctype="multipart/form-data">
+                <label>Lead Files (.txt / .csv — multi-select)</label>
+                <input type="file" name="files" multiple accept=".txt,.csv" required>
+
+                <label>Exclude Rules (one per line)</label>
+                <textarea name="exclude_rules" rows="5" style="font-size:12px;font-family:monospace">{{ default_excludes }}</textarea>
+                <div class="form-help">@domain.com = exclude domain, user@ = exclude local part, text = contains match</div>
+
+                <div style="margin-top:12px">
+                    <button class="btn btn-primary">Import Files</button>
+                </div>
+            </form>
+        </div>
+    </details>
+
+    <details>
+        <summary>Compare Lists</summary>
+        <div class="details-body" style="padding-top:12px">
+            <form method="post" action="/lists/compare">
+                <label>List A</label>
+                <select name="list_a">
+                    {% for l in lists %}<option value="{{ l.id }}">{{ l.name }} ({{ "{:,}".format(l.count) }})</option>{% endfor %}
+                </select>
+
+                <label>List B</label>
+                <select name="list_b">
+                    {% for l in lists %}<option value="{{ l.id }}">{{ l.name }} ({{ "{:,}".format(l.count) }})</option>{% endfor %}
+                </select>
+
+                <div style="margin-top:12px">
+                    <button class="btn btn-primary">Compare</button>
+                </div>
+            </form>
+        </div>
+    </details>
 </div>
 {% endblock %}

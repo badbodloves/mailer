@@ -1,91 +1,91 @@
 {% extends "base.html" %}
 {% block title %} — Cloudflare{% endblock %}
 {% block content %}
-<h1>Cloudflare</h1>
-
-<div class="card">
-    <h3>Add Account</h3>
-    <form method="post" action="/cloudflare/add-account">
-        <div class="grid-2">
-            <div>
-                <label>Account Name</label>
-                <input name="name" placeholder="e.g. Main CF Account" required>
-
-                <label>Auth Type</label>
-                <select name="auth_type" id="cf-auth-type" onchange="
-                    document.getElementById('cf-token').style.display = this.value === 'token' ? 'block' : 'none';
-                    document.getElementById('cf-global').style.display = this.value === 'global' ? 'block' : 'none';
-                ">
-                    <option value="token">API Token</option>
-                    <option value="global">Global API Key</option>
-                </select>
-
-                <div id="cf-token">
-                    <label>API Token</label>
-                    <input name="api_token" type="password" placeholder="Bearer token">
-                </div>
-
-                <div id="cf-global" style="display:none">
-                    <label>Global API Key</label>
-                    <input name="global_api_key" type="password" placeholder="Global key">
-                    <label>Auth Email</label>
-                    <input name="auth_email" placeholder="cf-login@example.com">
-                </div>
-            </div>
-            <div>
-                <label>Account ID</label>
-                <input name="account_id" placeholder="32-char hex ID">
-
-                <label>R2 Access Key (optional)</label>
-                <input name="r2_access_key" placeholder="Access Key ID">
-
-                <label>R2 Secret Key (optional)</label>
-                <input name="r2_secret_key" type="password" placeholder="Secret Access Key">
-            </div>
-        </div>
-        <button class="btn btn-primary" style="margin-top:15px">Add Account</button>
-    </form>
+<div class="page-header">
+    <h1>Cloudflare</h1>
 </div>
 
+<!-- Add Account -->
+<details {{ 'open' if not accounts }}>
+    <summary>Add Cloudflare Account</summary>
+    <div class="details-body" style="padding-top:16px">
+        <form method="post" action="/cloudflare/add-account">
+            <div class="grid-2">
+                <div>
+                    <label>Account Name</label>
+                    <input name="name" placeholder="e.g. Main CF Account" required>
+
+                    <label>Auth Type</label>
+                    <select name="auth_type" id="cf-auth-type" onchange="
+                        document.getElementById('cf-token').style.display = this.value === 'token' ? 'block' : 'none';
+                        document.getElementById('cf-global').style.display = this.value === 'global' ? 'block' : 'none';
+                    ">
+                        <option value="token">API Token</option>
+                        <option value="global">Global API Key</option>
+                    </select>
+
+                    <div id="cf-token">
+                        <label>API Token</label>
+                        <input name="api_token" type="password" placeholder="Bearer token">
+                    </div>
+
+                    <div id="cf-global" style="display:none">
+                        <label>Global API Key</label>
+                        <input name="global_api_key" type="password" placeholder="Global key">
+                        <label>Auth Email</label>
+                        <input name="auth_email" placeholder="cf-login@example.com">
+                    </div>
+                </div>
+                <div>
+                    <label>Account ID</label>
+                    <input name="account_id" placeholder="32-char hex ID">
+
+                    <label>R2 Access Key (optional)</label>
+                    <input name="r2_access_key" placeholder="Access Key ID">
+
+                    <label>R2 Secret Key (optional)</label>
+                    <input name="r2_secret_key" type="password" placeholder="Secret Access Key">
+                </div>
+            </div>
+            <div style="margin-top:16px">
+                <button class="btn btn-primary">Add Account</button>
+            </div>
+        </form>
+    </div>
+</details>
+
+<!-- Accounts -->
 {% for a in accounts %}
 <div class="card">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
-        <h3 style="margin-bottom:0">
+    <div class="card-header">
+        <h3>
             {{ a.name }}
-            <span style="font-size:11px;color:var(--fg2);margin-left:10px">{{ a.auth_type }} auth</span>
-            {% if a.account_id %}
-            <span style="font-size:11px;color:var(--fg2);margin-left:8px">ID: {{ a.account_id[:12] }}...</span>
-            {% endif %}
-            {% if a.r2_enabled %}
-            <span class="badge badge-running" style="margin-left:8px">R2</span>
-            {% endif %}
+            <span class="badge badge-info" style="margin-left:6px">{{ a.auth_type }}</span>
+            {% if a.r2_enabled %}<span class="badge badge-running" style="margin-left:4px">R2</span>{% endif %}
+            {% if a.account_id %}<span style="font-size:11px;color:var(--fg2);margin-left:8px;font-weight:400">{{ a.account_id[:12] }}...</span>{% endif %}
         </h3>
-        <div style="display:flex;gap:8px">
-            <button class="btn btn-primary btn-sm"
-                    hx-post="/cloudflare/{{ a.id }}/pull-domains"
-                    hx-target="#cf-domains-{{ a.id }}"
-                    hx-swap="innerHTML">Pull Domains</button>
-            <form method="post" action="/cloudflare/{{ a.id }}/delete" style="display:inline"
-                  onsubmit="return confirm('Delete account {{ a.name }}?')">
-                <button class="btn btn-danger btn-sm">Delete</button>
-            </form>
-        </div>
+        <form method="post" action="/cloudflare/{{ a.id }}/delete"
+              onsubmit="return confirm('Delete account {{ a.name }}?')">
+            <button class="btn btn-danger btn-sm">Delete Account</button>
+        </form>
     </div>
 
-    <!-- Tabs -->
-    <div style="display:flex;gap:0;border-bottom:1px solid var(--border);margin-bottom:15px">
-        <button class="btn btn-secondary btn-sm" style="border-radius:var(--radius) var(--radius) 0 0;border-bottom:2px solid var(--accent)"
-                onclick="showTab(this, 'cf-tab-domains-{{ a.id }}')">Domains</button>
+    <div class="tabs">
+        <button class="tab-btn active" onclick="showTab(this.closest('.card'), 'cf-domains-tab-{{ a.id }}')">Domains</button>
         {% if a.r2_enabled %}
-        <button class="btn btn-secondary btn-sm" style="border-radius:var(--radius) var(--radius) 0 0"
-                onclick="showTab(this, 'cf-tab-r2-{{ a.id }}')">R2 Storage</button>
+        <button class="tab-btn" onclick="showTab(this.closest('.card'), 'cf-r2-tab-{{ a.id }}')">R2 Storage</button>
         {% endif %}
-        <button class="btn btn-secondary btn-sm" style="border-radius:var(--radius) var(--radius) 0 0"
-                onclick="showTab(this, 'cf-tab-worker-{{ a.id }}')">Unsub Worker</button>
+        <button class="tab-btn" onclick="showTab(this.closest('.card'), 'cf-worker-tab-{{ a.id }}')">Unsub Worker</button>
     </div>
 
     <!-- Domains Tab -->
-    <div id="cf-tab-domains-{{ a.id }}" class="cf-tab cf-tab-{{ a.id }}">
+    <div id="cf-domains-tab-{{ a.id }}" class="tab-content active">
+        <div style="margin-bottom:12px">
+            <button class="btn btn-primary btn-sm"
+                    hx-post="/cloudflare/{{ a.id }}/pull-domains"
+                    hx-target="#cf-domains-{{ a.id }}"
+                    hx-swap="innerHTML">Pull Domains from Cloudflare</button>
+        </div>
         <div id="cf-domains-{{ a.id }}">
             {% if a.domains %}
             <table>
@@ -93,143 +93,147 @@
                 <tbody>
                 {% for d in a.domains %}
                 <tr>
-                    <td>{{ d.name }}</td>
-                    <td>{{ d.status }}</td>
+                    <td style="font-weight:500">{{ d.name }}</td>
+                    <td><span class="badge badge-{{ 'running' if d.status == 'active' else 'draft' }}">{{ d.status }}</span></td>
                     <td>{% if d.in_brands %}<span class="badge badge-running">Brands</span>{% endif %}</td>
                 </tr>
                 {% endfor %}
                 </tbody>
             </table>
             {% else %}
-            <p style="color:var(--fg2);font-size:12px">Click "Pull Domains" to fetch zones from Cloudflare.</p>
+            <p style="color:var(--fg2);font-size:13px">Click "Pull Domains" to fetch zones from Cloudflare.</p>
             {% endif %}
         </div>
     </div>
 
     <!-- R2 Storage Tab -->
     {% if a.r2_enabled %}
-    <div id="cf-tab-r2-{{ a.id }}" class="cf-tab cf-tab-{{ a.id }}" style="display:none">
-        <div class="grid-2" style="gap:15px">
+    <div id="cf-r2-tab-{{ a.id }}" class="tab-content">
+        <div class="grid-2" style="align-items:start">
+            <!-- Buckets -->
             <div>
-                <label style="font-weight:bold">Buckets ({{ a.buckets|length }})</label>
+                <h3 style="font-size:14px">Buckets <span class="count">{{ a.buckets|length }}</span></h3>
                 {% if a.buckets %}
-                <div style="margin-bottom:10px">
-                    {% for b in a.buckets %}
-                    <div style="display:flex;align-items:center;gap:8px;padding:4px 0">
-                        <span style="color:var(--accent);font-size:13px">{{ b }}</span>
-                        <button class="btn btn-secondary btn-sm" style="padding:2px 8px;font-size:10px"
-                                hx-get="/cloudflare/{{ a.id }}/r2/{{ b }}/files"
-                                hx-target="#r2-files-{{ a.id }}"
-                                hx-swap="innerHTML">Browse</button>
-                        <form method="post" action="/cloudflare/{{ a.id }}/r2/enable-public" style="display:inline">
-                            <input type="hidden" name="bucket" value="{{ b }}">
-                            <button class="btn btn-secondary btn-sm" style="padding:2px 8px;font-size:10px">Enable Public</button>
-                        </form>
-                    </div>
-                    {% endfor %}
+                {% for b in a.buckets %}
+                <div style="display:flex;align-items:center;gap:8px;padding:8px 0;border-bottom:1px solid var(--border-light)">
+                    <span style="font-weight:500;flex:1">{{ b }}</span>
+                    <button class="btn btn-secondary btn-xs"
+                            hx-get="/cloudflare/{{ a.id }}/r2/{{ b }}/files"
+                            hx-target="#r2-files-{{ a.id }}"
+                            hx-swap="innerHTML">Browse</button>
+                    <form method="post" action="/cloudflare/{{ a.id }}/r2/enable-public" style="display:inline">
+                        <input type="hidden" name="bucket" value="{{ b }}">
+                        <button class="btn btn-secondary btn-xs">Public</button>
+                    </form>
                 </div>
+                {% endfor %}
                 {% else %}
-                <p style="color:var(--fg2);font-size:12px">No buckets found.</p>
+                <p style="color:var(--fg2);font-size:13px">No buckets.</p>
                 {% endif %}
 
-                <form method="post" action="/cloudflare/{{ a.id }}/r2/create-bucket" style="display:flex;gap:8px;align-items:end">
-                    <div style="flex:1">
-                        <label style="font-size:12px">Create Bucket</label>
-                        <input name="bucket_name" placeholder="my-bucket" required style="margin:0">
-                    </div>
-                    <button class="btn btn-primary btn-sm">Create</button>
-                </form>
+                <div style="margin-top:12px">
+                    <form method="post" action="/cloudflare/{{ a.id }}/r2/create-bucket" class="form-row">
+                        <div><input name="bucket_name" placeholder="new-bucket-name" required style="margin:0"></div>
+                        <div class="shrink"><button class="btn btn-primary btn-sm">Create</button></div>
+                    </form>
+                </div>
 
-                <form method="post" action="/cloudflare/{{ a.id }}/r2/add-domain" style="display:flex;gap:8px;align-items:end;margin-top:8px">
-                    <div style="flex:1">
-                        <label style="font-size:12px">Custom Domain</label>
-                        <input name="domain" placeholder="cdn.yourdomain.com" style="margin:0">
-                        <input type="hidden" name="bucket" value="{{ a.buckets[0] if a.buckets else '' }}">
-                    </div>
-                    <button class="btn btn-secondary btn-sm">Add Domain</button>
-                </form>
+                <div style="margin-top:8px">
+                    <form method="post" action="/cloudflare/{{ a.id }}/r2/add-domain" class="form-row">
+                        <div><input name="domain" placeholder="cdn.yourdomain.com" style="margin:0">
+                        <input type="hidden" name="bucket" value="{{ a.buckets[0] if a.buckets else '' }}"></div>
+                        <div class="shrink"><button class="btn btn-secondary btn-sm">Add Domain</button></div>
+                    </form>
+                </div>
             </div>
+
+            <!-- Upload -->
             <div>
-                <label style="font-weight:bold">Upload Files</label>
+                <h3 style="font-size:14px">Upload Files</h3>
                 {% if a.buckets %}
                 <form hx-post="/cloudflare/{{ a.id }}/r2/{{ a.buckets[0] }}/upload"
-                      hx-target="#r2-upload-result-{{ a.id }}"
+                      hx-target="#r2-upload-{{ a.id }}"
                       hx-swap="innerHTML"
                       hx-encoding="multipart/form-data">
-                    <label style="font-size:12px">Target Bucket</label>
-                    <select name="target_bucket" style="margin-bottom:6px" onchange="this.form.action='/cloudflare/{{ a.id }}/r2/' + this.value + '/upload'">
+                    <label>Target Bucket</label>
+                    <select name="target_bucket" style="margin-bottom:8px">
                         {% for b in a.buckets %}
                         <option value="{{ b }}">{{ b }}</option>
                         {% endfor %}
                     </select>
-                    <label style="font-size:12px">Upload Prefix (optional subfolder)</label>
-                    <input name="prefix" placeholder="logos/" style="margin-bottom:6px">
-                    <label style="font-size:12px">Select Files (multi)</label>
+
+                    <label>Prefix (optional subfolder)</label>
+                    <input name="prefix" placeholder="logos/" style="margin-bottom:8px">
+
+                    <label>Files (multi-select)</label>
                     <input type="file" name="files" multiple required>
-                    <button class="btn btn-primary btn-sm" style="margin-top:8px">Upload Files</button>
+
+                    <div style="margin-top:10px">
+                        <button class="btn btn-primary btn-sm">Upload</button>
+                    </div>
                 </form>
-                <div id="r2-upload-result-{{ a.id }}" style="margin-top:10px"></div>
+                <div id="r2-upload-{{ a.id }}" style="margin-top:10px"></div>
                 {% else %}
-                <p style="color:var(--fg2);font-size:12px">Create a bucket first.</p>
+                <p style="color:var(--fg2);font-size:13px">Create a bucket first.</p>
                 {% endif %}
             </div>
         </div>
-        <div style="margin-top:15px;border-top:1px solid var(--border);padding-top:10px">
-            <label style="font-weight:bold">File Browser</label>
-            <div id="r2-files-{{ a.id }}">
-                <p style="color:var(--fg2);font-size:12px">Click "Browse" next to a bucket to list files.</p>
-            </div>
+
+        <div class="divider"></div>
+        <h3 style="font-size:14px">File Browser</h3>
+        <div id="r2-files-{{ a.id }}">
+            <p style="color:var(--fg2);font-size:13px">Click "Browse" next to a bucket.</p>
         </div>
     </div>
     {% endif %}
 
     <!-- Unsub Worker Tab -->
-    <div id="cf-tab-worker-{{ a.id }}" class="cf-tab cf-tab-{{ a.id }}" style="display:none">
-        <div class="grid-2" style="gap:15px">
+    <div id="cf-worker-tab-{{ a.id }}" class="tab-content">
+        <div class="grid-2" style="align-items:start">
             <div>
-                <label style="font-weight:bold">Deploy Unsubscribe Worker</label>
+                <h3 style="font-size:14px">Deploy Unsubscribe Worker</h3>
                 <form hx-post="/cloudflare/{{ a.id }}/deploy-worker"
                       hx-target="#worker-log-{{ a.id }}"
                       hx-swap="innerHTML">
-                    <label style="font-size:12px">Worker Name</label>
-                    <input name="worker_name" value="unsub-worker" style="margin-bottom:6px">
+                    <label>Worker Name</label>
+                    <input name="worker_name" value="unsub-worker">
 
-                    <label style="font-size:12px">KV Namespace Name</label>
-                    <input name="kv_namespace" value="unsubscribes" style="margin-bottom:6px">
+                    <label>KV Namespace</label>
+                    <input name="kv_namespace" value="unsubscribes">
 
-                    <label style="font-size:12px">Zone (for route)</label>
-                    <select name="zone_id" style="margin-bottom:6px"
+                    <label>Zone</label>
+                    <select name="zone_id"
                             hx-get="/cloudflare/{{ a.id }}/zones"
                             hx-trigger="click once"
                             hx-swap="innerHTML">
-                        <option value="">— Click to load zones —</option>
+                        <option value="">Click to load zones</option>
                     </select>
 
-                    <label style="font-size:12px">Route Pattern</label>
-                    <input name="route_pattern" placeholder="unsub.yourdomain.com/*" style="margin-bottom:6px">
+                    <label>Route Pattern</label>
+                    <input name="route_pattern" placeholder="unsub.yourdomain.com/*">
+                    <div class="form-help">Pattern for the worker route (requires zone)</div>
 
-                    <button class="btn btn-primary btn-sm" style="margin-top:4px">Deploy Worker</button>
+                    <div style="margin-top:12px">
+                        <button class="btn btn-primary btn-sm">Deploy Worker</button>
+                    </div>
                 </form>
             </div>
             <div>
-                <label style="font-weight:bold">Worker Status</label>
+                <h3 style="font-size:14px">Status</h3>
                 <form hx-post="/cloudflare/{{ a.id }}/check-worker"
                       hx-target="#worker-status-{{ a.id }}"
                       hx-swap="innerHTML"
-                      style="display:flex;gap:8px;align-items:end;margin-bottom:10px">
-                    <div style="flex:1">
-                        <label style="font-size:12px">Worker Name</label>
-                        <input name="worker_name" value="unsub-worker" style="margin:0">
-                    </div>
-                    <button class="btn btn-secondary btn-sm">Check</button>
+                      class="form-row" style="margin-bottom:12px">
+                    <div><input name="worker_name" value="unsub-worker" style="margin:0"></div>
+                    <div class="shrink"><button class="btn btn-secondary btn-sm">Check</button></div>
                 </form>
-                <div id="worker-status-{{ a.id }}" style="margin-bottom:15px">
-                    <span style="color:var(--fg2);font-size:12px">Click "Check" to verify deployment.</span>
+                <div id="worker-status-{{ a.id }}" style="margin-bottom:16px">
+                    <span style="color:var(--fg2);font-size:13px">Click "Check" to verify.</span>
                 </div>
 
-                <label style="font-weight:bold">Deploy Log</label>
-                <div id="worker-log-{{ a.id }}" style="font-family:monospace;font-size:12px;background:var(--bg);padding:10px;border-radius:var(--radius);min-height:60px">
-                    <span style="color:var(--fg2)">Deploy output will appear here.</span>
+                <h3 style="font-size:14px">Deploy Log</h3>
+                <div id="worker-log-{{ a.id }}" class="log" style="min-height:80px">
+                    Deploy output will appear here.
                 </div>
             </div>
         </div>
@@ -239,22 +243,10 @@
 
 {% if not accounts %}
 <div class="card">
-    <p style="color:var(--fg2)">No Cloudflare accounts configured. Add one above.</p>
+    <div class="empty-state">
+        <div class="icon">&#9729;</div>
+        <p>No Cloudflare accounts configured. Add one above.</p>
+    </div>
 </div>
 {% endif %}
-
-<script>
-function showTab(btn, tabId) {
-    const card = btn.closest('.card');
-    const group = tabId.split('-').slice(-1)[0];
-    const classPrefix = 'cf-tab-' + tabId.replace('cf-tab-domains-','').replace('cf-tab-r2-','').replace('cf-tab-worker-','');
-
-    card.querySelectorAll('.cf-tab').forEach(t => t.style.display = 'none');
-    document.getElementById(tabId).style.display = 'block';
-
-    const tabBar = btn.parentElement;
-    tabBar.querySelectorAll('button').forEach(b => b.style.borderBottom = 'none');
-    btn.style.borderBottom = '2px solid var(--accent)';
-}
-</script>
 {% endblock %}

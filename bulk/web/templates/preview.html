@@ -1,25 +1,27 @@
 {% extends "base.html" %}
 {% block title %} — Preview{% endblock %}
 {% block content %}
-<h1>Preview — MIME Builder</h1>
+<div class="page-header">
+    <h1>Preview</h1>
+</div>
 
 <div class="card">
-    <h3>Build Preview</h3>
+    <h3>MIME Builder</h3>
     <form method="post" action="/preview/build">
         <div class="grid-2">
             <div>
                 <label>From Name</label>
-                <input name="from_name" value="{{ form.from_name if form else 'Newsletter' }}" placeholder="Newsletter">
+                <input name="from_name" value="{{ form.from_name if form else 'Newsletter' }}">
 
                 <label>From Email</label>
-                <input name="from_email" value="{{ form.from_email if form else 'newsletter@example.com' }}" placeholder="newsletter@example.com">
+                <input name="from_email" value="{{ form.from_email if form else 'newsletter@example.com' }}">
 
                 <label>To Email</label>
-                <input name="to_email" value="{{ form.to_email if form else 'preview@example.com' }}" placeholder="preview@example.com">
+                <input name="to_email" value="{{ form.to_email if form else 'preview@example.com' }}">
             </div>
             <div>
                 <label>Subject</label>
-                <input name="subject" value="{{ form.subject if form else 'Test Subject' }}" placeholder="Test Subject">
+                <input name="subject" value="{{ form.subject if form else 'Test Subject' }}">
 
                 <label>Provider Type</label>
                 <select name="provider_type">
@@ -28,55 +30,60 @@
                     {% endfor %}
                 </select>
 
-                <label>Template (optional)</label>
+                <label>Template</label>
                 <select name="template_id">
-                    <option value="0">(default test HTML)</option>
+                    <option value="0">Default test HTML</option>
                     {% for t in templates %}
                     <option value="{{ t.id }}" {{ 'selected' if form and form.template_id == t.id }}>{{ t.name }}</option>
                     {% endfor %}
                 </select>
             </div>
         </div>
-        <button class="btn btn-primary" style="margin-top:15px">Build MIME</button>
+        <div style="margin-top:16px">
+            <button class="btn btn-primary">Build & Preview</button>
+        </div>
     </form>
 </div>
 
 {% if result %}
     {% if result.error %}
-    <div class="card" style="border-color:var(--red)">
-        <h3 style="color:var(--red)">Error</h3>
-        <pre class="log" style="color:var(--red)">{{ result.error }}</pre>
+    <div class="alert alert-danger">
+        <strong>Build Error:</strong> {{ result.error }}
     </div>
     {% else %}
-    <div class="grid-3" style="margin-bottom:20px">
+    <div class="grid-3" style="margin-bottom:16px">
         <div class="metric">
-            <div class="value" style="color:var(--green)">{{ result.text_ratio }}%</div>
+            <div class="value" style="color:{% if result.text_ratio >= 60 %}var(--green){% elif result.text_ratio >= 30 %}var(--yellow){% else %}var(--red){% endif %}">{{ result.text_ratio }}%</div>
             <div class="label">Text Ratio</div>
         </div>
         <div class="metric">
-            <div class="value">{{ result.full_mime|length|filesizeformat if result.full_mime else '-' }}</div>
+            <div class="value" style="font-size:18px">{{ result.full_mime|length|filesizeformat if result.full_mime else '-' }}</div>
             <div class="label">MIME Size</div>
         </div>
         <div class="metric">
-            <div class="value" style="font-size:14px;word-break:break-all">{{ result.envelope }}</div>
+            <div class="value" style="font-size:13px;word-break:break-all;font-family:monospace">{{ result.envelope }}</div>
             <div class="label">Envelope From</div>
         </div>
     </div>
 
-    <div class="card">
-        <h3>Headers</h3>
-        <pre class="log">{{ result.headers }}</pre>
-    </div>
-
-    <div class="card">
-        <h3>Full MIME Source <span style="font-size:11px;color:var(--fg2)">(first 20KB)</span></h3>
-        <pre class="log" style="max-height:500px">{{ result.full_mime }}</pre>
-    </div>
-
-    <div class="card">
-        <h3>HTML Preview</h3>
-        <iframe srcdoc="{{ result.html_preview|e }}"
-                style="width:100%;height:400px;border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe>
+    <div class="card tab-wrap">
+        <div class="tabs">
+            <button class="tab-btn active" onclick="showTab('preview-tabs', 'tab-headers')">Headers</button>
+            <button class="tab-btn" onclick="showTab('preview-tabs', 'tab-source')">Full Source</button>
+            <button class="tab-btn" onclick="showTab('preview-tabs', 'tab-render')">HTML Preview</button>
+        </div>
+        <div id="preview-tabs">
+            <div id="tab-headers" class="tab-content active">
+                <pre class="log">{{ result.headers }}</pre>
+            </div>
+            <div id="tab-source" class="tab-content">
+                <pre class="log" style="max-height:500px">{{ result.full_mime }}</pre>
+            </div>
+            <div id="tab-render" class="tab-content">
+                <iframe srcdoc="{{ result.html_preview|e }}"
+                        style="width:100%;height:450px;border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe>
+            </div>
+        </div>
     </div>
     {% endif %}
 {% endif %}

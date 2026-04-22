@@ -9,25 +9,65 @@
 </head>
 <body>
     <nav class="sidebar">
-        <h2>BULK MAILER</h2>
-        {% set pages = [
-            ("mailings", "Mailings"),
-            ("brands", "Brands"),
-            ("smtp", "SMTP"),
-            ("lists", "Lists"),
-            ("composer", "Composer"),
-            ("macros", "Macros"),
-            ("preview", "Preview"),
-            ("cloudflare", "Cloudflare"),
-            ("logs", "Logs"),
-            ("help", "Macro Help"),
-        ] %}
-        {% for href, label in pages %}
-        <a href="/{{ href }}" class="{{ 'active' if active == href else '' }}">{{ label }}</a>
-        {% endfor %}
+        <div class="sidebar-brand">
+            <h2>Bulk Mailer</h2>
+            <small>Campaign Manager</small>
+        </div>
+
+        <div class="sidebar-section">Campaigns</div>
+        <a href="/mailings" class="{{ 'active' if active == 'mailings' }}">
+            <span class="nav-icon">&#9654;</span><span>Mailings</span>
+        </a>
+
+        <div class="sidebar-section">Setup</div>
+        <a href="/brands" class="{{ 'active' if active == 'brands' }}">
+            <span class="nav-icon">&#9733;</span><span>Brands</span>
+        </a>
+        <a href="/smtp" class="{{ 'active' if active == 'smtp' }}">
+            <span class="nav-icon">&#9993;</span><span>SMTP</span>
+        </a>
+        <a href="/lists" class="{{ 'active' if active == 'lists' }}">
+            <span class="nav-icon">&#9776;</span><span>Lists</span>
+        </a>
+
+        <div class="sidebar-section">Content</div>
+        <a href="/composer" class="{{ 'active' if active == 'composer' }}">
+            <span class="nav-icon">&#9998;</span><span>Composer</span>
+        </a>
+        <a href="/macros" class="{{ 'active' if active == 'macros' }}">
+            <span class="nav-icon">{x}</span><span>Macros</span>
+        </a>
+        <a href="/preview" class="{{ 'active' if active == 'preview' }}">
+            <span class="nav-icon">&#128065;</span><span>Preview</span>
+        </a>
+
+        <div class="sidebar-section">Infrastructure</div>
+        <a href="/cloudflare" class="{{ 'active' if active == 'cloudflare' }}">
+            <span class="nav-icon">&#9729;</span><span>Cloudflare</span>
+        </a>
+        <a href="/logs" class="{{ 'active' if active == 'logs' }}">
+            <span class="nav-icon">&#9776;</span><span>Logs</span>
+        </a>
+
+        <div class="sidebar-section">Help</div>
+        <a href="/help" class="{{ 'active' if active == 'help' }}">
+            <span class="nav-icon">?</span><span>Macro Ref</span>
+        </a>
     </nav>
     <div class="main">
         {% block content %}{% endblock %}
     </div>
+
+    <script>
+    function showTab(container, tabId) {
+        const wrap = typeof container === 'string' ? document.getElementById(container) : container.closest('.card') || container.closest('.tab-wrap');
+        if (!wrap) return;
+        wrap.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        wrap.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        const tab = document.getElementById(tabId);
+        if (tab) tab.classList.add('active');
+        if (event && event.target) event.target.classList.add('active');
+    }
+    </script>
 </body>
 </html>
