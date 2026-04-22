@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Transactional Mailer{% block title %}{% endblock %}</title>
+    <link rel="stylesheet" href="/static/style.css">
+    <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+</head>
+<body>
+    <nav class="sidebar">
+        <div class="sidebar-brand">
+            <h2>Transactional</h2>
+            <small>High-Performance Mailer</small>
+        </div>
+
+        <div class="sidebar-section">Sending</div>
+        <a href="/campaigns" class="{{ 'active' if active == 'campaigns' }}">
+            <span class="nav-icon">&#9654;</span><span>Campaigns</span>
+        </a>
+
+        <div class="sidebar-section">Setup</div>
+        <a href="/smtps" class="{{ 'active' if active == 'smtps' }}">
+            <span class="nav-icon">&#9993;</span><span>SMTP</span>
+        </a>
+        <a href="/templates" class="{{ 'active' if active == 'templates' }}">
+            <span class="nav-icon">&#9998;</span><span>Templates</span>
+        </a>
+        <a href="/content" class="{{ 'active' if active == 'content' }}">
+            <span class="nav-icon">{x}</span><span>Content Pools</span>
+        </a>
+
+        <div class="sidebar-section">System</div>
+        <a href="/settings" class="{{ 'active' if active == 'settings' }}">
+            <span class="nav-icon">&#9881;</span><span>Settings & Logs</span>
+        </a>
+
+        <div style="flex:1"></div>
+        <div style="border-top:1px solid var(--border-light);padding:10px 12px">
+            <a href="/logout" style="font-size:12px;color:var(--red)">
+                <span class="nav-icon">&#10140;</span><span>Logout</span>
+            </a>
+        </div>
+    </nav>
+    <div class="main">
+        {% block content %}{% endblock %}
+    </div>
+
+    <script>
+    function showTab(container, tabId) {
+        const wrap = typeof container === 'string' ? document.getElementById(container) : (container.closest('.card') || container.closest('.tab-wrap') || container.closest('details') || container.closest('.details-body'));
+        if (!wrap) return;
+        wrap.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
+        wrap.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+        const tab = document.getElementById(tabId);
+        if (tab) tab.classList.add('active');
+        if (event && event.target) event.target.classList.add('active');
+    }
+    </script>
+</body>
+</html>

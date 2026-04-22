@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block title %} — SMTP{% endblock %}
+{% block content %}
+<div class="page-header"><h1>SMTP Accounts</h1></div>
+
+<div class="card">
+    <div class="card-header"><h3>Accounts <span class="count">{{ smtps|length }}</span></h3></div>
+    {% if smtps %}
+    {% for s in smtps %}
+    <details>
+        <summary>
+            <strong>{{ s.username }}</strong>
+            <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+                <span style="font-size:12px;color:var(--fg2)">{{ s.host }}:{{ s.port }}</span>
+                {% if s.proxy %}<span class="badge badge-draft">Proxy</span>{% endif %}
+                {% if s.is_dead %}<span class="badge badge-failed">Dead</span>{% endif %}
+            </span>
+        </summary>
+        <div class="details-body" style="padding-top:12px">
+            <form method="post" action="/smtps/{{ s.id }}/save">
+                <div class="grid-2">
+                    <div>
+                        <label>Host</label><input name="host" value="{{ s.host }}">
+                        <label>Port</label><input name="port" type="number" value="{{ s.port }}">
+                        <label>Username</label><input name="username" value="{{ s.username }}">
+                        <label>Password</label><input name="password" type="password" placeholder="Keep current">
+                    </div>
+                    <div>
+                        <label>Proxy</label><input name="proxy" value="{{ s.proxy or '' }}" placeholder="socks5://ip:port:user:pass">
+                        <label>Daily Limit</label><input name="daily_limit" type="number" value="{{ s.daily_limit or 0 }}">
+                    </div>
+                </div>
+                <div style="margin-top:12px" class="btn-group">
+                    <button class="btn btn-primary btn-sm">Save</button>
+                    <button type="button" class="btn btn-secondary btn-sm" hx-post="/smtps/{{ s.id }}/test" hx-target="#smtp-test-{{ s.id }}" hx-swap="innerHTML">Test</button>
+                    <form method="post" action="/smtps/{{ s.id }}/delete" onsubmit="return confirm('Delete?')"><button class="btn btn-danger btn-sm">Delete</button></form>
+                </div>
+                <div id="smtp-test-{{ s.id }}" style="margin-top:6px"></div>
+            </form>
+        </div>
+    </details>
+    {% endfor %}
+    {% else %}
+    <div class="empty-state"><div class="icon">&#9993;</div><p>No SMTP accounts. Add below or bulk import.</p></div>
+    {% endif %}
+</div>
+
+<div class="grid-2" style="align-items:start">
+    <details {{ 'open' if not smtps }}>
+        <summary>Add SMTP Account</summary>
+        <div class="details-body" style="padding-top:12px">
+            <form method="post" action="/smtps/add">
+                <label>Host</label><input name="host" placeholder="smtp.gmail.com" required>
+                <label>Port</label><input name="port" type="number" value="587">
+                <label>Username</label><input name="username" required>
+                <label>Password</label><input name="password" type="password" required>
+                <label>Proxy</label><input name="proxy" placeholder="socks5://ip:port:user:pass">
+                <label>Daily Limit</label><input name="daily_limit" type="number" value="0">
+                <div style="margin-top:12px"><button class="btn btn-primary">Add</button></div>
+            </form>
+        </div>
+    </details>
+
+    <details>
+        <summary>Bulk Import SMTPs</summary>
+        <div class="details-body" style="padding-top:12px">
+            <form hx-post="/smtps/import" hx-target="#import-result" hx-swap="innerHTML">
+                <label>Paste SMTPs (host,port,user,pass[,proxy] per line)</label>
+                <textarea name="smtp_text" rows="8" placeholder="smtp.gmail.com,587,user@gmail.com,password&#10;smtp.outlook.com,465,user@outlook.com,password,socks5://proxy:port" style="font-family:monospace;font-size:12px"></textarea>
+                <div style="margin-top:10px"><button class="btn btn-primary btn-sm">Import All</button></div>
+            </form>
+            <div id="import-result" style="margin-top:10px"></div>
+        </div>
+    </details>
+</div>
+{% endblock %}

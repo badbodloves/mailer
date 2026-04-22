@@ -1,0 +1,208 @@
+{% extends "base.html" %}
+{% block title %} — Campaigns{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Campaigns</h1></div>
+
+{% if campaigns %}
+<div class="card" hx-get="/campaigns/table" hx-trigger="every 3s" hx-swap="innerHTML">
+    <div class="card-header"><h3>Campaigns <span class="count">{{ campaigns|length }}</span></h3></div>
+    <table><thead><tr><th>Name</th><th>Subject</th><th>Progress</th><th>Total</th><th>Sent</th><th>Failed</th><th>Speed</th><th></th></tr></thead>
+    <tbody>
+    {% for c in campaigns %}
+    <tr style="{{ 'background:var(--green-light)' if c.running else '' }}">
+        <td style="font-weight:500">{{ c.name }}</td>
+        <td style="font-size:12px;color:var(--fg2)">{{ (c.subject or '—')[:40] }}</td>
+        <td style="min-width:100px"><div class="progress"><div class="progress-bar" style="width:{{ c.pct }}%">{{ c.pct }}%</div></div></td>
+        <td>{{ "{:,}".format(c.total_leads or 0) }}</td>
+        <td style="color:var(--green);font-weight:500">{{ "{:,}".format(c.sent or 0) }}</td>
+        <td style="color:var(--red)">{{ "{:,}".format(c.failed or 0) }}</td>
+        <td>{{ "{:,}".format(c.speed) ~ "/h" if c.speed else "—" }}</td>
+        <td>
+            {% if not c.running %}
+            <form method="post" action="/campaigns/{{ c.id }}/start" style="display:inline"><button class="btn btn-success btn-xs">Start</button></form>
+            {% else %}
+            <form method="post" action="/campaigns/{{ c.id }}/stop" style="display:inline"><button class="btn btn-danger btn-xs">Stop</button></form>
+            {% endif %}
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody></table>
+</div>
+{% endif %}
+
+{% if campaigns %}
+{% for c in campaigns %}
+<details {{ 'open' if loop.first }}>
+    <summary>
+        {{ c.name }}
+        <span style="margin-left:auto;display:flex;gap:6px;align-items:center">
+            <span class="badge badge-{{ 'running' if c.running else c.status|lower }}">{{ c.status }}</span>
+        </span>
+    </summary>
+    <div class="details-body" style="padding-top:16px">
+        <div class="tabs">
+            <button class="tab-btn active" onclick="showTab(this.closest('details'), 'c-stats-{{ c.id }}')">Live Stats</button>
+            <button class="tab-btn" onclick="showTab(this.closest('details'), 'c-edit-{{ c.id }}')">Settings</button>
+            <button class="tab-btn" onclick="showTab(this.closest('details'), 'c-leads-{{ c.id }}')">Leads</button>
+            <button class="tab-btn" onclick="showTab(this.closest('details'), 'c-afp-{{ c.id }}')">Anti-Fingerprint</button>
+        </div>
+
+        <div id="c-stats-{{ c.id }}" class="tab-content active"
+             hx-get="/campaigns/{{ c.id }}/stats" hx-trigger="every 3s" hx-swap="innerHTML">
+            <p style="color:var(--fg2)">Loading...</p>
+        </div>
+
+        <div id="c-edit-{{ c.id }}" class="tab-content">
+            <form method="post" action="/campaigns/{{ c.id }}/save">
+                <div class="grid-2">
+                    <div>
+                        <label>Name</label><input name="name" value="{{ c.name }}">
+                        <label>From Name</label><input name="from_name" value="{{ c.from_name or '' }}" placeholder="Support or {from_name}">
+                        <label>From Email</label><input name="from_email" value="{{ c.from_email or '' }}" placeholder="Leave empty = SMTP account email">
+                        <label>Subject</label><input name="subject" value="{{ c.subject or '' }}" placeholder="Supports {email_user}, spintax">
+                        <label>Threads</label><input name="threads" type="number" value="{{ c.threads or 40 }}" min="1" max="200">
+                        <label>Normal Delay (sec)</label><input name="normal_delay" type="number" step="0.1" value="{{ c.normal_delay or 0.3 }}">
+                        <label>Provider Delay (sec)</label><input name="provider_delay" type="number" step="0.1" value="{{ c.provider_delay or 6.0 }}">
+                        <div class="form-help">Higher delay for Gmail/Yahoo/Outlook recipients</div>
+                    </div>
+                    <div>
+                        <label>Warmup Count</label><input name="warmup_count" type="number" value="{{ c.warmup_count or 5 }}">
+                        <div class="form-help">Slow-start first N emails per SMTP</div>
+                        <label>Warmup Delay (sec)</label><input name="warmup_delay" type="number" step="0.1" value="{{ c.warmup_delay or 30.0 }}">
+                        <label>Test Recipients</label><input name="test_recipients" value="{{ c.test_recipients or '' }}" placeholder="test@inbox.com, test2@inbox.com">
+                        <label>Test Interval</label><input name="test_interval" type="number" value="{{ c.test_interval or 0 }}">
+                        <div class="form-help">Send test every N successful sends (0 = off)</div>
+                        <label>Schedule (HH:MM)</label><input name="schedule_time" value="{{ c.schedule_time or '' }}" placeholder="14:30">
+                        <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer">
+                            <input type="checkbox" name="ignore_ssl_errors" value="1" {{ 'checked' if c.ignore_ssl_errors }} style="width:auto">
+                            <span>Ignore SSL Errors</span>
+                        </label>
+                    </div>
+                </div>
+                <div style="margin-top:14px" class="btn-group">
+                    <button class="btn btn-primary btn-sm">Save Settings</button>
+                    <form method="post" action="/campaigns/{{ c.id }}/reset" onsubmit="return confirm('Reset all leads to PENDING?')">
+                        <button class="btn btn-secondary btn-sm">Reset & Resend</button>
+                    </form>
+                    <form method="post" action="/campaigns/{{ c.id }}/delete" onsubmit="return confirm('Delete campaign permanently?')">
+                        <button class="btn btn-danger btn-sm">Delete</button>
+                    </form>
+                </div>
+            </form>
+        </div>
+
+        <div id="c-leads-{{ c.id }}" class="tab-content">
+            <div class="grid-2" style="align-items:start">
+                <div>
+                    <form method="post" action="/campaigns/{{ c.id }}/import-leads">
+                        <label>Paste Leads (emails extracted automatically)</label>
+                        <textarea name="leads_text" rows="5" placeholder="user1@example.com&#10;user2@example.com" style="font-family:monospace;font-size:12px"></textarea>
+                        <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Import</button></div>
+                    </form>
+                </div>
+                <div>
+                    <form method="post" action="/leads/{{ c.id }}/upload" enctype="multipart/form-data">
+                        <label>Upload Lead Files (.txt/.csv)</label>
+                        <input type="file" name="files" multiple accept=".txt,.csv" required>
+                        <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Upload</button></div>
+                    </form>
+                    <div style="margin-top:12px">
+                        <a href="/leads/{{ c.id }}" class="btn btn-secondary btn-sm">View Leads ({{ "{:,}".format(c.total_leads or 0) }})</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div id="c-afp-{{ c.id }}" class="tab-content">
+            <form method="post" action="/campaigns/{{ c.id }}/save">
+                <input type="hidden" name="name" value="{{ c.name }}">
+                <div class="grid-2">
+                    <div>
+                        <h3 style="font-size:14px">Anti-Fingerprint</h3>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                            <input type="checkbox" name="antifingerprint_classes" value="1" {{ 'checked' if c.antifingerprint_classes }} style="width:auto">
+                            <span>CSS Class Injection</span>
+                        </label>
+                        <div class="form-help">Extract inline styles to random CSS classes</div>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:10px">
+                            <input type="checkbox" name="advanced_antifingerprint" value="1" {{ 'checked' if c.advanced_antifingerprint }} style="width:auto">
+                            <span>Advanced Structure Variation</span>
+                        </label>
+                        <div class="form-help">Table-to-div conversion, tag swaps, pixel jitter</div>
+                        <label style="margin-top:10px">Structure Variation Probability</label>
+                        <input name="structure_variation" type="number" step="0.1" min="0" max="1" value="{{ c.structure_variation or 0.5 }}">
+                        <div class="form-help">0.0 = never, 1.0 = always convert tables to divs</div>
+                    </div>
+                    <div>
+                        <h3 style="font-size:14px">Image / Logo</h3>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                            <input type="checkbox" name="image_enabled" value="1" {{ 'checked' if c.image_enabled }} style="width:auto">
+                            <span>Enable Logo Embedding</span>
+                        </label>
+                        <label style="margin-top:10px">Mode</label>
+                        <select name="image_mode">
+                            <option value="cid" {{ 'selected' if c.image_mode == 'cid' }}>CID Inline</option>
+                            <option value="cloudinary" {{ 'selected' if c.image_mode == 'cloudinary' }}>Cloudinary CDN</option>
+                        </select>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:10px">
+                            <input type="checkbox" name="image_quantize" value="1" {{ 'checked' if c.image_quantize }} style="width:auto">
+                            <span>Palette Quantization</span>
+                        </label>
+                        <label>Max Colors</label>
+                        <input name="logo_max_colors" type="number" value="{{ c.logo_max_colors or 256 }}" min="2" max="256">
+                        <label>Rotate Every N Sends</label>
+                        <input name="logo_rotate_every" type="number" value="{{ c.logo_rotate_every or 0 }}" min="0">
+                    </div>
+                </div>
+                <div class="divider"></div>
+                <div class="grid-2">
+                    <div>
+                        <h3 style="font-size:14px">Redirect Links</h3>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                            <input type="checkbox" name="redirect_enabled" value="1" {{ 'checked' if c.redirect_enabled }} style="width:auto">
+                            <span>Enable Redirect Link Rotation</span>
+                        </label>
+                        <label>Target URL</label>
+                        <input name="redirect_target_url" value="{{ c.redirect_target_url or '' }}" placeholder="https://yoursite.com/landing">
+                        <label>Rotate Every</label>
+                        <input name="redirect_rotate_every" type="number" value="{{ c.redirect_rotate_every or 10 }}" min="1">
+                    </div>
+                    <div>
+                        <h3 style="font-size:14px">Proxy</h3>
+                        <label>Proxy Rotation Every N Sends</label>
+                        <input name="proxy_rotate_every" type="number" value="{{ c.proxy_rotate_every or 0 }}" min="0">
+                        <div class="form-help">0 = no rotation, use per-SMTP proxy. N = rotate shared proxy list every N sends.</div>
+                    </div>
+                </div>
+                <div style="margin-top:14px"><button class="btn btn-primary btn-sm">Save All Settings</button></div>
+            </form>
+        </div>
+    </div>
+</details>
+{% endfor %}
+{% else %}
+<div class="card"><div class="empty-state"><div class="icon">&#9654;</div><p>No campaigns. Create one below.</p></div></div>
+{% endif %}
+
+<details {{ 'open' if not campaigns }}>
+    <summary>Create New Campaign</summary>
+    <div class="details-body" style="padding-top:16px">
+        <form method="post" action="/campaigns/add">
+            <div class="grid-2">
+                <div>
+                    <label>Campaign Name</label><input name="name" placeholder="April Outreach" required>
+                    <label>From Name</label><input name="from_name" placeholder="Support Team or {from_name}">
+                    <label>From Email</label><input name="from_email" placeholder="Leave empty = SMTP account email">
+                    <label>Subject</label><input name="subject" placeholder="Hello {email_user} — Your Update">
+                </div>
+                <div>
+                    <label>Threads</label><input name="threads" type="number" value="40" min="1" max="200">
+                    <label>Leads (paste emails, or upload after creating)</label>
+                    <textarea name="leads_text" rows="4" placeholder="user1@example.com&#10;user2@example.com" style="font-family:monospace;font-size:12px"></textarea>
+                </div>
+            </div>
+            <div style="margin-top:16px"><button class="btn btn-primary">Create Campaign</button></div>
+        </form>
+    </div>
+</details>
+{% endblock %}

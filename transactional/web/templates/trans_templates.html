@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %} — Templates{% endblock %}
+{% block content %}
+<div class="page-header"><h1>HTML Templates</h1></div>
+
+<div class="card">
+    <div class="card-header"><h3>Templates <span class="count">{{ templates|length }}</span></h3></div>
+    {% if templates %}
+    {% for t in templates %}
+    <details>
+        <summary>{{ t.name }} <span style="margin-left:auto;font-size:12px;color:var(--fg2)">{{ t.html_content|length }} chars</span></summary>
+        <div class="details-body" style="padding-top:12px">
+            <form method="post" action="/templates/{{ t.id }}/save">
+                <label>Name</label><input name="name" value="{{ t.name }}">
+                <label>HTML Content</label>
+                <textarea name="html_content" rows="15" style="font-family:monospace;font-size:12px">{{ t.html_content }}</textarea>
+                <div class="form-help">Variables: {email}, {email_user}, {domain}, {from_name}, {subject}, {Logo}, {RedirectLink}, spintax: {opt1|opt2|opt3}</div>
+                <div style="margin-top:12px" class="btn-group">
+                    <button class="btn btn-primary btn-sm">Save</button>
+                    <button type="button" class="btn btn-secondary btn-sm" hx-post="/templates/{{ t.id }}/preview" hx-target="#tpl-preview-{{ t.id }}" hx-swap="innerHTML">Preview</button>
+                    <form method="post" action="/templates/{{ t.id }}/delete" onsubmit="return confirm('Delete?')"><button class="btn btn-danger btn-sm">Delete</button></form>
+                </div>
+            </form>
+            <div id="tpl-preview-{{ t.id }}" style="margin-top:12px"></div>
+        </div>
+    </details>
+    {% endfor %}
+    {% else %}
+    <div class="empty-state"><div class="icon">&#9998;</div><p>No templates. Create one below.</p></div>
+    {% endif %}
+</div>
+
+<details {{ 'open' if not templates }}>
+    <summary>Create Template</summary>
+    <div class="details-body" style="padding-top:12px">
+        <form method="post" action="/templates/add">
+            <label>Template Name</label><input name="name" placeholder="Welcome Email" required>
+            <label>HTML Content</label>
+            <textarea name="html_content" rows="12" placeholder="<html><body>&#10;<p>Hello {email_user},</p>&#10;<p>Your notification content.</p>&#10;</body></html>" style="font-family:monospace;font-size:12px"></textarea>
+            <div style="margin-top:12px"><button class="btn btn-primary">Create Template</button></div>
+        </form>
+    </div>
+</details>
+{% endblock %}

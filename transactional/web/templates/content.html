@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+{% block title %} — Content Pools{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Content Pools</h1></div>
+
+<div class="grid-2" style="align-items:start">
+    <!-- Names Pool -->
+    <div class="card">
+        <h3>From Names</h3>
+        <form method="post" action="/content/save">
+            <input type="hidden" name="pool_type" value="names">
+            <input type="hidden" name="name" value="default">
+            <label>One name per line — random pick per email</label>
+            <textarea name="content" rows="8" placeholder="John Smith&#10;Jane Doe&#10;Support Team" style="font-size:12px">{{ pools.names[0].content if pools.names else '' }}</textarea>
+            <div class="form-help">Leave empty to use campaign's From Name setting</div>
+            <div style="margin-top:10px"><button class="btn btn-primary btn-sm">Save</button></div>
+        </form>
+    </div>
+
+    <!-- Subjects Pool -->
+    <div class="card">
+        <h3>Subject Lines</h3>
+        <form method="post" action="/content/save">
+            <input type="hidden" name="pool_type" value="subjects">
+            <input type="hidden" name="name" value="default">
+            <label>One subject per line — random pick per email</label>
+            <textarea name="content" rows="8" placeholder="Hello {email_user} — Your Update&#10;Important: Action Required&#10;{email_user}, check this out" style="font-size:12px">{{ pools.subjects[0].content if pools.subjects else '' }}</textarea>
+            <div class="form-help">Supports {email_user}, {email}, {domain}, spintax</div>
+            <div style="margin-top:10px"><button class="btn btn-primary btn-sm">Save</button></div>
+        </form>
+    </div>
+</div>
+
+<div class="grid-2" style="align-items:start">
+    <!-- Alt Texts -->
+    <div class="card">
+        <h3>Logo Alt Texts</h3>
+        <form method="post" action="/content/save">
+            <input type="hidden" name="pool_type" value="alt_texts">
+            <input type="hidden" name="name" value="default">
+            <label>One alt-text per line — random pick for {Logo} tag</label>
+            <textarea name="content" rows="5" placeholder="Logo&#10;Banner&#10;Company Badge" style="font-size:12px">{{ pools.alt_texts[0].content if pools.alt_texts else '' }}</textarea>
+            <div style="margin-top:10px"><button class="btn btn-primary btn-sm">Save</button></div>
+        </form>
+    </div>
+
+    <!-- Spintax Files -->
+    <div class="card">
+        <h3>Spintax Pools</h3>
+        <p style="font-size:12px;color:var(--fg2);margin-bottom:12px">
+            Create named pools. Use {pool_name} in templates to inject a random line.
+        </p>
+        {% for p in pools.spintax %}
+        {% if p.content %}
+        <details>
+            <summary>{{ p.name }} <span style="margin-left:auto;font-size:12px;color:var(--fg2)">{{ p.content.splitlines()|length }} lines</span></summary>
+            <div class="details-body" style="padding-top:8px">
+                <form method="post" action="/content/save">
+                    <input type="hidden" name="pool_type" value="spintax">
+                    <input type="hidden" name="name" value="{{ p.name }}">
+                    <textarea name="content" rows="5" style="font-family:monospace;font-size:12px">{{ p.content }}</textarea>
+                    <div style="margin-top:8px" class="btn-group">
+                        <button class="btn btn-primary btn-sm">Save</button>
+                        {% if p.id %}<form method="post" action="/content/{{ p.id }}/delete"><button class="btn btn-danger btn-sm">Delete</button></form>{% endif %}
+                    </div>
+                </form>
+            </div>
+        </details>
+        {% endif %}
+        {% endfor %}
+        <div style="margin-top:12px">
+            <form method="post" action="/content/save" class="form-row">
+                <div><input name="name" placeholder="pool_name" required style="margin:0"><input type="hidden" name="pool_type" value="spintax"></div>
+                <div><textarea name="content" rows="2" placeholder="{option1|option2|option3}" style="font-size:12px;margin:0"></textarea></div>
+                <div class="shrink"><button class="btn btn-primary btn-sm">Add Pool</button></div>
+            </form>
+        </div>
+    </div>
+</div>
+{% endblock %}
