@@ -48,6 +48,15 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Transactional Mailer")
 
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    import traceback
+    tb = traceback.format_exc()
+    logger = logging.getLogger("trans.error")
+    logger.error("Unhandled: %s\n%s", exc, tb)
+    from fastapi.responses import PlainTextResponse
+    return PlainTextResponse(f"Error: {exc}\n\n{tb}", status_code=500)
+
 app.add_middleware(AuthMiddleware)
 
 _static_dir = os.path.join(os.path.dirname(__file__), "static")
