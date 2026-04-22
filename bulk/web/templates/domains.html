@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block title %} — Domains{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Domain Manager</h1>
+    <div class="btn-group">
+        <button class="btn btn-secondary btn-sm"
+                hx-post="/domains/balance"
+                hx-target="#dynadot-balance"
+                hx-swap="innerHTML">Check Balance</button>
+        <span id="dynadot-balance" style="margin-left:8px"></span>
+    </div>
+</div>
+
+<div class="card tab-wrap">
+    <div class="tabs">
+        <button class="tab-btn active" onclick="showTab('domain-tabs', 'tab-search')">Search & Buy</button>
+        <button class="tab-btn" onclick="showTab('domain-tabs', 'tab-purchased')">Purchased <span class="count">{{ purchased|length }}</span></button>
+        <button class="tab-btn" onclick="showTab('domain-tabs', 'tab-remote')">Dynadot Account</button>
+        <button class="tab-btn" onclick="showTab('domain-tabs', 'tab-config')">Settings</button>
+    </div>
+
+    <div id="domain-tabs">
+        <!-- Search & Buy -->
+        <div id="tab-search" class="tab-content active">
+            {% if not config.api_key %}
+            <div class="alert alert-warning">
+                Configure your Dynadot API key in the Settings tab first.
+            </div>
+            {% endif %}
+
+            <form hx-post="/domains/search"
+                  hx-target="#search-results"
+                  hx-swap="innerHTML">
+                <label>Search Domains (one per line or comma-separated, up to 50)</label>
+                <textarea name="query" rows="4" placeholder="beispiel.de&#10;meinshop.com&#10;newsletter-xyz.de" style="font-family:monospace;font-size:13px"></textarea>
+                <div style="margin-top:10px">
+                    <button class="btn btn-primary">Search Availability</button>
+                </div>
+            </form>
+
+            <div id="search-results" style="margin-top:16px"></div>
+            <div id="buy-result" style="margin-top:12px"></div>
+        </div>
+
+        <!-- Purchased Domains -->
+        <div id="tab-purchased" class="tab-content">
+            {% if purchased %}
+            <table>
+                <thead>
+                    <tr><th>Domain</th><th>CF Zone</th><th>Nameservers</th><th>NS Set</th><th>Status</th><th>Purchased</th><th></th></tr>
+                </thead>
+                <tbody>
+                {% for d in purchased %}
+                <tr>
+                    <td style="font-weight:500">{{ d.domain }}</td>
+                    <td style="font-size:12px;color:var(--fg2)">{{ d.cf_zone_id[:12] ~ '...' if d.cf_zone_id else '—' }}</td>
+                    <td style="font-size:11px">
+                        {% if d.cf_ns1 %}{{ d.cf_ns1 }}<br>{{ d.cf_ns2 }}{% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if d.ns_set %}
+                        <span class="badge badge-running">Set</span>
+                        {% else %}
+                        <span class="badge badge-draft">Pending</span>
+                        {% endif %}
+                    </td>
+                    <td><span class="badge badge-info">{{ d.status }}</span></td>
+                    <td style="font-size:12px;color:var(--fg2)">{{ d.purchased_at }}</td>
+                    <td>
+                        {% if not d.ns_set and d.cf_ns1 %}
+                        <button class="btn btn-secondary btn-xs"
+                                hx-post="/domains/{{ d.id }}/set-ns"
+                                hx-target="closest td"
+                                hx-swap="innerHTML">Retry NS</button>
+                        {% endif %}
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% else %}
+            <div class="empty-state">
+                <div class="icon">&#127760;</div>
+                <p>No domains purchased yet. Use Search & Buy to get started.</p>
+            </div>
+            {% endif %}
+        </div>
+
+        <!-- Remote Domain List -->
+        <div id="tab-remote" class="tab-content">
+            <p style="margin-bottom:12px;color:var(--fg2);font-size:13px">
+                Fetch all domains from your Dynadot account.
+            </p>
+            <button class="btn btn-primary btn-sm"
+                    hx-post="/domains/list-remote"
+                    hx-target="#remote-domains"
+                    hx-swap="innerHTML">Load Domain List</button>
+            <div id="remote-domains" style="margin-top:12px"></div>
+        </div>
+
+        <!-- Settings -->
+        <div id="tab-config" class="tab-content">
+            <form method="post" action="/domains/config" style="max-width:500px">
+                <label>Dynadot API Key</label>
+                <input name="api_key" type="password" value="{{ config.api_key or '' }}" placeholder="Your Dynadot API key">
+
+                <label>Dynadot Secret (optional)</label>
+                <input name="secret" type="password" value="{{ config.secret or '' }}" placeholder="For signature-based calls">
+
+                <div class="form-help" style="margin-top:8px">
+                    Cloudflare account is pulled from the Cloudflare page settings.
+                    Make sure you have at least one CF account with Account ID configured.
+                </div>
+
+                <div style="margin-top:16px">
+                    <button class="btn btn-primary">Save Credentials</button>
+                </div>
+            </form>
+
+            {% if not has_cf %}
+            <div class="alert alert-warning" style="margin-top:16px">
+                No Cloudflare account configured. Auto zone creation + NS setup won't work.
+                <a href="/cloudflare" style="color:var(--accent);font-weight:500">Configure Cloudflare</a>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+</div>
+{% endblock %}

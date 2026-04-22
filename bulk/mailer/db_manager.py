@@ -165,6 +165,22 @@ class BulkDBManager:
                     logo_path TEXT DEFAULT '',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS dynadot_config (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    api_key TEXT DEFAULT '',
+                    secret TEXT DEFAULT ''
+                );
+                CREATE TABLE IF NOT EXISTS purchased_domains (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    domain TEXT NOT NULL UNIQUE,
+                    registrar TEXT DEFAULT 'dynadot',
+                    cf_zone_id TEXT DEFAULT '',
+                    cf_ns1 TEXT DEFAULT '',
+                    cf_ns2 TEXT DEFAULT '',
+                    ns_set INTEGER DEFAULT 0,
+                    status TEXT DEFAULT 'registered',
+                    purchased_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
             """)
             c.commit()
             self._migrate(c)
@@ -590,6 +606,42 @@ class BulkDBManager:
         import secrets
         short = secrets.token_hex(4)
         return f"c{campaign_id}-{short}.{domain}"
+
+    # --- Dynadot ---
+    def get_dynadot_config(self) -> dict:
+        c = self._conn()
+        r = c.execute("SELECT * FROM dynadot_config WHERE id=1").fetchone()
+        if not r:
+            c.execute("INSERT OR IGNORE INTO dynadot_config (id, api_key, secret) VALUES (1,'','')")
+            c.commit()
+            return {"api_key": "", "secret": ""}
+        return dict(r)
+
+    def save_dynadot_config(self, api_key: str, secret: str):
+        c = self._conn()
+        c.execute("INSERT OR REPLACE INTO dynadot_config (id, api_key, secret) VALUES (1,?,?)",
+                  (api_key, secret))
+        c.commit()
+
+    def add_purchased_domain(self, domain: str, cf_zone_id: str = "",
+                              cf_ns1: str = "", cf_ns2: str = "") -> int:
+        c = self._conn()
+        c.execute("INSERT OR IGNORE INTO purchased_domains "
+                  "(domain, cf_zone_id, cf_ns1, cf_ns2) VALUES (?,?,?,?)",
+                  (domain, cf_zone_id, cf_ns1, cf_ns2))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_purchased_domains(self) -> list:
+        return self._conn().execute(
+            "SELECT * FROM purchased_domains ORDER BY purchased_at DESC").fetchall()
+
+    def update_purchased_domain(self, domain: str, **kw):
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in kw)
+        c.execute(f"UPDATE purchased_domains SET {sets} WHERE domain=?",
+                  list(kw.values()) + [domain])
+        c.commit()
 
     def close(self):
         if hasattr(self._local, "conn") and self._local.conn:
