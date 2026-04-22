@@ -21,9 +21,13 @@ def _dynadot_call(api_key: str, command: str, params: dict = None) -> dict:
     return resp.json()
 
 
-def _cf_headers(db) -> tuple:
-    """Get CF auth headers + account_id from first CF account."""
-    accounts = db.get_cf_accounts()
+def _cf_headers_for(db, cf_account_id: int = 0) -> tuple:
+    """Get CF auth headers + account_id for a specific or first CF account."""
+    if cf_account_id:
+        row = db._conn().execute("SELECT * FROM cf_accounts WHERE id=?", (cf_account_id,)).fetchone()
+        accounts = [row] if row else []
+    else:
+        accounts = db.get_cf_accounts()
     if not accounts:
         return None, None
     acct = dict(accounts[0])
@@ -44,10 +48,10 @@ async def domains_page(request: Request):
     tpl = request.app.state.templates
     config = db.get_dynadot_config()
     purchased = [dict(d) for d in db.get_purchased_domains()]
-    has_cf = len(db.get_cf_accounts()) > 0
+    cf_accounts = [dict(a) for a in db.get_cf_accounts()]
     return tpl.TemplateResponse(request, "domains.html", {
         "active": "domains", "config": config, "purchased": purchased,
-        "has_cf": has_cf, "db": db,
+        "cf_accounts": cf_accounts, "db": db,
     })
 
 
@@ -110,7 +114,9 @@ async def search_domains(request: Request, query: str = Form("")):
         buy_btn = ""
         if r["available"]:
             buy_btn = (f'<button class="btn btn-primary btn-xs" '
-                       f'hx-post="/domains/buy" hx-vals=\'{{"domain":"{r["domain"]}"}}\' '
+                       f'hx-post="/domains/buy" '
+                       f'hx-vals=\'js:{{domain:"{r["domain"]}", '
+                       f'cf_account_id: document.getElementById("cf-account-select")?.value || "0"}}\' '
                        f'hx-target="#buy-result" hx-swap="innerHTML" '
                        f'hx-confirm="Buy {r["domain"]} for {price_str}?">Buy</button>')
         rows += (f'<tr><td style="font-weight:500">{escape(r["domain"])}</td>'
@@ -146,7 +152,8 @@ async def check_balance(request: Request):
 
 
 @router.post("/domains/buy", response_class=HTMLResponse)
-async def buy_domain(request: Request, domain: str = Form("")):
+async def buy_domain(request: Request, domain: str = Form(""),
+                     cf_account_id: int = Form(0)):
     db = request.app.state.db
     config = db.get_dynadot_config()
     if not config.get("api_key") or not domain.strip():
@@ -170,7 +177,7 @@ async def buy_domain(request: Request, domain: str = Form("")):
         return HTMLResponse(_fmt_log(log))
 
     # Step 2: Create CF Zone
-    cf_headers, account_id = _cf_headers(db)
+    cf_headers, account_id = _cf_headers_for(db, cf_account_id)
     zone_id = ""
     ns1 = ""
     ns2 = ""

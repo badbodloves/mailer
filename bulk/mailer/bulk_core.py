@@ -112,6 +112,13 @@ class BulkMailerCore:
         self._db.reset_in_progress(list_id_db)
         self._db.reset_daily_counts()
 
+        pending_count = self._db._conn().execute(
+            "SELECT COUNT(*) FROM leads WHERE list_id=? AND state='PENDING'",
+            (list_id_db,)).fetchone()[0]
+        logger.info("Mailing %d starting: list=%d, %d pending leads, smtp=%s, proxy=%s",
+                     self._mailing_id, list_id_db, pending_count,
+                     smtp_row["host"], proxy_str or "none")
+
         sent = 0
         failed = 0
         excluded = 0

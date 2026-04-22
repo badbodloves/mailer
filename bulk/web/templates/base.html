@@ -85,7 +85,7 @@
 
     <script>
     function showTab(container, tabId) {
-        const wrap = typeof container === 'string' ? document.getElementById(container) : container.closest('.card') || container.closest('.tab-wrap');
+        const wrap = typeof container === 'string' ? document.getElementById(container) : (container.closest('.card') || container.closest('.tab-wrap') || container.closest('details') || container.closest('.details-body'));
         if (!wrap) return;
         wrap.querySelectorAll('.tab-content').forEach(t => t.classList.remove('active'));
         wrap.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));

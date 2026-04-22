@@ -104,11 +104,11 @@
         </div>
     </div>
 
-    <!-- R2 Storage Tab -->
+    <!-- R2 Buckets Tab -->
     <div id="cf-r2-tab-{{ a.id }}" class="tab-content">
-    {% if not a.r2_enabled %}
+    {% if not a.account_id %}
         <div class="alert alert-warning">
-            R2 credentials not configured. Add R2 Access Key and Secret Key to this account to use R2 storage.
+            Account ID not set. Add an Account ID to this CF account to manage R2 buckets.
         </div>
     {% else %}
         <div class="grid-2" style="align-items:start">

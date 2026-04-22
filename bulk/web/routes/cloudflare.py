@@ -48,7 +48,7 @@ async def cloudflare_page(request: Request):
     for a in db.get_cf_accounts():
         ad = dict(a)
         ad["domains"] = _pull_results.get(a["id"], [])
-        ad["r2_enabled"] = bool(ad.get("r2_access_key") and ad.get("r2_secret_key") and ad.get("account_id"))
+        ad["r2_enabled"] = bool(ad.get("account_id"))
         ad["buckets"] = []
         accounts.append(ad)
     return tpl.TemplateResponse(request, "cloudflare.html", {
@@ -58,13 +58,31 @@ async def cloudflare_page(request: Request):
 
 @router.get("/cloudflare/{cid}/r2/buckets", response_class=HTMLResponse)
 async def r2_list_buckets(request: Request, cid: int):
-    """HTMX: load bucket list on demand."""
-    r2, _ = _get_r2(request.app.state.db, cid)
-    if not r2 or not r2.enabled:
-        return HTMLResponse('<p style="color:var(--fg2);font-size:13px">R2 not configured (missing keys).</p>')
-    buckets = r2.list_buckets()
+    """HTMX: load bucket list — tries S3 API first, then CF REST API."""
+    db = request.app.state.db
+    buckets = []
+
+    r2, acct = _get_r2(db, cid)
+    if r2 and r2.enabled:
+        buckets = r2.list_buckets()
+
+    if not buckets and acct and acct.get("account_id"):
+        import requests as req_lib
+        headers = _cf_headers(acct)
+        try:
+            resp = req_lib.get(
+                f"https://api.cloudflare.com/client/v4/accounts/{acct['account_id']}/r2/buckets",
+                headers=headers, timeout=15)
+            if resp.status_code == 200:
+                for b in resp.json().get("result", {}).get("buckets", []):
+                    buckets.append(b.get("name", ""))
+                buckets = [b for b in buckets if b]
+        except Exception:
+            pass
+
     if not buckets:
-        return HTMLResponse('<p style="color:var(--fg2);font-size:13px">No buckets found.</p>')
+        return HTMLResponse('<p style="color:var(--fg2);font-size:13px">No buckets found. Create one below or check credentials.</p>')
+
     html = ""
     for b in buckets:
         html += (f'<div style="display:flex;align-items:center;gap:8px;padding:8px 0;'

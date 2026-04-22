@@ -29,15 +29,30 @@
             </div>
             {% endif %}
 
-            <form hx-post="/domains/search"
-                  hx-target="#search-results"
-                  hx-swap="innerHTML">
-                <label>Search Domains (one per line or comma-separated, up to 50)</label>
-                <textarea name="query" rows="4" placeholder="beispiel.de&#10;meinshop.com&#10;newsletter-xyz.de" style="font-family:monospace;font-size:13px"></textarea>
-                <div style="margin-top:10px">
-                    <button class="btn btn-primary">Search Availability</button>
+            <div class="grid-2" style="align-items:start">
+                <form hx-post="/domains/search"
+                      hx-target="#search-results"
+                      hx-swap="innerHTML">
+                    <label>Search Domains (one per line or comma-separated)</label>
+                    <textarea name="query" rows="5" placeholder="beispiel.de&#10;meinshop.com&#10;newsletter-xyz.de" style="font-family:monospace;font-size:13px"></textarea>
+                    <div style="margin-top:10px">
+                        <button class="btn btn-primary">Search Availability</button>
+                    </div>
+                </form>
+                <div>
+                    <label>Cloudflare Account for Zone Setup</label>
+                    <select id="cf-account-select">
+                        {% if cf_accounts %}
+                        {% for a in cf_accounts %}
+                        <option value="{{ a.id }}">{{ a.name }} ({{ a.account_id[:12] if a.account_id else 'no ID' }})</option>
+                        {% endfor %}
+                        {% else %}
+                        <option value="0">No CF accounts</option>
+                        {% endif %}
+                    </select>
+                    <div class="form-help">Zone will be created in this account after purchase.</div>
                 </div>
-            </form>
+            </div>
 
             <div id="search-results" style="margin-top:16px"></div>
             <div id="buy-result" style="margin-top:12px"></div>
@@ -118,7 +133,7 @@
                 </div>
             </form>
 
-            {% if not has_cf %}
+            {% if not cf_accounts %}
             <div class="alert alert-warning" style="margin-top:16px">
                 No Cloudflare account configured. Auto zone creation + NS setup won't work.
                 <a href="/cloudflare" style="color:var(--accent);font-weight:500">Configure Cloudflare</a>
