@@ -119,6 +119,14 @@ async def preflight_check(request: Request, cid: int):
     log = []
     all_ok = True
 
+    # 0. Check proxy
+    proxy_val = cfg.get("proxy_value", "").strip()
+    if proxy_val:
+        log.append(f'<span style="color:var(--green)">&#10003; Proxy active: {escape(proxy_val.splitlines()[0][:40])}</span>')
+    else:
+        log.append('<span style="color:var(--red);font-weight:600">&#9888; NO PROXY — your server IP will be exposed in email headers!</span>')
+        all_ok = False
+
     # 1. Check logos
     if cfg.get("image_enabled"):
         import glob, os

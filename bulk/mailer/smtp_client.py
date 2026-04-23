@@ -143,6 +143,7 @@ class SMTPClient:
         ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
 
         proxy_sock = self._make_proxy_socket()
+        ehlo_name = self._username.split("@")[1] if "@" in self._username else self._host
 
         if self._port == 465:
             if proxy_sock:
@@ -155,7 +156,7 @@ class SMTPClient:
             else:
                 server = smtplib.SMTP_SSL(self._host, self._port,
                                            timeout=self._timeout, context=ctx)
-            server.ehlo()
+            server.ehlo(ehlo_name)
         else:
             if proxy_sock:
                 server = smtplib.SMTP()
@@ -165,10 +166,10 @@ class SMTPClient:
                 server.getreply()
             else:
                 server = smtplib.SMTP(self._host, self._port, timeout=self._timeout)
-            server.ehlo()
+            server.ehlo(ehlo_name)
             if server.has_extn("starttls"):
                 server.starttls(context=ctx)
-                server.ehlo()
+                server.ehlo(ehlo_name)
 
         server.login(self._username, self._password)
         return server

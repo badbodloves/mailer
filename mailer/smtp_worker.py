@@ -304,6 +304,9 @@ class SMTPPool:
             account.proxy = self.get_current_proxy()
         proxy_sock = self._make_socket(account)
 
+        # EHLO with sender domain, not system hostname
+        ehlo_name = account.user.split("@")[1] if "@" in account.user else account.host
+
         if account.port == 465:
             if proxy_sock:
                 wrapped = ctx.wrap_socket(proxy_sock, server_hostname=account.host)
@@ -317,7 +320,7 @@ class SMTPPool:
                     account.host, account.port,
                     timeout=self._timeout, context=ctx,
                 )
-            server.ehlo()
+            server.ehlo(ehlo_name)
         else:
             if proxy_sock:
                 server = smtplib.SMTP()
@@ -327,10 +330,10 @@ class SMTPPool:
                 server.getreply()
             else:
                 server = smtplib.SMTP(account.host, account.port, timeout=self._timeout)
-            server.ehlo()
+            server.ehlo(ehlo_name)
             if server.has_extn("starttls"):
                 server.starttls(context=ctx)
-                server.ehlo()
+                server.ehlo(ehlo_name)
 
         server.login(account.user, account.password)
         return server

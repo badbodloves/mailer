@@ -12,7 +12,10 @@ _check_results = {}
 _check_running = False
 
 
-def _connect_smtp(host, port, username, password, proxy_str="", timeout=15):
+def _connect_smtp(host, port, username, password, proxy_str="", timeout=15, ehlo_domain=""):
+    """Connect + login. ehlo_domain = sender domain for EHLO greeting."""
+    if not ehlo_domain:
+        ehlo_domain = username.split("@")[1] if "@" in username else host
     try:
         import socks as _socks
         HAS_SOCKS = True
@@ -57,7 +60,7 @@ def _connect_smtp(host, port, username, password, proxy_str="", timeout=15):
                 server.getreply()
             else:
                 server = smtplib.SMTP_SSL(host, port, timeout=timeout, context=ctx)
-            server.ehlo()
+            server.ehlo(ehlo_domain)
         else:
             if proxy_sock:
                 server = smtplib.SMTP()
@@ -67,10 +70,10 @@ def _connect_smtp(host, port, username, password, proxy_str="", timeout=15):
                 server.getreply()
             else:
                 server = smtplib.SMTP(host, port, timeout=timeout)
-            server.ehlo()
+            server.ehlo(ehlo_domain)
             if server.has_extn("starttls"):
                 server.starttls(context=ctx)
-                server.ehlo()
+                server.ehlo(ehlo_domain)
         server.login(username, password)
         return server, None, None
     except smtplib.SMTPAuthenticationError as e:
