@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %} — Redirects{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Redirect Links</h1></div>
+
+<div class="grid-2" style="align-items:start">
+    <div class="card">
+        <h3>Generate Redirects (Google Share)</h3>
+        <form hx-post="/redirects/generate" hx-target="#gen-result" hx-swap="innerHTML">
+            <label>Target URL</label>
+            <input name="target_url" placeholder="https://yoursite.com/landing" required>
+            <div class="grid-2">
+                <div><label>Count</label><input name="count" type="number" value="100" min="1" max="5000"></div>
+                <div><label>Threads</label><input name="gen_threads" type="number" value="3" min="1" max="10"></div>
+            </div>
+            <div style="margin-top:10px"><button class="btn btn-primary">Generate</button></div>
+        </form>
+        <div id="gen-result" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card">
+        <h3>Add Manually</h3>
+        <form method="post" action="/redirects/add" class="form-row" style="margin-bottom:10px">
+            <div><input name="short_url" placeholder="https://g.co/kgs/abc123" style="margin:0"></div>
+            <div class="shrink"><button class="btn btn-primary btn-sm">Add</button></div>
+        </form>
+        <form hx-post="/redirects/bulk-add" hx-target="#bulk-result" hx-swap="innerHTML">
+            <label>Bulk Add (one URL per line)</label>
+            <textarea name="urls" rows="4" placeholder="https://g.co/kgs/abc123&#10;https://g.co/kgs/def456" style="font-family:monospace;font-size:12px"></textarea>
+            <div style="margin-top:8px"><button class="btn btn-secondary btn-sm">Bulk Add</button></div>
+        </form>
+        <div id="bulk-result" style="margin-top:8px"></div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-header">
+        <h3>Redirect Pool <span class="count">{{ redirect_count }}</span></h3>
+        {% if redirects %}
+        <form method="post" action="/redirects/clear" onsubmit="return confirm('Clear all redirect links?')">
+            <button class="btn btn-danger btn-sm">Clear All</button>
+        </form>
+        {% endif %}
+    </div>
+    {% if redirects %}
+    <table>
+        <thead><tr><th>Short URL</th><th>Target</th><th>Created</th><th></th></tr></thead>
+        <tbody>
+        {% for r in redirects[:100] %}
+        <tr>
+            <td style="font-family:monospace;font-size:12px"><a href="{{ r.short_url }}" target="_blank" style="color:var(--accent)">{{ r.short_url }}</a></td>
+            <td style="font-size:12px;color:var(--fg2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.target_url or '—' }}</td>
+            <td style="font-size:11px;color:var(--fg2)">{{ r.created_at }}</td>
+            <td><form method="post" action="/redirects/{{ r.id }}/delete"><button class="btn btn-danger btn-xs">Del</button></form></td>
+        </tr>
+        {% endfor %}
+        {% if redirects|length > 100 %}
+        <tr><td colspan="4" style="text-align:center;color:var(--fg2);font-size:12px">Showing first 100 of {{ redirect_count }}</td></tr>
+        {% endif %}
+        </tbody>
+    </table>
+    {% else %}
+    <div class="empty-state"><p>No redirect links. Generate or add manually above.</p></div>
+    {% endif %}
+</div>
+{% endblock %}

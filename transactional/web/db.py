@@ -40,7 +40,6 @@ class TransDB:
                     port INTEGER DEFAULT 587,
                     username TEXT NOT NULL,
                     password TEXT NOT NULL,
-                    proxy TEXT DEFAULT '',
                     daily_limit INTEGER DEFAULT 0,
                     sent_today INTEGER DEFAULT 0,
                     warmup_sent INTEGER DEFAULT 0,
@@ -61,6 +60,7 @@ class TransDB:
                     provider_delay REAL DEFAULT 6.0,
                     warmup_delay REAL DEFAULT 30.0,
                     warmup_count INTEGER DEFAULT 5,
+                    smtp_timeout INTEGER DEFAULT 30,
                     test_recipients TEXT DEFAULT '',
                     test_interval INTEGER DEFAULT 0,
                     schedule_time TEXT DEFAULT '',
@@ -76,6 +76,9 @@ class TransDB:
                     redirect_enabled INTEGER DEFAULT 0,
                     redirect_target_url TEXT DEFAULT '',
                     redirect_rotate_every INTEGER DEFAULT 10,
+                    redirect_gen_threads INTEGER DEFAULT 3,
+                    proxy_mode TEXT DEFAULT 'off',
+                    proxy_value TEXT DEFAULT '',
                     proxy_rotate_every INTEGER DEFAULT 0,
                     ignore_ssl_errors INTEGER DEFAULT 1,
                     total_leads INTEGER DEFAULT 0,
@@ -120,6 +123,13 @@ class TransDB:
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
 
+                CREATE TABLE IF NOT EXISTS trans_redirect_links (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    short_url TEXT NOT NULL,
+                    target_url TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+
                 CREATE TABLE IF NOT EXISTS trans_users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL UNIQUE,
@@ -148,12 +158,12 @@ class TransDB:
                   (json.dumps(settings, ensure_ascii=False),))
         c.commit()
 
-    # --- SMTPs ---
+    # --- SMTPs (no per-smtp proxy — proxy is campaign-level) ---
     def add_smtp(self, host: str, port: int, username: str, password: str,
-                 proxy: str = "", daily_limit: int = 0) -> int:
+                 daily_limit: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_smtps (host,port,username,password,proxy,daily_limit) "
-                  "VALUES (?,?,?,?,?,?)", (host, port, username, password, proxy, daily_limit))
+        c.execute("INSERT INTO trans_smtps (host,port,username,password,daily_limit) "
+                  "VALUES (?,?,?,?,?)", (host, port, username, password, daily_limit))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -166,10 +176,14 @@ class TransDB:
             parts = line.split(",")
             if len(parts) < 4:
                 continue
-            host, port_s, user, pwd = parts[0].strip(), parts[1].strip(), parts[2].strip(), parts[3].strip()
-            proxy = parts[4].strip() if len(parts) > 4 else ""
+            host = parts[0].strip()
             try:
-                self.add_smtp(host, int(port_s), user, pwd, proxy)
+                port = int(parts[1].strip())
+            except ValueError:
+                continue
+            user, pwd = parts[2].strip(), parts[3].strip()
+            try:
+                self.add_smtp(host, port, user, pwd)
                 added += 1
             except Exception:
                 pass
@@ -233,7 +247,8 @@ class TransDB:
         if batch:
             c.executemany("INSERT INTO trans_leads (campaign_id, email) VALUES (?,?)", batch)
             added += len(batch)
-        c.execute("UPDATE trans_campaigns SET total_leads=? WHERE id=?", (added, campaign_id))
+        c.execute("UPDATE trans_campaigns SET total_leads=(SELECT COUNT(*) FROM trans_leads WHERE campaign_id=?) WHERE id=?",
+                  (campaign_id, campaign_id))
         c.commit()
         return added
 
@@ -276,32 +291,35 @@ class TransDB:
 
     def reset_leads(self, campaign_id: int):
         c = self._conn()
-        c.execute("UPDATE trans_leads SET state='PENDING', error_msg='' WHERE campaign_id=?",
-                  (campaign_id,))
+        c.execute("UPDATE trans_leads SET state='PENDING', error_msg='' WHERE campaign_id=?", (campaign_id,))
         c.execute("UPDATE trans_campaigns SET sent=0, failed=0 WHERE id=?", (campaign_id,))
         c.commit()
 
     def reset_in_progress(self, campaign_id: int):
         c = self._conn()
-        c.execute("UPDATE trans_leads SET state='PENDING' WHERE campaign_id=? AND state='IN_PROGRESS'",
-                  (campaign_id,))
+        c.execute("UPDATE trans_leads SET state='PENDING' WHERE campaign_id=? AND state='IN_PROGRESS'", (campaign_id,))
         c.commit()
+
+    def get_lead_preview(self, campaign_id: int, limit: int = 10) -> list:
+        return self._conn().execute("SELECT email FROM trans_leads WHERE campaign_id=? LIMIT ?",
+                                     (campaign_id, limit)).fetchall()
 
     # --- Templates ---
     def add_template(self, name: str, html_content: str = "") -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_templates (name, html_content) VALUES (?,?)",
-                  (name, html_content))
+        c.execute("INSERT INTO trans_templates (name, html_content) VALUES (?,?)", (name, html_content))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def get_templates(self) -> list:
         return self._conn().execute("SELECT * FROM trans_templates ORDER BY name").fetchall()
 
+    def get_template(self, tid: int):
+        return self._conn().execute("SELECT * FROM trans_templates WHERE id=?", (tid,)).fetchone()
+
     def update_template(self, tid: int, name: str, html_content: str):
         c = self._conn()
-        c.execute("UPDATE trans_templates SET name=?, html_content=? WHERE id=?",
-                  (name, html_content, tid))
+        c.execute("UPDATE trans_templates SET name=?, html_content=? WHERE id=?", (name, html_content, tid))
         c.commit()
 
     def delete_template(self, tid: int):
@@ -317,29 +335,64 @@ class TransDB:
         c.commit()
 
     def get_pool(self, pool_type: str, name: str = "default") -> str:
-        r = self._conn().execute(
-            "SELECT content FROM trans_content_pools WHERE pool_type=? AND name=?",
-            (pool_type, name)).fetchone()
+        r = self._conn().execute("SELECT content FROM trans_content_pools WHERE pool_type=? AND name=?",
+                                  (pool_type, name)).fetchone()
         return r["content"] if r else ""
 
     def get_pools(self, pool_type: str) -> list:
-        return self._conn().execute(
-            "SELECT * FROM trans_content_pools WHERE pool_type=? ORDER BY name",
-            (pool_type,)).fetchall()
+        return self._conn().execute("SELECT * FROM trans_content_pools WHERE pool_type=? ORDER BY name",
+                                     (pool_type,)).fetchall()
 
     def delete_pool(self, pid: int):
         c = self._conn()
         c.execute("DELETE FROM trans_content_pools WHERE id=?", (pid,))
         c.commit()
 
-    # --- Users (shared auth) ---
+    # --- Logos ---
+    def add_logo(self, filename: str, file_path: str) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO trans_logos (filename, file_path) VALUES (?,?)", (filename, file_path))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_logos(self) -> list:
+        return self._conn().execute("SELECT * FROM trans_logos ORDER BY filename").fetchall()
+
+    def delete_logo(self, lid: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_logos WHERE id=?", (lid,))
+        c.commit()
+
+    # --- Redirect Links ---
+    def add_redirect(self, short_url: str, target_url: str = "") -> int:
+        c = self._conn()
+        c.execute("INSERT INTO trans_redirect_links (short_url, target_url) VALUES (?,?)", (short_url, target_url))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_redirects(self) -> list:
+        return self._conn().execute("SELECT * FROM trans_redirect_links ORDER BY created_at DESC").fetchall()
+
+    def get_redirect_count(self) -> int:
+        r = self._conn().execute("SELECT COUNT(*) FROM trans_redirect_links").fetchone()
+        return r[0] if r else 0
+
+    def clear_redirects(self):
+        c = self._conn()
+        c.execute("DELETE FROM trans_redirect_links")
+        c.commit()
+
+    def delete_redirect(self, rid: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_redirect_links WHERE id=?", (rid,))
+        c.commit()
+
+    # --- Users ---
     def get_user(self, username: str):
-        return self._conn().execute(
-            "SELECT * FROM trans_users WHERE username=?", (username,)).fetchone()
+        return self._conn().execute("SELECT * FROM trans_users WHERE username=?", (username,)).fetchone()
 
     def get_user_by_id(self, uid: int):
-        return self._conn().execute(
-            "SELECT * FROM trans_users WHERE id=?", (uid,)).fetchone()
+        return self._conn().execute("SELECT * FROM trans_users WHERE id=?", (uid,)).fetchone()
 
     def create_user(self, username: str, password_hash: str, display_name: str = "") -> int:
         c = self._conn()

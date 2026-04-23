@@ -1,0 +1,153 @@
+"""Redirect Links — generate Google Share links, add, bulk-add, delete, clear."""
+import threading
+import time
+import logging
+from html import escape
+from fastapi import APIRouter, Request, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
+
+logger = logging.getLogger("trans.redirects")
+router = APIRouter()
+
+_gen_progress = {"running": False, "total": 0, "done": 0, "ok": 0, "errors": 0}
+
+
+@router.get("/redirects", response_class=HTMLResponse)
+async def redirects_page(request: Request):
+    db = request.app.state.db
+    redirects = [dict(r) for r in db.get_redirects()]
+    count = db.get_redirect_count()
+    return request.app.state.templates.TemplateResponse(request, "redirects.html", {
+        "active": "redirects", "redirects": redirects, "db": db,
+        "redirect_count": count, "gen_progress": _gen_progress,
+    })
+
+
+@router.post("/redirects/generate", response_class=HTMLResponse)
+async def generate_redirects(request: Request,
+                              target_url: str = Form(""),
+                              count: int = Form(100),
+                              gen_threads: int = Form(3)):
+    target = target_url.strip()
+    if not target:
+        return HTMLResponse(
+            '<div class="alert alert-warning">Enter a target URL.</div>'
+        )
+    if _gen_progress["running"]:
+        return HTMLResponse(
+            '<div class="alert alert-warning">Generation already running.</div>'
+        )
+
+    count = max(1, min(count, 5000))
+    gen_threads = max(1, min(gen_threads, 10))
+    db = request.app.state.db
+
+    _gen_progress.update(running=True, total=count, done=0, ok=0, errors=0)
+
+    def worker():
+        try:
+            from mailer.redirect_manager import RedirectManager
+
+            def on_progress(done_count, total_count, url):
+                _gen_progress["done"] = done_count
+                if url:
+                    _gen_progress["ok"] = _gen_progress.get("ok", 0) + 1
+
+            links = RedirectManager.generate_batch_threaded(
+                target_url=target,
+                count=count,
+                threads=gen_threads,
+                callback=on_progress,
+            )
+
+            added = 0
+            for link in links:
+                try:
+                    db.add_redirect(link, target)
+                    added += 1
+                except Exception:
+                    pass
+
+            _gen_progress["done"] = count
+            _gen_progress["ok"] = added
+
+        except Exception as e:
+            logger.error("Redirect generation error: %s", e, exc_info=True)
+            _gen_progress["errors"] += 1
+        finally:
+            _gen_progress["running"] = False
+
+    t = threading.Thread(target=worker, daemon=True)
+    t.start()
+    return HTMLResponse(
+        f'<div class="alert alert-info">Generating {count} redirect links '
+        f'with {gen_threads} threads...</div>'
+        f'<div id="gen-progress" hx-get="/redirects/status" '
+        f'hx-trigger="every 2s" hx-swap="innerHTML"></div>'
+    )
+
+
+@router.post("/redirects/add")
+async def add_redirect(request: Request, short_url: str = Form("")):
+    url = short_url.strip()
+    if url:
+        request.app.state.db.add_redirect(url)
+    return RedirectResponse("/redirects", status_code=303)
+
+
+@router.post("/redirects/bulk-add", response_class=HTMLResponse)
+async def bulk_add(request: Request, urls: str = Form("")):
+    db = request.app.state.db
+    added = 0
+    for line in urls.splitlines():
+        url = line.strip()
+        if url and (url.startswith("http://") or url.startswith("https://")):
+            db.add_redirect(url)
+            added += 1
+    if added:
+        return HTMLResponse(
+            f'<div class="alert alert-success">{added} redirect link(s) added. '
+            f'<a href="/redirects" style="color:var(--accent)">Reload page</a></div>'
+        )
+    return HTMLResponse(
+        '<div class="alert alert-warning">No valid URLs found. '
+        'Each line must start with http:// or https://</div>'
+    )
+
+
+@router.post("/redirects/{rid}/delete")
+async def delete_redirect(request: Request, rid: int):
+    request.app.state.db.delete_redirect(rid)
+    return RedirectResponse("/redirects", status_code=303)
+
+
+@router.post("/redirects/clear")
+async def clear_redirects(request: Request):
+    request.app.state.db.clear_redirects()
+    return RedirectResponse("/redirects", status_code=303)
+
+
+@router.get("/redirects/status", response_class=HTMLResponse)
+async def gen_status(request: Request):
+    p = _gen_progress
+    if p["running"]:
+        done = p["done"]
+        total = p["total"]
+        pct = int(done / total * 100) if total > 0 else 0
+        return HTMLResponse(
+            f'<div class="progress" style="margin-bottom:8px">'
+            f'<div class="progress-bar" style="width:{pct}%">{done}/{total}</div></div>'
+            f'<p style="font-size:12px;color:var(--fg2)">'
+            f'Generated: {p["ok"]} OK, {p["errors"]} errors</p>'
+        )
+    if p["ok"] > 0:
+        return HTMLResponse(
+            f'<div class="alert alert-success">Done! {p["ok"]} redirect links generated. '
+            f'<a href="/redirects" style="color:var(--accent)">Reload page</a></div>'
+        )
+    if p["errors"] > 0:
+        return HTMLResponse(
+            '<div class="alert alert-danger">Generation failed. '
+            'Check logs for details.</div>'
+        )
+    return HTMLResponse("")

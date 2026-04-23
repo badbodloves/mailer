@@ -1,9 +1,12 @@
-"""Campaigns — CRUD, start/stop, live stats."""
+"""Campaigns — CRUD, start/stop, live stats, test-send, pause, events."""
 import re
 import json
 import time
 import logging
 import threading
+import smtplib
+import ssl
+from html import escape
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
@@ -213,6 +216,122 @@ async def campaigns_table(request: Request):
                  f'<td style="color:var(--green)">{c.get("sent",0) or 0:,}</td>'
                  f'<td style="color:var(--red)">{c.get("failed",0) or 0:,}</td>'
                  f'<td>{speed}</td><td>{btn}</td></tr>')
+    html += '</tbody></table>'
+    return HTMLResponse(html)
+
+
+@router.post("/campaigns/{cid}/test-send", response_class=HTMLResponse)
+async def test_send(request: Request, cid: int):
+    db = request.app.state.db
+    camp = db.get_campaign(cid)
+    if not camp:
+        return HTMLResponse('<div class="alert alert-danger">Campaign not found</div>')
+    camp = dict(camp)
+    test_recips = camp.get("test_recipients", "")
+    emails = EMAIL_RE.findall(test_recips)
+    if not emails:
+        return HTMLResponse('<div class="alert alert-warning">No test recipients configured</div>')
+
+    smtps = db.get_smtps()
+    if not smtps:
+        return HTMLResponse('<div class="alert alert-danger">No SMTPs configured</div>')
+
+    smtp_row = None
+    for s in smtps:
+        s = dict(s)
+        if not s.get("is_dead"):
+            smtp_row = s
+            break
+    if not smtp_row:
+        return HTMLResponse('<div class="alert alert-danger">All SMTPs are dead</div>')
+
+    templates = [dict(t) for t in db.get_templates()]
+    html_bodies = [t["html_content"] for t in templates if t.get("html_content")]
+    if not html_bodies:
+        return HTMLResponse('<div class="alert alert-warning">No templates available</div>')
+
+    results = []
+    for to_email in emails:
+        try:
+            html_body = html_bodies[0]
+            html_body = html_body.replace("{email}", to_email)
+            html_body = html_body.replace("{email_user}", to_email.split("@")[0])
+            html_body = html_body.replace("{domain}", to_email.split("@")[1] if "@" in to_email else "")
+
+            from mailer.mime_builder import MIMEBuilder
+            plain_body = re.sub(r"<br\s*/?>", "\n", html_body)
+            plain_body = re.sub(r"<[^>]+>", "", plain_body).strip()
+            raw_msg = MIMEBuilder.build_email(
+                from_name=camp.get("from_name", "") or "Test",
+                from_email=camp.get("from_email", "") or smtp_row["username"],
+                to_email=to_email,
+                subject=camp.get("subject", "") or "Test Email",
+                html_body=html_body,
+                plain_body=plain_body,
+            )
+
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            port = smtp_row["port"]
+            if port == 465:
+                server = smtplib.SMTP_SSL(smtp_row["host"], port, timeout=15, context=ctx)
+            else:
+                server = smtplib.SMTP(smtp_row["host"], port, timeout=15)
+                server.ehlo()
+                if server.has_extn("starttls"):
+                    server.starttls(context=ctx)
+                    server.ehlo()
+            server.login(smtp_row["username"], smtp_row["password"])
+            from_addr = camp.get("from_email", "") or smtp_row["username"]
+            server.sendmail(from_addr, to_email, raw_msg)
+            server.quit()
+            results.append(f'<span style="color:var(--green)">&#10003; {escape(to_email)}</span>')
+        except Exception as e:
+            results.append(f'<span style="color:var(--red)">&#10007; {escape(to_email)}: {escape(str(e)[:200])}</span>')
+
+    return HTMLResponse('<div class="alert alert-info">' + '<br>'.join(results) + '</div>')
+
+
+@router.post("/campaigns/{cid}/pause", response_class=HTMLResponse)
+async def pause_campaign(request: Request, cid: int):
+    db = request.app.state.db
+    camp = db.get_campaign(cid)
+    if not camp:
+        return HTMLResponse('<div class="alert alert-danger">Campaign not found</div>')
+    _runners.pop(cid, None)
+    _speed.pop(cid, None)
+    db.update_campaign(cid, status="PAUSED")
+    return HTMLResponse('<div class="alert alert-success">Campaign paused</div>')
+
+
+@router.get("/campaigns/{cid}/events", response_class=HTMLResponse)
+async def campaign_events(request: Request, cid: int):
+    db = request.app.state.db
+    camp = db.get_campaign(cid)
+    if not camp:
+        return HTMLResponse('<div class="alert alert-danger">Campaign not found</div>')
+
+    rows = db._conn().execute(
+        "SELECT id, email, state, error_msg FROM trans_leads "
+        "WHERE campaign_id=? AND state IN ('SENT','FAILED') "
+        "ORDER BY id DESC LIMIT 100", (cid,)
+    ).fetchall()
+
+    if not rows:
+        return HTMLResponse('<p style="color:var(--fg2)">No events yet</p>')
+
+    html = '<table><thead><tr><th>Email</th><th>Status</th><th>Error</th></tr></thead><tbody>'
+    for r in rows:
+        r = dict(r)
+        state = r["state"]
+        badge_cls = "running" if state == "SENT" else "failed"
+        err = escape(r.get("error_msg", "") or "")[:120]
+        html += (f'<tr>'
+                 f'<td style="font-family:monospace;font-size:12px">{escape(r["email"])}</td>'
+                 f'<td><span class="badge badge-{badge_cls}">{escape(state)}</span></td>'
+                 f'<td style="font-size:11px;color:var(--red)">{err}</td>'
+                 f'</tr>')
     html += '</tbody></table>'
     return HTMLResponse(html)
 

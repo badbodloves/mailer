@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %} — Logos{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Logos</h1></div>
+
+<div class="card">
+    <div class="card-header"><h3>Logo Files <span class="count">{{ logos|length }}</span></h3></div>
+    {% if logos %}
+    <div class="grid-4" style="margin-bottom:16px">
+        {% for l in logos %}
+        <div style="border:1px solid var(--border-light);border-radius:var(--radius);padding:10px;text-align:center">
+            <img src="{{ l.file_path }}" alt="{{ l.filename }}" style="max-width:120px;max-height:80px;object-fit:contain;margin-bottom:8px">
+            <div style="font-size:11px;color:var(--fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ l.filename }}</div>
+            <form method="post" action="/logos/{{ l.id }}/delete" style="margin-top:6px" onsubmit="return confirm('Delete?')">
+                <button class="btn btn-danger btn-xs">Delete</button>
+            </form>
+        </div>
+        {% endfor %}
+    </div>
+    {% else %}
+    <div class="empty-state"><div class="icon">&#128247;</div><p>No logos. Upload below.</p></div>
+    {% endif %}
+</div>
+
+<div class="grid-2" style="align-items:start">
+    <div class="card">
+        <h3>Upload Logos</h3>
+        <form method="post" action="/logos/upload" enctype="multipart/form-data">
+            <label>Select Images (PNG, JPG, GIF, WebP — max 5MB)</label>
+            <input type="file" name="files" multiple accept=".png,.jpg,.jpeg,.gif,.webp" required>
+            <div style="margin-top:10px"><button class="btn btn-primary">Upload</button></div>
+        </form>
+    </div>
+
+    <div class="card">
+        <h3>Generate Variants</h3>
+        <p style="font-size:13px;color:var(--fg2);margin-bottom:12px">
+            Creates brightness/color/contrast variations of each logo for unique email fingerprints.
+        </p>
+        <button class="btn btn-primary btn-sm"
+                hx-post="/logos/generate-variants"
+                hx-target="#variant-result"
+                hx-swap="innerHTML"
+                {{ 'disabled' if variant_running }}>
+            {{ 'Generating...' if variant_running else 'Generate Variants' }}
+        </button>
+        <div id="variant-result" style="margin-top:10px"></div>
+    </div>
+</div>
+{% endblock %}

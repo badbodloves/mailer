@@ -1,7 +1,7 @@
 {% extends "base.html" %}
-{% block title %} — Templates{% endblock %}
+{% block title %} — HTML Editor{% endblock %}
 {% block content %}
-<div class="page-header"><h1>HTML Templates</h1></div>
+<div class="page-header"><h1>HTML Editor</h1></div>
 
 <div class="card">
     <div class="card-header"><h3>Templates <span class="count">{{ templates|length }}</span></h3></div>
@@ -13,15 +13,21 @@
             <form method="post" action="/templates/{{ t.id }}/save">
                 <label>Name</label><input name="name" value="{{ t.name }}">
                 <label>HTML Content</label>
-                <textarea name="html_content" rows="15" style="font-family:monospace;font-size:12px">{{ t.html_content }}</textarea>
-                <div class="form-help">Variables: {email}, {email_user}, {domain}, {from_name}, {subject}, {Logo}, {RedirectLink}, spintax: {opt1|opt2|opt3}</div>
-                <div style="margin-top:12px" class="btn-group">
-                    <button class="btn btn-primary btn-sm">Save</button>
-                    <button type="button" class="btn btn-secondary btn-sm" hx-post="/templates/{{ t.id }}/preview" hx-target="#tpl-preview-{{ t.id }}" hx-swap="innerHTML">Preview</button>
-                    <form method="post" action="/templates/{{ t.id }}/delete" onsubmit="return confirm('Delete?')"><button class="btn btn-danger btn-sm">Delete</button></form>
-                </div>
+                <textarea name="html_content" rows="18" style="font-family:'SF Mono',Consolas,monospace;font-size:12px;line-height:1.5">{{ t.html_content }}</textarea>
+                <div class="form-help">Variables: {email}, {email_user}, {domain}, {from_name}, {subject}, {Logo}, {RedirectLink} — Spintax: {opt1|opt2|opt3} — Random: [RANDSTR:N:charset:case]</div>
+                <div style="margin-top:10px"><button class="btn btn-primary btn-sm">Save</button></div>
             </form>
-            <div id="tpl-preview-{{ t.id }}" style="margin-top:12px"></div>
+
+            <div class="divider"></div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
+                <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-raw" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Raw HTML</button>
+                <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-processed" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Processed</button>
+                <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-af" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">+ AntiFingerprint</button>
+                <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-mime" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Raw MIME</button>
+                <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/text-ratio" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Text:Image Ratio</button>
+                <form method="post" action="/templates/{{ t.id }}/delete" onsubmit="return confirm('Delete?')"><button class="btn btn-danger btn-xs">Delete</button></form>
+            </div>
+            <div id="tpl-out-{{ t.id }}"></div>
         </div>
     </details>
     {% endfor %}
@@ -36,7 +42,7 @@
         <form method="post" action="/templates/add">
             <label>Template Name</label><input name="name" placeholder="Welcome Email" required>
             <label>HTML Content</label>
-            <textarea name="html_content" rows="12" placeholder="<html><body>&#10;<p>Hello {email_user},</p>&#10;<p>Your notification content.</p>&#10;</body></html>" style="font-family:monospace;font-size:12px"></textarea>
+            <textarea name="html_content" rows="15" placeholder="<html>&#10;<body>&#10;  <p>Hello {email_user},</p>&#10;  <p>Your notification content here.</p>&#10;  {Logo}&#10;  <a href='{RedirectLink}'>Click here</a>&#10;</body>&#10;</html>" style="font-family:'SF Mono',Consolas,monospace;font-size:12px;line-height:1.5"></textarea>
             <div style="margin-top:12px"><button class="btn btn-primary">Create Template</button></div>
         </form>
     </div>
