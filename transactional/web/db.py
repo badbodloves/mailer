@@ -129,7 +129,49 @@ class TransDB:
                 );
             """)
             c.commit()
+            self._migrate(c)
             self._initialized = True
+
+    def _migrate(self, c):
+        """Auto-add missing tables and columns so DB never needs deletion."""
+        tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "trans_template_files" not in tables:
+            c.execute("""CREATE TABLE IF NOT EXISTS trans_template_files (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                template_id INTEGER NOT NULL REFERENCES trans_templates(id) ON DELETE CASCADE,
+                filename TEXT DEFAULT '', html_content TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        if "trans_proxies" not in tables:
+            c.execute("""CREATE TABLE IF NOT EXISTS trans_proxies (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                proxy_type TEXT DEFAULT 'single', value TEXT DEFAULT '',
+                rotate_every INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        if "trans_redirect_links" not in tables:
+            c.execute("""CREATE TABLE IF NOT EXISTS trans_redirect_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, short_url TEXT NOT NULL,
+                target_url TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        if "trans_macros" not in tables:
+            c.execute("""CREATE TABLE IF NOT EXISTS trans_macros (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL UNIQUE,
+                values_text TEXT DEFAULT '', rotate_every INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        if "trans_logos" not in tables:
+            c.execute("""CREATE TABLE IF NOT EXISTS trans_logos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        for tbl, col, default in [
+            ("trans_templates", "rotate_every", "0"),
+            ("trans_campaigns", "started_at", "NULL"),
+            ("trans_campaigns", "finished_at", "NULL"),
+        ]:
+            if tbl in tables:
+                cols = {r[1] for r in c.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                if col not in cols:
+                    c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} DEFAULT {default}")
+        c.commit()
 
     # ── Config (single row JSON) ──────────────────────────
     _DEFAULTS = {
