@@ -126,7 +126,17 @@ class TransDB:
                     username TEXT NOT NULL UNIQUE,
                     password_hash TEXT NOT NULL,
                     display_name TEXT DEFAULT '',
+                    logo_path TEXT DEFAULT '',
+                    role TEXT DEFAULT 'user',
+                    permissions_json TEXT DEFAULT '{}',
+                    is_active INTEGER DEFAULT 1,
+                    created_by INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS trans_app_config (
+                    id INTEGER PRIMARY KEY CHECK(id=1),
+                    login_logo TEXT DEFAULT '',
+                    app_name TEXT DEFAULT 'Transactional Mailer'
                 );
             """)
             c.commit()
@@ -163,6 +173,23 @@ class TransDB:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL,
                 file_path TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        if "trans_app_config" not in tables:
+            c.execute("""CREATE TABLE IF NOT EXISTS trans_app_config (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                login_logo TEXT DEFAULT '', app_name TEXT DEFAULT 'Transactional Mailer')""")
+        for tbl in ["trans_smtp_lists", "trans_lead_lists", "trans_macros",
+                     "trans_templates", "trans_logos", "trans_redirect_links",
+                     "trans_campaigns", "trans_proxies"]:
+            if tbl in tables:
+                tcols = {r[1] for r in c.execute(f"PRAGMA table_info({tbl})").fetchall()}
+                if "user_id" not in tcols:
+                    c.execute(f"ALTER TABLE {tbl} ADD COLUMN user_id INTEGER DEFAULT 0")
+        ucols = {r[1] for r in c.execute("PRAGMA table_info(trans_users)").fetchall()} if "trans_users" in tables else set()
+        for col, default in [("role", "'user'"), ("permissions_json", "'{}'"),
+                              ("is_active", "1"), ("created_by", "0"),
+                              ("logo_path", "''")]:
+            if col not in ucols and "trans_users" in tables:
+                c.execute(f"ALTER TABLE trans_users ADD COLUMN {col} DEFAULT {default}")
         for tbl, col, default in [
             ("trans_templates", "rotate_every", "0"),
             ("trans_campaigns", "started_at", "NULL"),
@@ -572,6 +599,45 @@ class TransDB:
     def user_count(self) -> int:
         r = self._conn().execute("SELECT COUNT(*) FROM trans_users").fetchone()
         return r[0] if r else 0
+
+    def get_all_users(self) -> list:
+        return self._conn().execute(
+            "SELECT id,username,display_name,logo_path,role,permissions_json,is_active,created_at "
+            "FROM trans_users ORDER BY username").fetchall()
+
+    def update_user(self, uid: int, **kw):
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in kw)
+        c.execute(f"UPDATE trans_users SET {sets} WHERE id=?", list(kw.values()) + [uid])
+        c.commit()
+
+    def delete_user(self, uid: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_users WHERE id=?", (uid,))
+        c.commit()
+
+    def update_user_password(self, uid: int, password_hash: str):
+        c = self._conn()
+        c.execute("UPDATE trans_users SET password_hash=? WHERE id=?", (password_hash, uid))
+        c.commit()
+
+    # ── App Config (login logo, app name) ─────────────────
+    def get_app_config(self) -> dict:
+        c = self._conn()
+        r = c.execute("SELECT * FROM trans_app_config WHERE id=1").fetchone()
+        if not r:
+            c.execute("INSERT OR IGNORE INTO trans_app_config (id) VALUES (1)")
+            c.commit()
+            return {"login_logo": "", "app_name": "Transactional Mailer"}
+        return dict(r)
+
+    def save_app_config(self, **kw):
+        c = self._conn()
+        existing = self.get_app_config()
+        existing.update(kw)
+        c.execute("INSERT OR REPLACE INTO trans_app_config (id,login_logo,app_name) VALUES (1,?,?)",
+                  (existing.get("login_logo", ""), existing.get("app_name", "Transactional Mailer")))
+        c.commit()
 
     def close(self):
         if hasattr(self._local, "conn") and self._local.conn:

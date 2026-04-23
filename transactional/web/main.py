@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .db import TransDB
-from .routes import campaigns, smtps, leads, templates, auth, logos, redirects, macros, proxies, config as config_route, settings, ai
+from .routes import campaigns, smtps, leads, templates, auth, logos, redirects, macros, proxies, config as config_route, settings, ai, admin
 
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 db = TransDB(os.path.join(_project_root, "trans.db"))
@@ -35,6 +35,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
         user = auth.get_current_user(request)
         if not user:
             return RedirectResponse("/login", status_code=303)
+        if not user.get("is_active", 1):
+            return RedirectResponse("/login", status_code=303)
+
+        if not auth.check_permission(user, path):
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse("Access denied", status_code=403)
 
         request.state.user = user
         return await call_next(request)
@@ -85,6 +91,7 @@ app.include_router(proxies.router)
 app.include_router(ai.router)
 app.include_router(config_route.router)
 app.include_router(settings.router)
+app.include_router(admin.router)
 
 
 @app.get("/")

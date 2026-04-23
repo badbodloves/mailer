@@ -64,6 +64,23 @@ async def upload_logo(request: Request,
     return RedirectResponse("/profile", status_code=303)
 
 
+@router.post("/profile/logo/delete")
+async def delete_logo(request: Request):
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse("/login", status_code=303)
+    db = request.app.state.db
+    if user.get("logo_path"):
+        path = os.path.join(UPLOAD_DIR, os.path.basename(user["logo_path"]))
+        if os.path.isfile(path):
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+    db.update_user_profile(user["id"], user.get("display_name", ""), "")
+    return RedirectResponse("/profile", status_code=303)
+
+
 @router.post("/profile/password")
 async def change_password(request: Request,
                           current_password: str = Form(""),

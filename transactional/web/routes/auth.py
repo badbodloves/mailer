@@ -57,7 +57,30 @@ def get_current_user(request: Request):
     row = request.app.state.db.get_user_by_id(uid)
     if not row:
         return None
-    return dict(row)
+    user = dict(row)
+    user["perms"] = json.loads(user.get("permissions_json") or "{}")
+    return user
+
+
+import json
+
+ROUTE_PERMISSIONS = {
+    "/campaigns": "campaigns", "/smtps": "smtps", "/leads": "leads",
+    "/templates": "templates", "/macros": "macros", "/logos": "logos",
+    "/redirects": "redirects", "/proxies": "proxies", "/ai": "ai",
+    "/config": "config", "/settings": "settings",
+}
+
+
+def check_permission(user: dict, path: str) -> bool:
+    if not user:
+        return False
+    if user.get("role") == "admin":
+        return True
+    for prefix, perm in ROUTE_PERMISSIONS.items():
+        if path == prefix or path.startswith(prefix + "/"):
+            return user.get("perms", {}).get(perm, False)
+    return True
 
 
 @router.get("/login", response_class=HTMLResponse)
@@ -65,7 +88,8 @@ async def login_page(request: Request):
     db = request.app.state.db
     if db.user_count() == 0:
         return request.app.state.templates.TemplateResponse(request, "setup.html", {"error": ""})
-    return request.app.state.templates.TemplateResponse(request, "login.html", {"error": ""})
+    app_cfg = db.get_app_config()
+    return request.app.state.templates.TemplateResponse(request, "login.html", {"error": "", "app_cfg": app_cfg})
 
 
 @router.post("/login")
@@ -92,6 +116,8 @@ async def setup_submit(request: Request, username: str = Form(""), password: str
             request, "setup.html", {"error": "Check username and password (min 6 chars, must match)."})
     pw_hash = hash_password(password)
     uid = db.create_user(username.strip(), pw_hash, display_name.strip() or username.strip())
+    all_perms = {k: True for k, _ in ROUTE_PERMISSIONS.items()}
+    db.update_user(uid, role="admin", permissions_json=json.dumps(all_perms))
     token = create_session_token(uid)
     resp = RedirectResponse("/", status_code=303)
     resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax")
