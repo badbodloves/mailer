@@ -135,7 +135,7 @@ async def stop_campaign(request: Request, cid: int):
 
 @router.post("/campaigns/{cid}/test-send", response_class=HTMLResponse)
 async def test_send(request: Request, cid: int):
-    """Send test email to test_recipients from config."""
+    """Send test email using real templates + macros + antifingerprint."""
     db = request.app.state.db
     cfg = db.get_config()
     recipients_raw = cfg.get("test_recipients", "")
@@ -153,51 +153,81 @@ async def test_send(request: Request, cid: int):
     if not smtps:
         return HTMLResponse('<div class="alert alert-danger">No SMTPs in selected list.</div>')
 
-    results = []
-    import smtplib, ssl
-    from email.mime.text import MIMEText
+    html_bodies = db.get_all_template_htmls()
+    if not html_bodies:
+        return HTMLResponse('<div class="alert alert-danger">No HTML templates. Add on HTML Editor page.</div>')
 
-    templates = [dict(t) for t in db.get_templates()]
-    html_bodies = [t["html_content"] for t in templates if t.get("html_content")]
-    html = html_bodies[0] if html_bodies else "<p>Hello {email_user}, this is a test.</p>"
+    macros = {}
+    for m in db.get_macros():
+        md = dict(m)
+        lines = [l.strip() for l in (md.get("values_text") or "").splitlines() if l.strip()]
+        if lines:
+            macros[md["name"]] = lines
 
-    from_name = cfg.get("from_name", "") or "Test"
+    from_name_cfg = cfg.get("from_name", "") or "Test"
     from_email_cfg = cfg.get("from_email", "")
-    subject = cfg.get("subject", "") or "Test Email"
+    subject_cfg = cfg.get("subject", "") or "Test"
 
-    s = smtps[0]
+    import random, smtplib, ssl
+
+    def _process_vars(text, email):
+        user = email.split("@")[0] if "@" in email else email
+        domain = email.split("@")[1] if "@" in email else ""
+        text = text.replace("{email}", email).replace("{email_user}", user).replace("{domain}", domain)
+        for mname, mlines in macros.items():
+            text = text.replace(f"{{{mname}}}", random.choice(mlines))
+        def _spintax(m):
+            return random.choice(m.group(1).split("|"))
+        for _ in range(20):
+            new = re.sub(r"\{([^{}]+\|[^{}]+)\}", _spintax, text)
+            if new == text:
+                break
+            text = new
+        return text
+
+    afp = None
+    if cfg.get("advanced_antifingerprint"):
+        from mailer.advanced_antifingerprint import AdvancedAntiFingerprintEngine
+        afp = AdvancedAntiFingerprintEngine(
+            enable_classes=cfg.get("antifingerprint_classes", True),
+            structure_variation=cfg.get("structure_variation", 0.5))
+    elif cfg.get("antifingerprint_classes"):
+        from mailer.antifingerprint import AntiFingerprintEngine
+        afp = AntiFingerprintEngine(enable_classes=True)
+
+    results = []
+    s = random.choice(smtps)
     from_email = from_email_cfg or s["username"]
 
     for recipient in recipients:
-        user = recipient.split("@")[0]
-        cur_html = html.replace("{email}", recipient).replace("{email_user}", user).replace("{domain}", recipient.split("@")[1] if "@" in recipient else "")
-        cur_subject = subject.replace("{email_user}", user).replace("{email}", recipient)
-        cur_from = from_name.replace("{email_user}", user)
-
-        plain = re.sub(r"<[^>]+>", "", cur_html).strip()
-
         try:
+            html = random.choice(html_bodies)
+            html = _process_vars(html, recipient)
+            if afp:
+                html = afp.transform(html)
+            plain = re.sub(r"<[^>]+>", "", html).strip()
+            cur_subject = _process_vars(f"[TEST] {subject_cfg}", recipient)
+            cur_from = _process_vars(from_name_cfg, recipient)
+
             from mailer.mime_builder import MIMEBuilder
             raw_msg = MIMEBuilder.build_email(
                 from_name=cur_from, from_email=from_email,
-                to_email=recipient, subject=f"[TEST] {cur_subject}",
-                html_body=cur_html, plain_body=plain)
+                to_email=recipient, subject=cur_subject,
+                html_body=html, plain_body=plain)
 
-            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-            ctx.check_hostname = False
-            ctx.verify_mode = ssl.CERT_NONE
-            if s["port"] == 465:
-                server = smtplib.SMTP_SSL(s["host"], s["port"], timeout=15, context=ctx)
+            proxy_str = ""
+            pv = cfg.get("proxy_value", "").strip()
+            if pv:
+                proxy_str = pv.splitlines()[0].strip()
+
+            from transactional.web.routes.smtps import _connect_smtp
+            server, error, _ = _connect_smtp(s["host"], s["port"], s["username"], s["password"], proxy_str)
+            if server:
+                server.sendmail(from_email, [recipient], raw_msg)
+                server.quit()
+                results.append(f'<div style="color:var(--green);font-size:13px">&#10003; Sent to {escape(recipient)}</div>')
             else:
-                server = smtplib.SMTP(s["host"], s["port"], timeout=15)
-                server.ehlo()
-                if server.has_extn("starttls"):
-                    server.starttls(context=ctx)
-                    server.ehlo()
-            server.login(s["username"], s["password"])
-            server.sendmail(from_email, [recipient], raw_msg)
-            server.quit()
-            results.append(f'<div style="color:var(--green);font-size:13px">&#10003; Sent to {escape(recipient)}</div>')
+                results.append(f'<div style="color:var(--red);font-size:13px">&#10007; {escape(recipient)}: {escape(error[:100])}</div>')
         except Exception as e:
             results.append(f'<div style="color:var(--red);font-size:13px">&#10007; {escape(recipient)}: {escape(str(e)[:100])}</div>')
 
@@ -255,7 +285,9 @@ async def check_blacklist(request: Request, cid: int):
     try:
         from mailer.blacklist_checker import BlacklistChecker
         checker = BlacklistChecker(api_key)
-        results = checker.check_sending_ips()
+        proxy_val = cfg.get("proxy_value", "").strip()
+        proxy_list = [p.strip() for p in proxy_val.splitlines() if p.strip()] if proxy_val else None
+        results = checker.check_sending_ips(proxy_list)
         html_parts = []
         for label, info in results.items():
             if info["clean"]:
@@ -564,6 +596,32 @@ def _run_campaign(db, cid: int):
                         with _lock:
                             db.mark_failed(futures[f], str(e)[:500])
                             failed += 1
+
+            # Retry failed leads once
+            if cid in _runners and not pool.all_dead:
+                failed_count = db._conn().execute(
+                    "SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='FAILED'",
+                    (lead_list_id,)).fetchone()[0]
+                if failed_count > 0:
+                    logger.info("Campaign %d: retrying %d failed leads", cid, failed_count)
+                    db._conn().execute(
+                        "UPDATE trans_leads SET state='PENDING' WHERE list_id=? AND state='FAILED'",
+                        (lead_list_id,))
+                    db._conn().commit()
+
+                    while cid in _runners:
+                        if pool.all_dead:
+                            break
+                        batch = db.fetch_pending(lead_list_id, 200)
+                        if not batch:
+                            break
+                        db.mark_in_progress([r["id"] for r in batch])
+                        futs = {executor.submit(_send_one, r["id"], r["email"]): r["id"] for r in batch}
+                        for f in as_completed(futs):
+                            try:
+                                f.result(timeout=120)
+                            except Exception:
+                                pass
 
         status = "FINISHED" if cid not in _runners else "PAUSED"
         from datetime import datetime

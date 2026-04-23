@@ -5,15 +5,15 @@
 
 {% if cfg.proxy_value %}
 <div class="alert alert-info">
-    Active proxy: <strong>{{ cfg.proxy_mode }}</strong> — {{ cfg.proxy_value.splitlines()[0][:40] }}{{ '...' if cfg.proxy_value|length > 40 }}
+    Active: <strong>{{ cfg.proxy_mode }}</strong> — {{ cfg.proxy_value.splitlines()[0][:50] }}{{ '...' if cfg.proxy_value|length > 50 }}
     {% if cfg.proxy_rotate_every %} (rotate every {{ cfg.proxy_rotate_every }}){% endif %}
 </div>
 {% else %}
-<div class="alert alert-warning">No proxy active. Save a proxy config and click "Activate".</div>
+<div class="alert alert-warning">No proxy active. Add a config and click "Activate".</div>
 {% endif %}
 
 <div class="card">
-    <div class="card-header"><h3>Saved Proxy Configs <span class="count">{{ proxies|length }}</span></h3></div>
+    <div class="card-header"><h3>Saved Configs <span class="count">{{ proxies|length }}</span></h3></div>
     {% if proxies %}
     {% for p in proxies %}
     <details>
@@ -33,22 +33,23 @@
                     <option value="single" {{ 'selected' if p.proxy_type == 'single' }}>Single Proxy</option>
                     <option value="pool" {{ 'selected' if p.proxy_type == 'pool' }}>Proxy Pool (rotate)</option>
                 </select>
-                <label>Proxy (single) or Proxies (one per line)</label>
+                <label>Proxy / Proxies (one per line)</label>
                 <textarea name="value" rows="4" style="font-family:monospace;font-size:12px">{{ p.value }}</textarea>
-                <label>Rotate Every N Sends (pool only)</label>
+                <label>Rotate Every N (pool only)</label>
                 <input name="rotate_every" type="number" value="{{ p.rotate_every or 0 }}" min="0">
-                <div class="form-help">Formats: ip:port:user:pass | user:pass@ip:port | socks5://ip:port:user:pass</div>
-                <div style="margin-top:12px" class="btn-group">
+                <div style="margin-top:12px">
                     <button class="btn btn-primary btn-sm">Save</button>
-                    <form method="post" action="/proxies/{{ p.id }}/activate"><button class="btn btn-success btn-sm">Activate</button></form>
-                    <form method="post" action="/proxies/{{ p.id }}/delete" onsubmit="return confirm('Delete?')"><button class="btn btn-danger btn-sm">Delete</button></form>
                 </div>
             </form>
+            <div style="margin-top:8px" class="btn-group">
+                <form method="post" action="/proxies/{{ p.id }}/activate"><button class="btn btn-success btn-sm">Activate</button></form>
+                <form method="post" action="/proxies/{{ p.id }}/delete" onsubmit="return confirm('Delete?')"><button class="btn btn-danger btn-sm">Delete</button></form>
+            </div>
         </div>
     </details>
     {% endfor %}
     {% else %}
-    <div class="empty-state"><p>No proxy configs saved. Add one below.</p></div>
+    <div class="empty-state"><p>No proxy configs. Add one below.</p></div>
     {% endif %}
 </div>
 
@@ -57,7 +58,7 @@
     <div class="details-body" style="padding-top:12px">
         <form method="post" action="/proxies/add">
             <label>Name</label>
-            <input name="name" placeholder="e.g. Residential DE, Datacenter US" required>
+            <input name="name" placeholder="e.g. Residential DE" required>
             <label>Type</label>
             <select name="proxy_type">
                 <option value="single">Single Proxy</option>
@@ -67,7 +68,7 @@
             <textarea name="value" rows="4" placeholder="socks5://ip:port:user:pass" style="font-family:monospace;font-size:12px" required></textarea>
             <label>Rotate Every N (pool only)</label>
             <input name="rotate_every" type="number" value="0" min="0">
-            <div style="margin-top:12px"><button class="btn btn-primary">Save Proxy Config</button></div>
+            <div style="margin-top:12px"><button class="btn btn-primary">Save Config</button></div>
         </form>
     </div>
 </details>

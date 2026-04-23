@@ -78,13 +78,18 @@ async def preview_template(request: Request, tid: int):
 
 
 def _get_template_html(db, tid: int):
-    """Fetch template HTML content by id. Returns (html, error_response)."""
+    """Fetch template HTML content by id. Checks files first, then inline."""
     row = db._conn().execute("SELECT * FROM trans_templates WHERE id=?", (tid,)).fetchone()
     if not row:
         return None, HTMLResponse("<p>Not found</p>")
+    files = db.get_template_files(tid)
+    if files:
+        html = dict(files[0])["html_content"]
+        if html.strip():
+            return html, None
     html = row["html_content"] or ""
     if not html.strip():
-        return None, HTMLResponse("<p>Template is empty</p>")
+        return None, HTMLResponse("<p>Template is empty — upload HTML files or add inline content</p>")
     return html, None
 
 
