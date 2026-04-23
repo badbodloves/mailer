@@ -195,14 +195,46 @@ async def test_send(request: Request, cid: int):
         from mailer.antifingerprint import AntiFingerprintEngine
         afp = AntiFingerprintEngine(enable_classes=True)
 
+    # Load redirects + logos for test
+    redirect_links = [dict(r)["short_url"] for r in db.get_redirects()] if cfg.get("redirect_enabled") else []
+
+    import glob, os
+    logo_files = []
+    if cfg.get("image_enabled"):
+        from .logos import VARIANT_DIR, UPLOAD_DIR
+        logo_files = sorted(glob.glob(os.path.join(VARIANT_DIR, "*")))
+        if not logo_files:
+            logo_files = sorted(glob.glob(os.path.join(UPLOAD_DIR, "*")))
+
     results = []
     s = random.choice(smtps)
     from_email = from_email_cfg or s["username"]
 
-    for recipient in recipients:
+    for idx, recipient in enumerate(recipients):
         try:
             html = random.choice(html_bodies)
             html = _process_vars(html, recipient)
+
+            if redirect_links and "{RedirectLink}" in html:
+                html = html.replace("{RedirectLink}", redirect_links[idx % len(redirect_links)])
+
+            inline_images = None
+            if logo_files and "{Logo}" in html:
+                logo_path = logo_files[idx % len(logo_files)]
+                try:
+                    import mimetypes as mt, secrets as _sec
+                    mime_type = mt.guess_type(logo_path)[0] or "image/png"
+                    with open(logo_path, "rb") as lf:
+                        logo_bytes = lf.read()
+                    cid_local = _sec.token_hex(8)
+                    cid = f"{cid_local}@{from_email.split('@')[1] if '@' in from_email else 'mail'}"
+                    html = html.replace("{Logo}", f'<img src="cid:{cid}" alt="Logo" style="max-width:200px">')
+                    inline_images = [(logo_bytes, cid, mime_type)]
+                except Exception:
+                    html = html.replace("{Logo}", "")
+            elif "{Logo}" in html:
+                html = html.replace("{Logo}", "")
+
             if afp:
                 html = afp.transform(html)
             plain = re.sub(r"<[^>]+>", "", html).strip()
@@ -213,7 +245,8 @@ async def test_send(request: Request, cid: int):
             raw_msg = MIMEBuilder.build_email(
                 from_name=cur_from, from_email=from_email,
                 to_email=recipient, subject=cur_subject,
-                html_body=html, plain_body=plain)
+                html_body=html, plain_body=plain,
+                inline_images=inline_images)
 
             proxy_str = ""
             pv = cfg.get("proxy_value", "").strip()
@@ -464,6 +497,29 @@ def _run_campaign(db, cid: int):
         from_email_cfg = cfg.get("from_email", "")
         subject_cfg = cfg.get("subject", "") or "Notification"
 
+        # Logo setup
+        logo_variants = []
+        if cfg.get("image_enabled"):
+            import glob
+            from .logos import VARIANT_DIR, UPLOAD_DIR
+            variant_files = sorted(glob.glob(os.path.join(VARIANT_DIR, "*")))
+            if variant_files:
+                logo_variants = variant_files
+                logger.info("Campaign %d: %d logo variants loaded", cid, len(logo_variants))
+            else:
+                source_files = sorted(glob.glob(os.path.join(UPLOAD_DIR, "*")))
+                if source_files:
+                    logo_variants = source_files
+                    logger.info("Campaign %d: %d source logos (no variants)", cid, len(source_files))
+
+        # Redirect setup
+        redirect_links = []
+        if cfg.get("redirect_enabled"):
+            redirects = db.get_redirects()
+            redirect_links = [dict(r)["short_url"] for r in redirects]
+            logger.info("Campaign %d: %d redirect links loaded", cid, len(redirect_links))
+        redirect_rotate = cfg.get("redirect_rotate_every", 10) or 10
+
         thread_count = min(cfg.get("threads", 40), pool.size * 2, 200)
         thread_count = max(thread_count, 1)
         logger.info("Campaign %d starting: %d pending, %d SMTPs, %d threads",
@@ -531,8 +587,39 @@ def _run_campaign(db, cid: int):
             cur_from_name = _process(from_name_cfg, email)
             cur_subject = _process(subject_cfg, email)
 
+            send_idx = sent + failed
             html = random.choice(html_bodies) if html_bodies else "<p>Hello {email_user}</p>"
             html = _process(html, email)
+
+            # Resolve {RedirectLink}
+            if redirect_links and "{RedirectLink}" in html:
+                group = send_idx // redirect_rotate
+                link = redirect_links[group % len(redirect_links)] if redirect_links else ""
+                html = html.replace("{RedirectLink}", link)
+                cur_subject = cur_subject.replace("{RedirectLink}", link)
+
+            # Resolve {Logo} — CID inline
+            inline_images = None
+            if logo_variants and "{Logo}" in html:
+                logo_path = logo_variants[send_idx % len(logo_variants)]
+                try:
+                    import mimetypes as mt
+                    mime_type = mt.guess_type(logo_path)[0] or "image/png"
+                    with open(logo_path, "rb") as lf:
+                        logo_bytes = lf.read()
+                    import secrets as _sec
+                    cid_local = _sec.token_hex(8)
+                    domain_part = (cur_from_email.split("@")[1] if "@" in cur_from_email else "mail")
+                    cid = f"{cid_local}@{domain_part}"
+                    html = html.replace("{Logo}",
+                        f'<img src="cid:{cid}" alt="Logo" style="max-width:200px">')
+                    inline_images = [(logo_bytes, cid, mime_type)]
+                except Exception as le:
+                    logger.warning("Logo embed error: %s", le)
+                    html = html.replace("{Logo}", "")
+            elif "{Logo}" in html:
+                html = html.replace("{Logo}", "")
+
             if afp:
                 html = afp.transform(html)
             plain = re.sub(r"<br\s*/?>", "\n", html)
@@ -541,7 +628,8 @@ def _run_campaign(db, cid: int):
             raw_msg = MIMEBuilder.build_email(
                 from_name=cur_from_name, from_email=cur_from_email,
                 to_email=email, subject=cur_subject,
-                html_body=html, plain_body=plain)
+                html_body=html, plain_body=plain,
+                inline_images=inline_images)
 
             result = worker.send(cur_from_email, email, raw_msg, account=account)
 
