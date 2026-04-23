@@ -42,11 +42,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.db = db
     yield
     db.close()
 
-app = FastAPI(title="Transactional Mailer")
+app = FastAPI(title="Transactional Mailer", lifespan=lifespan)
+app.state.db = db
 
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):

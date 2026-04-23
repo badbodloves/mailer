@@ -49,11 +49,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.db = db
     yield
     db.close()
 
 app = FastAPI(title="Bulk Mailer", lifespan=lifespan)
+app.state.db = db
 
 app.add_middleware(AuthMiddleware)
 
