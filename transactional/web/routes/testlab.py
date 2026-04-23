@@ -140,7 +140,16 @@ async def send_test(request: Request,
                     f'<iframe srcdoc="{escape(html_body)}" style="width:100%;height:300px;'
                     f'border:1px solid var(--border);border-radius:var(--radius);background:#fff;margin-top:8px"></iframe>')
 
-    return HTMLResponse(status_html + headers_html + preview_html)
+    # Spam check on the built MIME (with profile applied)
+    spam_html = ""
+    try:
+        from .spam_check import check_spam, format_result_html
+        results = check_spam(raw_msg, "both", cfg.get("spam_checker_url", "http://127.0.0.1:11333/checkv2"))
+        spam_html = f'<div style="margin-top:12px"><strong>Spam Score Analysis</strong></div>{format_result_html(results)}'
+    except Exception as e:
+        spam_html = f'<div style="margin-top:12px;color:var(--fg2)">Spam check skipped: {escape(str(e))}</div>'
+
+    return HTMLResponse(status_html + headers_html + spam_html + preview_html)
 
 
 @router.post("/testlab/preview-headers", response_class=HTMLResponse)
