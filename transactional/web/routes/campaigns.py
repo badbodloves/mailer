@@ -328,7 +328,7 @@ async def test_send(request: Request, cid: int):
                         logo_bytes = lf.read()
                     cid_local = _sec.token_hex(8)
                     cid = f"{cid_local}@{from_email.split('@')[1] if '@' in from_email else 'mail'}"
-                    html = html.replace("{Logo}", f'<img src="cid:{cid}" alt="Logo" style="max-width:200px">')
+                    html = html.replace("{Logo}", f'<img src="cid:{cid}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
                     inline_images = [(logo_bytes, cid, mime_type)]
                 except Exception:
                     html = html.replace("{Logo}", "")
@@ -750,7 +750,7 @@ def _run_campaign(db, cid: int):
                         domain_part = (cur_from_email.split("@")[1] if "@" in cur_from_email else "mail")
                         cid = f"{cid_local}@{domain_part}"
                         html = html.replace("{Logo}",
-                            f'<img src="cid:{cid}" alt="Logo" style="max-width:200px">')
+                            f'<img src="cid:{cid}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
                         inline_images = [(logo_bytes, cid, mime_type)]
                     except Exception as le:
                         logger.warning("Logo embed error: %s", le)
