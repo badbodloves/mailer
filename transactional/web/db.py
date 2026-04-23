@@ -105,6 +105,7 @@ class TransDB:
                     status TEXT DEFAULT 'DRAFT',
                     smtp_list_id INTEGER REFERENCES trans_smtp_lists(id),
                     lead_list_id INTEGER REFERENCES trans_lead_lists(id),
+                    schedule_time TEXT DEFAULT '',
                     total_leads INTEGER DEFAULT 0,
                     sent INTEGER DEFAULT 0,
                     failed INTEGER DEFAULT 0,
@@ -166,6 +167,7 @@ class TransDB:
             ("trans_templates", "rotate_every", "0"),
             ("trans_campaigns", "started_at", "NULL"),
             ("trans_campaigns", "finished_at", "NULL"),
+            ("trans_campaigns", "schedule_time", "''"),
         ]:
             if tbl in tables:
                 cols = {r[1] for r in c.execute(f"PRAGMA table_info({tbl})").fetchall()}

@@ -37,9 +37,12 @@
     <div class="card-header">
         <h3>Redirect Pool <span class="count">{{ redirect_count }}</span></h3>
         {% if redirects %}
-        <form method="post" action="/redirects/clear" onsubmit="return confirm('Clear all redirect links?')">
-            <button class="btn btn-danger btn-sm">Clear All</button>
-        </form>
+        <div class="btn-group">
+            <a href="/redirects/export" class="btn btn-secondary btn-sm">Export .txt</a>
+            <form method="post" action="/redirects/clear" onsubmit="return confirm('Clear all?')">
+                <button class="btn btn-danger btn-sm">Clear All</button>
+            </form>
+        </div>
         {% endif %}
     </div>
     {% if redirects %}

@@ -90,9 +90,11 @@
         <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
             <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-raw" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Raw</button>
             <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-processed" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Processed</button>
-            <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-af" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">+ AntiFingerprint</button>
-            <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-mime" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Raw MIME</button>
-            <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/text-ratio" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Text:Image Ratio</button>
+            <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-af" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">+ Basic AF</button>
+            <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-advanced-af" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">+ Advanced AF</button>
+            <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-3way" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">3-Way</button>
+            <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-mime" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">MIME</button>
+            <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/text-ratio" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Ratio</button>
         </div>
         <div id="tpl-out-{{ t.id }}"></div>
     </div>

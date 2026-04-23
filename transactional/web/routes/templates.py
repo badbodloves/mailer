@@ -93,11 +93,22 @@ def _get_template_html(db, tid: int):
     return html, None
 
 
-def _resolve_variables(html: str) -> str:
-    """Replace template variables with preview values."""
+def _resolve_variables(html: str, db=None) -> str:
+    """Replace template variables with preview values + Logo."""
     html = html.replace("{email}", "preview@example.com")
     html = html.replace("{email_user}", "preview")
     html = html.replace("{domain}", "example.com")
+    html = html.replace("{RedirectLink}", "https://example.com/redirect")
+    if "{Logo}" in html:
+        logo_src = ""
+        if db:
+            logos = db.get_logos()
+            if logos:
+                logo_src = dict(logos[0]).get("file_path", "")
+        if logo_src:
+            html = html.replace("{Logo}", f'<img src="{logo_src}" alt="Logo" style="max-width:200px">')
+        else:
+            html = html.replace("{Logo}", '<span style="color:var(--fg2)">[Logo placeholder]</span>')
     return html
 
 
@@ -120,7 +131,7 @@ async def preview_processed(request: Request, tid: int):
     html, err = _get_template_html(db, tid)
     if err:
         return err
-    html = _resolve_variables(html)
+    html = _resolve_variables(html, db)
     return HTMLResponse(
         f'<iframe srcdoc="{escape(html)}" style="width:100%;height:400px;'
         f'border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe>'
@@ -128,29 +139,77 @@ async def preview_processed(request: Request, tid: int):
 
 
 @router.post("/templates/{tid}/preview-af", response_class=HTMLResponse)
-async def preview_antifingerprint(request: Request, tid: int):
+async def preview_basic_af(request: Request, tid: int):
+    """Basic antifingerprint: CSS classes only, no structure change."""
     db = request.app.state.db
     html, err = _get_template_html(db, tid)
     if err:
         return err
-    html = _resolve_variables(html)
+    html = _resolve_variables(html, db)
     try:
-        from mailer.advanced_antifingerprint import AdvancedAntiFingerprintEngine
-        afp = AdvancedAntiFingerprintEngine(enable_classes=True, structure_variation=0.5)
+        from mailer.antifingerprint import AntiFingerprintEngine
+        afp = AntiFingerprintEngine(enable_classes=True)
         html = afp.transform(html)
     except Exception as e:
-        return HTMLResponse(
-            f'<div class="alert alert-danger">Antifingerprint error: {escape(str(e))}</div>'
-        )
+        return HTMLResponse(f'<div class="alert alert-danger">AF error: {escape(str(e))}</div>')
     return HTMLResponse(
         f'<iframe srcdoc="{escape(html)}" style="width:100%;height:400px;'
         f'border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe>'
         f'<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;'
-        f'color:var(--fg2)">View transformed source</summary>'
+        f'color:var(--fg2)">View source</summary>'
         f'<pre style="white-space:pre-wrap;word-break:break-all;max-height:300px;'
         f'overflow:auto;background:var(--bg2);padding:12px;border-radius:var(--radius);'
-        f'font-size:11px;font-family:monospace">{escape(html)}</pre></details>'
-    )
+        f'font-size:11px;font-family:monospace">{escape(html)}</pre></details>')
+
+
+@router.post("/templates/{tid}/preview-advanced-af", response_class=HTMLResponse)
+async def preview_advanced_af(request: Request, tid: int):
+    """Advanced AF: classes + structure variation + tag swaps + pixel jitter."""
+    db = request.app.state.db
+    html, err = _get_template_html(db, tid)
+    if err:
+        return err
+    html = _resolve_variables(html, db)
+    try:
+        from mailer.advanced_antifingerprint import AdvancedAntiFingerprintEngine
+        afp = AdvancedAntiFingerprintEngine(enable_classes=True, structure_variation=0.8)
+        html = afp.transform(html)
+    except Exception as e:
+        return HTMLResponse(f'<div class="alert alert-danger">AF error: {escape(str(e))}</div>')
+    return HTMLResponse(
+        f'<iframe srcdoc="{escape(html)}" style="width:100%;height:400px;'
+        f'border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe>'
+        f'<details style="margin-top:8px"><summary style="cursor:pointer;font-size:12px;'
+        f'color:var(--fg2)">View source</summary>'
+        f'<pre style="white-space:pre-wrap;word-break:break-all;max-height:300px;'
+        f'overflow:auto;background:var(--bg2);padding:12px;border-radius:var(--radius);'
+        f'font-size:11px;font-family:monospace">{escape(html)}</pre></details>')
+
+
+@router.post("/templates/{tid}/preview-3way", response_class=HTMLResponse)
+async def preview_3way(request: Request, tid: int):
+    """3-way comparison: Original vs Basic AF vs Advanced AF."""
+    db = request.app.state.db
+    html, err = _get_template_html(db, tid)
+    if err:
+        return err
+    original = _resolve_variables(html, db)
+    try:
+        from mailer.antifingerprint import AntiFingerprintEngine
+        from mailer.advanced_antifingerprint import AdvancedAntiFingerprintEngine
+        basic = AntiFingerprintEngine(enable_classes=True).transform(original)
+        advanced = AdvancedAntiFingerprintEngine(enable_classes=True, structure_variation=0.8).transform(original)
+    except Exception as e:
+        return HTMLResponse(f'<div class="alert alert-danger">{escape(str(e))}</div>')
+    return HTMLResponse(
+        f'<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">'
+        f'<div><strong style="font-size:12px">Original</strong>'
+        f'<iframe srcdoc="{escape(original)}" style="width:100%;height:350px;border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe></div>'
+        f'<div><strong style="font-size:12px">Basic AF</strong>'
+        f'<iframe srcdoc="{escape(basic)}" style="width:100%;height:350px;border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe></div>'
+        f'<div><strong style="font-size:12px">Advanced AF</strong>'
+        f'<iframe srcdoc="{escape(advanced)}" style="width:100%;height:350px;border:1px solid var(--border);border-radius:var(--radius);background:#fff"></iframe></div>'
+        f'</div>')
 
 
 @router.post("/templates/{tid}/preview-mime", response_class=HTMLResponse)
@@ -159,7 +218,7 @@ async def preview_mime(request: Request, tid: int):
     html, err = _get_template_html(db, tid)
     if err:
         return err
-    html = _resolve_variables(html)
+    html = _resolve_variables(html, db)
     plain_body = re.sub(r"<br\s*/?>", "\n", html)
     plain_body = re.sub(r"<[^>]+>", "", plain_body).strip()
     try:

@@ -47,29 +47,28 @@ async def generate_redirects(request: Request,
     def worker():
         try:
             from mailer.redirect_manager import RedirectManager
+            mgr = RedirectManager(target_url=target, db_path=":memory:",
+                                   enabled=True, rotate_every=10, gen_threads=gen_threads)
+            mgr._enabled = True
+            mgr._target_url = target
 
-            def on_progress(done_count, total_count, url):
-                _gen_progress["done"] = done_count
+            generated = 0
+            for i in range(count):
+                url = mgr._generate_one(target)
                 if url:
-                    _gen_progress["ok"] = _gen_progress.get("ok", 0) + 1
-
-            links = RedirectManager.generate_batch_threaded(
-                target_url=target,
-                count=count,
-                threads=gen_threads,
-                callback=on_progress,
-            )
-
-            added = 0
-            for link in links:
-                try:
-                    db.add_redirect(link, target)
-                    added += 1
-                except Exception:
-                    pass
+                    try:
+                        db.add_redirect(url, target)
+                        generated += 1
+                    except Exception:
+                        pass
+                    _gen_progress["ok"] = generated
+                _gen_progress["done"] = i + 1
+                if not url:
+                    _gen_progress["errors"] += 1
+                time.sleep(0.3)
 
             _gen_progress["done"] = count
-            _gen_progress["ok"] = added
+            _gen_progress["ok"] = generated
 
         except Exception as e:
             logger.error("Redirect generation error: %s", e, exc_info=True)
@@ -119,6 +118,17 @@ async def bulk_add(request: Request, urls: str = Form("")):
 async def delete_redirect(request: Request, rid: int):
     request.app.state.db.delete_redirect(rid)
     return RedirectResponse("/redirects", status_code=303)
+
+
+@router.get("/redirects/export")
+async def export_redirects(request: Request):
+    """Export all redirect URLs as .txt download."""
+    db = request.app.state.db
+    redirects = db.get_redirects()
+    lines = "\n".join(dict(r)["short_url"] for r in redirects)
+    from fastapi.responses import Response
+    return Response(content=lines, media_type="text/plain",
+                    headers={"Content-Disposition": "attachment; filename=redirects.txt"})
 
 
 @router.post("/redirects/clear")

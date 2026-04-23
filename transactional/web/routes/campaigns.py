@@ -79,9 +79,10 @@ async def add_campaign(request: Request,
 async def save_campaign(request: Request, cid: int,
                         name: str = Form(""),
                         smtp_list_id: int = Form(0),
-                        lead_list_id: int = Form(0)):
+                        lead_list_id: int = Form(0),
+                        schedule_time: str = Form("")):
     db = request.app.state.db
-    updates = {"name": name.strip()}
+    updates = {"name": name.strip(), "schedule_time": schedule_time.strip()}
     if smtp_list_id:
         updates["smtp_list_id"] = smtp_list_id
     if lead_list_id:
@@ -516,7 +517,29 @@ def _run_campaign(db, cid: int):
 
     camp = dict(db.get_campaign(cid))
     cfg = db.get_config()
-    from datetime import datetime
+    from datetime import datetime, timedelta
+
+    # Schedule wait
+    schedule = camp.get("schedule_time", "")
+    if schedule:
+        try:
+            target_time = datetime.strptime(schedule, "%H:%M").time()
+            now = datetime.now()
+            target = datetime.combine(now.date(), target_time)
+            if target <= now:
+                target += timedelta(days=1)
+            wait = (target - now).total_seconds()
+            logger.info("Campaign %d: scheduled for %s (waiting %ds)", cid, target, int(wait))
+            db.update_campaign(cid, status="SCHEDULED")
+            while wait > 0 and cid in _runners:
+                time.sleep(min(wait, 5))
+                wait = (target - datetime.now()).total_seconds()
+        except ValueError:
+            pass
+
+    if cid not in _runners:
+        return
+
     db.update_campaign(cid, status="RUNNING", started_at=datetime.now().isoformat())
 
     lead_list_id = camp.get("lead_list_id", 0)

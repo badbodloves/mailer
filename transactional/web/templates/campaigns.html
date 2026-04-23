@@ -64,10 +64,13 @@
                         </select>
                     </div>
                     <div>
+                        <label>Schedule (HH:MM)</label>
+                        <input name="schedule_time" value="{{ c.schedule_time or '' }}" placeholder="14:30">
+                        <div class="form-help">Auto-start at this time. Empty = manual start.</div>
                         <div class="form-help" style="margin-top:12px">
-                            All sending settings (threads, delays, proxy, AF, etc.) are in <a href="/config" style="color:var(--accent)">Config</a>.<br>
-                            Sender/Subject use macros from <a href="/macros" style="color:var(--accent)">Macros</a>.<br>
-                            HTML templates from <a href="/templates" style="color:var(--accent)">HTML Editor</a>.
+                            Sending settings in <a href="/config" style="color:var(--accent)">Config</a>.
+                            Sender/Subject via <a href="/macros" style="color:var(--accent)">Macros</a>.
+                            Templates in <a href="/templates" style="color:var(--accent)">HTML Editor</a>.
                         </div>
                     </div>
                 </div>
