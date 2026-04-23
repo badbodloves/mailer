@@ -123,8 +123,9 @@
             <h3>Spam Checker</h3>
             <label>Backend</label>
             <select name="spam_checker">
-                <option value="rspamd" {{ 'selected' if cfg.spam_checker == 'rspamd' }}>Rspamd (HTTP API)</option>
-                <option value="spamassassin" {{ 'selected' if cfg.spam_checker == 'spamassassin' }}>SpamAssassin (spamc CLI)</option>
+                <option value="both" {{ 'selected' if cfg.spam_checker == 'both' }}>Both (Rspamd + SpamAssassin)</option>
+                <option value="rspamd" {{ 'selected' if cfg.spam_checker == 'rspamd' }}>Rspamd only</option>
+                <option value="spamassassin" {{ 'selected' if cfg.spam_checker == 'spamassassin' }}>SpamAssassin only</option>
             </select>
             <label>Rspamd URL</label>
             <input name="spam_checker_url" value="{{ cfg.spam_checker_url or 'http://127.0.0.1:11333/checkv2' }}">

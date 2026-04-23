@@ -1,4 +1,4 @@
-"""Spam Score Checker — Rspamd or SpamAssassin integration."""
+"""Spam Score Checker — Rspamd + SpamAssassin integration."""
 import re
 import subprocess
 import logging
@@ -14,9 +14,8 @@ except ImportError:
 
 
 def check_rspamd(raw_mime: str, url: str = "http://127.0.0.1:11333/checkv2") -> dict:
-    """Check via Rspamd HTTP API. Returns {score, action, symbols, raw}."""
     if not HAS_REQUESTS:
-        return {"error": "requests library not installed"}
+        return {"error": "requests library not installed", "checker": "rspamd"}
     try:
         resp = _requests.post(url, data=raw_mime.encode("utf-8"),
                                headers={"Content-Type": "text/plain"}, timeout=30)
@@ -36,14 +35,14 @@ def check_rspamd(raw_mime: str, url: str = "http://127.0.0.1:11333/checkv2") -> 
                 "threshold": data.get("required_score", 15),
                 "symbols": symbols,
                 "error": None,
+                "checker": "rspamd",
             }
-        return {"error": f"Rspamd returned {resp.status_code}: {resp.text[:200]}"}
+        return {"error": f"Rspamd {resp.status_code}: {resp.text[:200]}", "checker": "rspamd"}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e), "checker": "rspamd"}
 
 
 def check_spamassassin(raw_mime: str) -> dict:
-    """Check via spamc CLI. Returns {score, symbols, raw}."""
     try:
         result = subprocess.run(
             ["spamc", "-R"],
@@ -56,46 +55,66 @@ def check_spamassassin(raw_mime: str) -> dict:
         symbols = []
 
         for line in output.splitlines():
-            score_match = re.match(r"^([\d.]+)/([\d.]+)", line.strip())
-            if score_match:
-                score = float(score_match.group(1))
-                threshold = float(score_match.group(2))
+            line = line.strip()
+            if not line or line.startswith("-") and not line[0:1].isdigit():
                 continue
-            rule_match = re.match(r"^\s*([\-\d.]+)\s+(\S+)\s+(.*)", line.strip())
+            score_match = re.match(r"^(-?[\d]+\.[\d]+)\s*/\s*([\d]+\.[\d]+)", line)
+            if score_match:
+                try:
+                    score = float(score_match.group(1))
+                    threshold = float(score_match.group(2))
+                except ValueError:
+                    pass
+                continue
+            rule_match = re.match(r"^\s*(-?[\d]+\.[\d]+)\s+([A-Z][A-Z0-9_]+)\s+(.*)", line)
             if rule_match:
-                symbols.append({
-                    "name": rule_match.group(2),
-                    "score": float(rule_match.group(1)),
-                    "description": rule_match.group(3).strip(),
-                })
+                try:
+                    sc = float(rule_match.group(1))
+                    symbols.append({
+                        "name": rule_match.group(2),
+                        "score": sc,
+                        "description": rule_match.group(3).strip(),
+                    })
+                except ValueError:
+                    pass
 
         symbols.sort(key=lambda s: abs(s["score"]), reverse=True)
         action = "no action" if score < threshold else "reject"
         return {
-            "score": score,
-            "action": action,
-            "threshold": threshold,
-            "symbols": symbols,
-            "error": None,
+            "score": score, "action": action, "threshold": threshold,
+            "symbols": symbols, "error": None, "checker": "spamassassin",
         }
     except FileNotFoundError:
-        return {"error": "spamc not found. Install: sudo apt install spamassassin spamc"}
+        return {"error": "spamc not found. Install: sudo apt install spamassassin spamc", "checker": "spamassassin"}
     except Exception as e:
-        return {"error": str(e)}
+        return {"error": str(e), "checker": "spamassassin"}
 
 
-def check_spam(raw_mime: str, checker: str = "rspamd",
-               url: str = "http://127.0.0.1:11333/checkv2") -> dict:
-    if checker == "rspamd":
-        return check_rspamd(raw_mime, url)
+def check_both(raw_mime: str, rspamd_url: str = "http://127.0.0.1:11333/checkv2") -> list:
+    """Run both checkers, return list of results."""
+    results = []
+    results.append(check_rspamd(raw_mime, rspamd_url))
+    results.append(check_spamassassin(raw_mime))
+    return results
+
+
+def check_spam(raw_mime: str, checker: str = "both",
+               url: str = "http://127.0.0.1:11333/checkv2") -> list:
+    if checker == "both":
+        return check_both(raw_mime, url)
+    elif checker == "rspamd":
+        return [check_rspamd(raw_mime, url)]
     elif checker == "spamassassin":
-        return check_spamassassin(raw_mime)
-    return {"error": f"Unknown checker: {checker}"}
+        return [check_spamassassin(raw_mime)]
+    return [{"error": f"Unknown checker: {checker}", "checker": "?"}]
 
 
-def format_result_html(result: dict) -> str:
+def _format_one(result: dict) -> str:
+    checker = result.get("checker", "?")
     if result.get("error"):
-        return f'<div class="alert alert-danger">Spam check error: {escape(result["error"])}</div>'
+        return (f'<div style="margin-bottom:12px">'
+                f'<strong>{checker.upper()}</strong>: '
+                f'<span style="color:var(--red)">{escape(result["error"])}</span></div>')
 
     score = result.get("score", 0)
     action = result.get("action", "unknown")
@@ -113,34 +132,37 @@ def format_result_html(result: dict) -> str:
         rating = "High Risk"
 
     action_badge = {
-        "no action": "badge-running",
-        "greylist": "badge-paused",
-        "add header": "badge-draft",
-        "rewrite subject": "badge-draft",
+        "no action": "badge-running", "greylist": "badge-paused",
+        "add header": "badge-draft", "rewrite subject": "badge-draft",
         "reject": "badge-failed",
     }.get(action, "badge-draft")
 
-    html = f'<div style="padding:12px">'
-    html += f'<div style="display:flex;gap:20px;align-items:center;margin-bottom:12px">'
-    html += f'<div><span style="font-size:28px;font-weight:700;color:{color}">{score:.1f}</span>'
-    html += f'<span style="font-size:14px;color:var(--fg2)"> / {threshold:.0f}</span></div>'
-    html += f'<div><span class="badge {action_badge}" style="font-size:13px">{action}</span>'
-    html += f'<div style="font-size:12px;color:var(--fg2);margin-top:2px">{rating}</div></div>'
+    html = f'<div style="margin-bottom:16px;padding:12px;border:1px solid var(--border-light);border-radius:var(--radius)">'
+    html += f'<div style="display:flex;gap:16px;align-items:center;margin-bottom:10px">'
+    html += f'<strong>{checker.upper()}</strong>'
+    html += f'<span style="font-size:24px;font-weight:700;color:{color}">{score:.1f}</span>'
+    html += f'<span style="font-size:13px;color:var(--fg2)">/ {threshold:.0f}</span>'
+    html += f'<span class="badge {action_badge}">{action}</span>'
+    html += f'<span style="font-size:12px;color:var(--fg2)">{rating}</span>'
     html += f'</div>'
 
     if symbols:
         html += '<table style="font-size:12px;width:100%"><thead><tr>'
-        html += '<th>Score</th><th>Rule</th><th>Description</th></tr></thead><tbody>'
-        for s in symbols[:20]:
+        html += '<th style="width:60px">Score</th><th>Rule</th><th>Description</th></tr></thead><tbody>'
+        for s in symbols[:15]:
             sc = s["score"]
             sc_color = "var(--red)" if sc > 0 else "var(--green)" if sc < 0 else "var(--fg2)"
-            html += f'<tr><td style="color:{sc_color};font-weight:600;white-space:nowrap">'
-            html += f'{sc:+.1f}</td>'
-            html += f'<td style="font-family:monospace;white-space:nowrap">{escape(s["name"])}</td>'
-            html += f'<td style="color:var(--fg2)">{escape(s["description"][:80])}</td></tr>'
-        if len(symbols) > 20:
-            html += f'<tr><td colspan="3" style="color:var(--fg2)">... {len(symbols)-20} more rules</td></tr>'
+            html += (f'<tr><td style="color:{sc_color};font-weight:600">{sc:+.1f}</td>'
+                     f'<td style="font-family:monospace;font-size:11px">{escape(s["name"])}</td>'
+                     f'<td style="color:var(--fg2);font-size:11px">{escape(s["description"][:60])}</td></tr>')
+        if len(symbols) > 15:
+            html += f'<tr><td colspan="3" style="color:var(--fg2)">+{len(symbols)-15} more</td></tr>'
         html += '</tbody></table>'
-
     html += '</div>'
     return html
+
+
+def format_result_html(results) -> str:
+    if isinstance(results, dict):
+        results = [results]
+    return "".join(_format_one(r) for r in results)
