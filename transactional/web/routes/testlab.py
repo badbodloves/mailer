@@ -156,19 +156,46 @@ async def send_test(request: Request,
 async def preview_headers(request: Request,
                           from_email: str = Form("test@example.com"),
                           mime_profile: str = Form("default")):
-    """Show headers without sending — just build and display."""
+    """Show headers + spam scores without sending."""
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    cfg = db.get_config()
+
+    # Build with template if available
+    html_body = "<p>Test preview content</p>"
+    templates = db.get_all_template_htmls(uid)
+    if templates:
+        html_body = templates[0]
+    html_body = html_body.replace("{email}", "preview@example.com").replace("{email_user}", "preview")
+    html_body = html_body.replace("{domain}", "example.com").replace("{Logo}", "").replace("{RedirectLink}", "https://example.com")
+    plain = re.sub(r"<[^>]+>", "", html_body).strip()
+
+    fe = from_email.strip() or "test@example.com"
+    subject = cfg.get("subject", "") or "Preview"
+
     try:
         from mailer.mime_builder import MIMEBuilder
         from mailer.mime_profiles import apply_profile
         raw = MIMEBuilder.build_email(
-            from_name="Test", from_email=from_email.strip(),
-            to_email="preview@example.com", subject="Preview",
-            html_body="<p>Test</p>", plain_body="Test")
+            from_name=cfg.get("from_name", "") or "Test", from_email=fe,
+            to_email="preview@example.com", subject=subject,
+            html_body=html_body, plain_body=plain)
         if mime_profile != "default":
-            raw = apply_profile(raw, mime_profile, from_email.strip())
+            raw = apply_profile(raw, mime_profile, fe)
         headers = raw.split("\r\n\r\n")[0] if "\r\n\r\n" in raw else raw[:500]
-        return HTMLResponse(
-            f'<pre style="white-space:pre-wrap;font-size:11px;background:var(--bg);'
-            f'padding:12px;border-radius:var(--radius)">{escape(headers)}</pre>')
+
+        headers_html = (f'<pre style="white-space:pre-wrap;font-size:11px;background:var(--bg);'
+                        f'padding:12px;border-radius:var(--radius)">{escape(headers)}</pre>')
+
+        # Spam check
+        spam_html = ""
+        try:
+            from .spam_check import check_spam, format_result_html
+            results = check_spam(raw, "both", cfg.get("spam_checker_url", "http://127.0.0.1:11333/checkv2"))
+            spam_html = f'<div style="margin-top:12px"><strong>Spam Scores</strong></div>{format_result_html(results)}'
+        except Exception as e:
+            spam_html = f'<div style="margin-top:10px;color:var(--fg2)">Spam check: {escape(str(e))}</div>'
+
+        return HTMLResponse(headers_html + spam_html)
     except Exception as e:
         return HTMLResponse(f'<div class="alert alert-danger">{escape(str(e))}</div>')
