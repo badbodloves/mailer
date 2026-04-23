@@ -47,14 +47,10 @@ async def generate_redirects(request: Request,
     def worker():
         try:
             from mailer.redirect_manager import RedirectManager
-            mgr = RedirectManager(target_url=target, db_path=":memory:",
-                                   enabled=True, rotate_every=10, gen_threads=gen_threads)
-            mgr._enabled = True
-            mgr._target_url = target
 
             generated = 0
             for i in range(count):
-                url = mgr._generate_one(target)
+                url = RedirectManager._generate_one(target)
                 if url:
                     try:
                         db.add_redirect(url, target)
@@ -62,9 +58,9 @@ async def generate_redirects(request: Request,
                     except Exception:
                         pass
                     _gen_progress["ok"] = generated
-                _gen_progress["done"] = i + 1
-                if not url:
+                else:
                     _gen_progress["errors"] += 1
+                _gen_progress["done"] = i + 1
                 time.sleep(0.3)
 
             _gen_progress["done"] = count

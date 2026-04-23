@@ -417,10 +417,17 @@ async def check_blacklist(request: Request, cid: int):
         return HTMLResponse('<div class="alert alert-warning">No MXToolbox API key in Config.</div>')
     try:
         from mailer.blacklist_checker import BlacklistChecker
+        from mailer.smtp_worker import ProxyConfig
         checker = BlacklistChecker(api_key)
         proxy_val = cfg.get("proxy_value", "").strip()
-        proxy_list = [p.strip() for p in proxy_val.splitlines() if p.strip()] if proxy_val else None
-        results = checker.check_sending_ips(proxy_list)
+        proxy_objs = None
+        if proxy_val:
+            proxy_objs = []
+            for line in proxy_val.splitlines()[:5]:
+                p = ProxyConfig.parse(line.strip())
+                if p:
+                    proxy_objs.append(p)
+        results = checker.check_sending_ips(proxy_objs or None)
         html_parts = []
         for label, info in results.items():
             if info["clean"]:
@@ -699,13 +706,20 @@ def _run_campaign(db, cid: int):
             account = pool.acquire()
             if account is None:
                 if pool.all_dead:
+                    logger.error("Campaign %d: all SMTPs dead, can't send to %s", cid, email)
+                    with _lock:
+                        db.mark_failed(lead_id, "All SMTPs dead")
+                        failed += 1
+                        db.update_campaign(cid, sent=sent, failed=failed)
                     return
                 time.sleep(3)
                 account = pool.acquire()
                 if account is None:
+                    logger.warning("Campaign %d: no SMTP available for %s", cid, email)
                     return
 
             cur_from_email = from_email_cfg or account.user
+            logger.debug("Campaign %d: sending to %s via %s", cid, email, account.key)
             cur_from_name = _process(from_name_cfg, email)
             cur_subject = _process(subject_cfg, email)
 
@@ -753,7 +767,15 @@ def _run_campaign(db, cid: int):
                 html_body=html, plain_body=plain,
                 inline_images=inline_images)
 
-            result = worker.send(cur_from_email, email, raw_msg, account=account)
+            try:
+                result = worker.send(cur_from_email, email, raw_msg, account=account)
+            except Exception as send_exc:
+                logger.error("Campaign %d send exception for %s: %s", cid, email, send_exc, exc_info=True)
+                with _lock:
+                    db.mark_failed(lead_id, str(send_exc)[:500])
+                    failed += 1
+                    db.update_campaign(cid, sent=sent, failed=failed)
+                return
 
             with _lock:
                 if result.is_success:
@@ -762,9 +784,11 @@ def _run_campaign(db, cid: int):
                 elif result.is_fatal:
                     db.mark_failed(lead_id, result.error[:500])
                     failed += 1
+                    logger.warning("Campaign %d FATAL for %s: %s", cid, email, result.error[:200])
                 else:
                     db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lead_id,))
                     db._conn().commit()
+                    logger.warning("Campaign %d transient for %s: %s", cid, email, result.error[:200])
                 db.update_campaign(cid, sent=sent, failed=failed)
 
             if result.is_success:
