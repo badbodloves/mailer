@@ -77,6 +77,27 @@ async def delete_list(request: Request, lid: int):
     return RedirectResponse("/leads", status_code=303)
 
 
+@router.post("/leads/{lid}/delete-lead")
+async def delete_lead(request: Request, lid: int, lead_id: int = Form(0)):
+    if lead_id:
+        db = request.app.state.db
+        db._conn().execute("DELETE FROM trans_leads WHERE id=? AND list_id=?", (lead_id, lid))
+        db._conn().execute("UPDATE trans_lead_lists SET lead_count=(SELECT COUNT(*) FROM trans_leads WHERE list_id=?) WHERE id=?", (lid, lid))
+        db._conn().commit()
+    return RedirectResponse(f"/leads/{lid}/browse", status_code=303)
+
+
+@router.post("/leads/{lid}/delete-domain")
+async def delete_domain(request: Request, lid: int, domain: str = Form("")):
+    if domain.strip():
+        db = request.app.state.db
+        db._conn().execute("DELETE FROM trans_leads WHERE list_id=? AND email LIKE ?",
+                            (lid, f"%@{domain.strip()}"))
+        db._conn().execute("UPDATE trans_lead_lists SET lead_count=(SELECT COUNT(*) FROM trans_leads WHERE list_id=?) WHERE id=?", (lid, lid))
+        db._conn().commit()
+    return RedirectResponse(f"/leads/{lid}/browse", status_code=303)
+
+
 @router.get("/leads/{lid}/browse", response_class=HTMLResponse)
 async def browse_leads(request: Request, lid: int, q: str = ""):
     db = request.app.state.db

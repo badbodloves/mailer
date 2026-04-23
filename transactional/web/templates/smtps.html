@@ -13,6 +13,32 @@
             <span style="margin-left:auto"><span class="badge badge-info">{{ sl.count }} accounts</span></span>
         </summary>
         <div class="details-body" style="padding-top:12px">
+            <!-- Individual SMTPs -->
+            {% set smtps_in_list = db.get_smtps(sl.id) %}
+            {% if smtps_in_list %}
+            <div style="max-height:300px;overflow-y:auto;margin-bottom:12px">
+            <table style="font-size:12px">
+                <thead><tr><th>Host</th><th>Port</th><th>Username</th><th></th></tr></thead>
+                <tbody>
+                {% for sm in smtps_in_list %}
+                <tr>
+                    <td>{{ sm.host }}</td>
+                    <td>{{ sm.port }}</td>
+                    <td style="font-family:monospace">{{ sm.username }}</td>
+                    <td>
+                        <div class="btn-group">
+                            <button class="btn btn-secondary btn-xs" hx-post="/smtps/{{ sm.id }}/test" hx-target="#st-{{ sm.id }}" hx-swap="innerHTML">Test</button>
+                            <form method="post" action="/smtps/{{ sm.id }}/delete"><button class="btn btn-danger btn-xs btn-icon">&#10005;</button></form>
+                        </div>
+                        <span id="st-{{ sm.id }}" style="font-size:11px"></span>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            </div>
+            {% endif %}
+
             <form hx-post="/smtps/{{ sl.id }}/import" hx-target="#import-{{ sl.id }}" hx-swap="innerHTML">
                 <label>Import SMTPs (host,port,user,pass — NO proxy)</label>
                 <textarea name="smtp_text" rows="4" placeholder="smtp.gmail.com,587,user@gmail.com,password&#10;smtp.outlook.com,465,user@outlook.com,password" style="font-family:monospace;font-size:12px"></textarea>

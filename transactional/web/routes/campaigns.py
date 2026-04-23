@@ -103,6 +103,105 @@ async def reset_campaign(request: Request, cid: int):
     return RedirectResponse("/campaigns", status_code=303)
 
 
+@router.post("/campaigns/{cid}/preflight", response_class=HTMLResponse)
+async def preflight_check(request: Request, cid: int):
+    """Run all pre-flight checks and show Start button only if passed."""
+    db = request.app.state.db
+    camp = db.get_campaign(cid)
+    if not camp:
+        return HTMLResponse('<div class="alert alert-danger">Campaign not found.</div>')
+    camp = dict(camp)
+    cfg = db.get_config()
+    log = []
+    all_ok = True
+
+    # 1. Check logos
+    if cfg.get("image_enabled"):
+        import glob, os
+        from .logos import VARIANT_DIR, UPLOAD_DIR
+        variants = glob.glob(os.path.join(VARIANT_DIR, "*"))
+        sources = glob.glob(os.path.join(UPLOAD_DIR, "*"))
+        if variants:
+            rotate = cfg.get("logo_rotate_every", 0)
+            log.append(f'<span style="color:var(--green)">&#10003; {len(variants)} logo variants ready (rotate every {rotate or "send"})</span>')
+        elif sources:
+            log.append(f'<span style="color:var(--yellow)">&#9888; {len(sources)} source logos but no variants generated. <a href="/logos" style="color:var(--accent)">Generate now</a></span>')
+        else:
+            log.append('<span style="color:var(--red)">&#10007; No logos uploaded. <a href="/logos" style="color:var(--accent)">Upload</a></span>')
+            all_ok = False
+    else:
+        log.append('<span style="color:var(--fg2)">Logo embedding disabled</span>')
+
+    # 2. Check redirects
+    if cfg.get("redirect_enabled"):
+        count = db.get_redirect_count()
+        if count > 0:
+            log.append(f'<span style="color:var(--green)">&#10003; {count} redirect links in pool</span>')
+        else:
+            log.append('<span style="color:var(--red)">&#10007; No redirect links. <a href="/redirects" style="color:var(--accent)">Generate</a></span>')
+            all_ok = False
+    else:
+        log.append('<span style="color:var(--fg2)">Redirect links disabled</span>')
+
+    # 3. Check templates
+    html_count = len(db.get_all_template_htmls())
+    if html_count > 0:
+        log.append(f'<span style="color:var(--green)">&#10003; {html_count} HTML templates loaded</span>')
+    else:
+        log.append('<span style="color:var(--red)">&#10007; No HTML templates. <a href="/templates" style="color:var(--accent)">Add</a></span>')
+        all_ok = False
+
+    # 4. Send test mail (with retry)
+    test_recips = cfg.get("test_recipients", "")
+    if test_recips.strip():
+        recip = test_recips.split(",")[0].strip()
+        smtp_list_id = camp.get("smtp_list_id", 0)
+        smtps = [dict(s) for s in db.get_smtps(smtp_list_id)] if smtp_list_id else []
+        if smtps:
+            import smtplib as _sl, ssl as _ssl
+            from transactional.web.routes.smtps import _connect_smtp
+            proxy_str = (cfg.get("proxy_value", "").splitlines()[0].strip()
+                         if cfg.get("proxy_value", "").strip() else "")
+            s = smtps[0]
+            test_ok = False
+            for attempt in range(3):
+                server, error, _ = _connect_smtp(s["host"], s["port"], s["username"], s["password"], proxy_str)
+                if server:
+                    try:
+                        from email.mime.text import MIMEText
+                        msg = MIMEText("Pre-flight test", "plain", "utf-8")
+                        msg["From"] = s["username"]
+                        msg["To"] = recip
+                        msg["Subject"] = "[PRE-FLIGHT] Test"
+                        server.send_message(msg)
+                        server.quit()
+                        test_ok = True
+                        break
+                    except Exception:
+                        pass
+                import time; time.sleep(2)
+            if test_ok:
+                log.append(f'<span style="color:var(--green)">&#10003; Test mail sent to {escape(recip)}</span>')
+            else:
+                log.append(f'<span style="color:var(--red)">&#10007; Test mail failed after 3 attempts</span>')
+                all_ok = False
+        else:
+            log.append('<span style="color:var(--red)">&#10007; No SMTPs in campaign list</span>')
+            all_ok = False
+    else:
+        log.append('<span style="color:var(--fg2)">No test recipients configured</span>')
+
+    html = '<div style="font-size:13px;line-height:2">' + '<br>'.join(log) + '</div>'
+    if all_ok:
+        html += (f'<div style="margin-top:14px">'
+                 f'<form method="post" action="/campaigns/{cid}/start">'
+                 f'<button class="btn btn-success" style="padding:12px 24px;font-size:15px">'
+                 f'&#9654; Start Mailing</button></form></div>')
+    else:
+        html += '<div style="margin-top:10px" class="alert alert-warning">Fix issues above before starting.</div>'
+    return HTMLResponse(html)
+
+
 @router.post("/campaigns/{cid}/start")
 async def start_campaign(request: Request, cid: int):
     db = request.app.state.db

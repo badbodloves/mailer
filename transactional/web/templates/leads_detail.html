@@ -12,17 +12,33 @@
     <div class="metric"><div class="value">{{ "{:,}".format(states.IN_PROGRESS) }}</div><div class="label">In Progress</div></div>
 </div>
 <div class="card">
-    <form method="get" action="/leads/{{ lid }}/browse" style="display:flex;gap:8px;margin-bottom:12px">
-        <input name="q" value="{{ query }}" placeholder="Search..." style="flex:1;margin:0">
-        <button class="btn btn-primary btn-sm">Search</button>
-    </form>
+    <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+        <form method="get" action="/leads/{{ lid }}/browse" style="display:flex;gap:8px;flex:1;min-width:200px">
+            <input name="q" value="{{ query }}" placeholder="Search..." style="flex:1;margin:0">
+            <button class="btn btn-primary btn-sm">Search</button>
+        </form>
+        <form method="post" action="/leads/{{ lid }}/delete-domain" style="display:flex;gap:8px">
+            <input name="domain" placeholder="domain.com" style="width:150px;margin:0">
+            <button class="btn btn-danger btn-sm">Delete @domain</button>
+        </form>
+    </div>
     {% if leads %}
-    <table><thead><tr><th style="width:60px">ID</th><th>Email</th><th style="width:100px">State</th></tr></thead>
+    <table><thead><tr><th style="width:60px">ID</th><th>Email</th><th style="width:100px">State</th><th style="width:50px"></th></tr></thead>
     <tbody>
     {% for l in leads %}
-    <tr><td style="color:var(--fg2)">{{ l.id }}</td><td style="font-family:monospace;font-size:12px">{{ l.email }}</td><td><span class="badge badge-{{ l.state|lower }}">{{ l.state }}</span></td></tr>
+    <tr>
+        <td style="color:var(--fg2)">{{ l.id }}</td>
+        <td style="font-family:monospace;font-size:12px">{{ l.email }}</td>
+        <td><span class="badge badge-{{ l.state|lower }}">{{ l.state }}</span></td>
+        <td>
+            <form method="post" action="/leads/{{ lid }}/delete-lead">
+                <input type="hidden" name="lead_id" value="{{ l.id }}">
+                <button class="btn btn-danger btn-xs btn-icon">&#10005;</button>
+            </form>
+        </td>
+    </tr>
     {% endfor %}
-    {% if leads|length >= 500 %}<tr><td colspan="3" style="text-align:center;color:var(--fg2);font-size:12px">First 500</td></tr>{% endif %}
+    {% if leads|length >= 500 %}<tr><td colspan="4" style="text-align:center;color:var(--fg2);font-size:12px">First 500</td></tr>{% endif %}
     </tbody></table>
     {% else %}
     <div class="empty-state"><p>No leads{% if query %} matching "{{ query }}"{% endif %}.</p></div>
