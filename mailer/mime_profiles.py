@@ -85,6 +85,24 @@ def _gen_thunderbird_message_id(domain: str) -> str:
     return f"<{str(uuid.uuid4())}@{domain}>"
 
 
+def _gen_thunderbird_boundary() -> str:
+    # Real: ------------dG5iYXNkZjFt or ------------020406080402050302090800
+    return f"------------{secrets.token_hex(12)}"
+
+
+_TB_VERSIONS = ["128.5.0", "128.4.0", "128.3.0", "115.15.0", "115.14.0"]
+
+_IOS_BUILDS = [
+    "22F82",   # iOS 18.5
+    "22E252",  # iOS 18.4
+    "22D72",   # iOS 18.3.1
+    "22C161",  # iOS 18.2.1
+    "22B83",   # iOS 18.1.1
+    "21G93",   # iOS 17.6.1
+    "21F90",   # iOS 17.5.1
+]
+
+
 def apply_profile(raw_mime: str, profile_name: str, from_email: str = "") -> str:
     if profile_name == "default" or profile_name not in PROFILES:
         return raw_mime
@@ -205,7 +223,7 @@ def _apply_apple_iphone(headers, body, domain):
     for ob, nb in bmap.items():
         body = body.replace(ob, nb)
 
-    ios_builds = ["22G100", "22F82", "22E252", "22D72", "22C161"]
+    ios_builds = _IOS_BUILDS
 
     new_headers = [
         ct_new,
@@ -231,15 +249,22 @@ def _apply_thunderbird(headers, body, domain):
 
     new_mid = _gen_thunderbird_message_id(domain)
 
+    # Replace boundaries with Thunderbird-style (------------ + hex)
+    ct_new, bmap = _replace_bounds(ct, _gen_thunderbird_boundary)
+    for ob, nb in bmap.items():
+        body = body.replace(ob, nb)
+
+    tb_ver = random.choice(_TB_VERSIONS)
+
     new_headers = [
         f"Message-ID: {new_mid}",
         f"Date: {date_val}",
         "MIME-Version: 1.0",
-        "User-Agent: Mozilla Thunderbird",
+        f"User-Agent: Mozilla Thunderbird {tb_ver}",
         f"To: {to_val}",
         f"From: {from_val}",
         f"Subject: {subject_val}",
-        ct,
+        ct_new,
     ]
 
     return "\r\n".join(new_headers) + "\r\n\r\n" + body
