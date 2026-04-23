@@ -699,24 +699,25 @@ def _run_campaign(db, cid: int):
             text = re.sub(r"\[RANDSTR:(\d+):([a-zA-Z0-9\-]+):(\w+)\]", _randstr, text)
             return text
 
+        campaign_id = cid
+
         def _send_one(lead_id, email):
             nonlocal sent, failed
-            logger.info("Campaign %d: _send_one called for lead %d (%s)", cid, lead_id, email)
-            if cid not in _runners:
+            logger.info("Campaign %d: _send_one for lead %d (%s)", campaign_id, lead_id, email)
+            if campaign_id not in _runners:
                 return
             account = pool.acquire()
             if account is None:
                 if pool.all_dead:
-                    logger.error("Campaign %d: all SMTPs dead, can't send to %s", cid, email)
+                    logger.error("Campaign %d: all SMTPs dead", campaign_id)
                     with _lock:
                         db.mark_failed(lead_id, "All SMTPs dead")
                         failed += 1
-                        db.update_campaign(cid, sent=sent, failed=failed)
+                        db.update_campaign(campaign_id, sent=sent, failed=failed)
                     return
                 time.sleep(3)
                 account = pool.acquire()
                 if account is None:
-                    logger.warning("Campaign %d: no SMTP available for %s", cid, email)
                     return
 
             cur_from_email = from_email_cfg or account.user
@@ -769,21 +770,21 @@ def _run_campaign(db, cid: int):
                     inline_images=inline_images)
 
             except Exception as build_exc:
-                logger.error("Campaign %d BUILD error for %s: %s", cid, email, build_exc, exc_info=True)
+                logger.error("Campaign %d BUILD error for %s: %s", campaign_id, email, build_exc, exc_info=True)
                 with _lock:
                     db.mark_failed(lead_id, f"BUILD: {str(build_exc)[:400]}")
                     failed += 1
-                    db.update_campaign(cid, sent=sent, failed=failed)
+                    db.update_campaign(campaign_id, sent=sent, failed=failed)
                 return
 
             try:
                 result = worker.send(cur_from_email, email, raw_msg, account=account)
             except Exception as send_exc:
-                logger.error("Campaign %d send exception for %s: %s", cid, email, send_exc, exc_info=True)
+                logger.error("Campaign %d send exception for %s: %s", campaign_id, email, send_exc, exc_info=True)
                 with _lock:
                     db.mark_failed(lead_id, str(send_exc)[:500])
                     failed += 1
-                    db.update_campaign(cid, sent=sent, failed=failed)
+                    db.update_campaign(campaign_id, sent=sent, failed=failed)
                 return
 
             with _lock:
@@ -793,12 +794,12 @@ def _run_campaign(db, cid: int):
                 elif result.is_fatal:
                     db.mark_failed(lead_id, result.error[:500])
                     failed += 1
-                    logger.warning("Campaign %d FATAL for %s: %s", cid, email, result.error[:200])
+                    logger.warning("Campaign %d FATAL for %s: %s", campaign_id, email, result.error[:200])
                 else:
                     db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lead_id,))
                     db._conn().commit()
-                    logger.warning("Campaign %d transient for %s: %s", cid, email, result.error[:200])
-                db.update_campaign(cid, sent=sent, failed=failed)
+                    logger.warning("Campaign %d transient for %s: %s", campaign_id, email, result.error[:200])
+                db.update_campaign(campaign_id, sent=sent, failed=failed)
 
             if result.is_success:
                 if test_interval > 0 and interval_recips and sent % test_interval == 0:
