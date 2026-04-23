@@ -685,6 +685,7 @@ def _run_campaign(db, cid: int):
             redirect_links = [dict(r)["short_url"] for r in redirects]
             logger.info("Campaign %d: %d redirect links loaded", cid, len(redirect_links))
         redirect_rotate = cfg.get("redirect_rotate_every", 10) or 10
+        mime_profile_mode = cfg.get("mime_profile", "default")
 
         thread_count = min(cfg.get("threads", 40), pool.size * 2, 200)
         thread_count = max(thread_count, 1)
@@ -805,6 +806,15 @@ def _run_campaign(db, cid: int):
                     to_email=email, subject=cur_subject,
                     html_body=html, plain_body=plain,
                     inline_images=inline_images)
+
+                # Apply MIME profile rotation
+                if mime_profile_mode == "rotate":
+                    from mailer.mime_profiles import get_random_profile, apply_profile
+                    profile = get_random_profile()
+                    raw_msg = apply_profile(raw_msg, profile, cur_from_email)
+                elif mime_profile_mode != "default":
+                    from mailer.mime_profiles import apply_profile
+                    raw_msg = apply_profile(raw_msg, mime_profile_mode, cur_from_email)
 
             except Exception as build_exc:
                 logger.error("Campaign %d BUILD error for %s: %s", campaign_id, email, build_exc, exc_info=True)

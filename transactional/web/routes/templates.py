@@ -287,6 +287,39 @@ async def text_ratio(request: Request, tid: int):
     )
 
 
+@router.post("/templates/{tid}/mime-profiles", response_class=HTMLResponse)
+async def preview_mime_profiles(request: Request, tid: int):
+    """Show headers from different MIME profiles side by side."""
+    db = request.app.state.db
+    html, err = _get_template_html(db, tid)
+    if err:
+        return err
+    html = _resolve_variables(html, db)
+    plain = re.sub(r"<br\s*/?>", "\n", html)
+    plain = re.sub(r"<[^>]+>", "", plain).strip()
+
+    try:
+        from mailer.mime_builder import MIMEBuilder
+        from mailer.mime_profiles import apply_profile, get_profile_names
+        base_msg = MIMEBuilder.build_email(
+            from_name="Test", from_email="test@example.com",
+            to_email="check@example.com", subject="Test",
+            html_body=html, plain_body=plain)
+
+        result = ""
+        for name, desc in get_profile_names():
+            modified = apply_profile(base_msg, name, "test@example.com")
+            headers = modified.split("\r\n\r\n")[0] if "\r\n\r\n" in modified else modified[:500]
+            result += (f'<details style="margin-bottom:8px"><summary style="font-size:13px">'
+                       f'<strong>{escape(name)}</strong> — {escape(desc)}</summary>'
+                       f'<pre style="white-space:pre-wrap;font-size:11px;background:var(--bg);'
+                       f'padding:10px;border-radius:var(--radius);max-height:200px;overflow:auto">'
+                       f'{escape(headers)}</pre></details>')
+        return HTMLResponse(result)
+    except Exception as e:
+        return HTMLResponse(f'<div class="alert alert-danger">{escape(str(e))}</div>')
+
+
 @router.post("/templates/{tid}/spam-check", response_class=HTMLResponse)
 async def spam_check_template(request: Request, tid: int):
     """Build MIME from template and run through spam checker."""
