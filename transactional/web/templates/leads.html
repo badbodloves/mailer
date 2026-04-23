@@ -44,14 +44,27 @@
     {% endif %}
 </div>
 
-<details {{ 'open' if not lead_lists }}>
-    <summary>Create Lead List</summary>
-    <div class="details-body" style="padding-top:12px">
-        <form method="post" action="/leads/create-list">
-            <label>List Name</label>
-            <input name="name" placeholder="e.g. B2B Germany 50k" required>
-            <div style="margin-top:10px"><button class="btn btn-primary">Create</button></div>
-        </form>
-    </div>
-</details>
+<div class="grid-2" style="align-items:start">
+    <details {{ 'open' if not lead_lists }}>
+        <summary>Create Lead List</summary>
+        <div class="details-body" style="padding-top:12px">
+            <form method="post" action="/leads/create-list">
+                <label>List Name</label>
+                <input name="name" placeholder="e.g. B2B Germany 50k" required>
+                <div style="margin-top:10px"><button class="btn btn-primary">Create</button></div>
+            </form>
+        </div>
+    </details>
+    <details>
+        <summary>Bulk Upload (file per list)</summary>
+        <div class="details-body" style="padding-top:12px">
+            <form method="post" action="/leads/bulk-upload" enctype="multipart/form-data">
+                <label>Upload .txt/.csv files — each file = one list, named by filename</label>
+                <input type="file" name="files" multiple accept=".txt,.csv" required>
+                <div class="form-help">e.g. Liste_23_04.txt → list "Liste_23_04"</div>
+                <div style="margin-top:10px"><button class="btn btn-primary">Upload All</button></div>
+            </form>
+        </div>
+    </details>
+</div>
 {% endblock %}

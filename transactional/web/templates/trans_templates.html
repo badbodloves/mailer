@@ -36,15 +36,40 @@
     {% endif %}
 </div>
 
-<details {{ 'open' if not templates }}>
-    <summary>Create Template</summary>
-    <div class="details-body" style="padding-top:12px">
-        <form method="post" action="/templates/add">
-            <label>Template Name</label><input name="name" placeholder="Welcome Email" required>
-            <label>HTML Content</label>
-            <textarea name="html_content" rows="15" placeholder="<html>&#10;<body>&#10;  <p>Hello {email_user},</p>&#10;  <p>Your notification content here.</p>&#10;  {Logo}&#10;  <a href='{RedirectLink}'>Click here</a>&#10;</body>&#10;</html>" style="font-family:'SF Mono',Consolas,monospace;font-size:12px;line-height:1.5"></textarea>
-            <div style="margin-top:12px"><button class="btn btn-primary">Create Template</button></div>
-        </form>
-    </div>
-</details>
+<div class="card">
+    <h3>HTML Rotation</h3>
+    <form method="post" action="/config/save" style="display:flex;gap:12px;align-items:flex-end">
+        <div>
+            <label>Rotate Every N Sends</label>
+            <input name="html_rotate_every" type="number" value="{{ db.get_config().get('html_rotate_every', 0) }}" min="0" style="width:120px">
+        </div>
+        <button class="btn btn-primary btn-sm">Save</button>
+    </form>
+    <div class="form-help">0 = random pick per send. N = use template #1 for N sends, then #2, etc. Uses all templates above.</div>
+</div>
+
+<div class="grid-2" style="align-items:start">
+    <details {{ 'open' if not templates }}>
+        <summary>Create Template</summary>
+        <div class="details-body" style="padding-top:12px">
+            <form method="post" action="/templates/add">
+                <label>Template Name</label><input name="name" placeholder="Welcome Email" required>
+                <label>HTML Content</label>
+                <textarea name="html_content" rows="12" placeholder="<html>&#10;<body>&#10;  <p>Hello {email_user},</p>&#10;  {Logo}&#10;  <a href='{RedirectLink}'>Click</a>&#10;</body>&#10;</html>" style="font-family:'SF Mono',Consolas,monospace;font-size:12px;line-height:1.5"></textarea>
+                <div style="margin-top:12px"><button class="btn btn-primary">Create Template</button></div>
+            </form>
+        </div>
+    </details>
+    <details>
+        <summary>Bulk Upload HTMLs</summary>
+        <div class="details-body" style="padding-top:12px">
+            <form method="post" action="/templates/bulk-upload" enctype="multipart/form-data">
+                <label>Upload .html files — each file = one template, named by filename</label>
+                <input type="file" name="files" multiple accept=".html,.htm" required>
+                <div class="form-help">e.g. "Marke_XY.html" → template "Marke_XY"</div>
+                <div style="margin-top:10px"><button class="btn btn-primary">Upload All</button></div>
+            </form>
+        </div>
+    </details>
+</div>
 {% endblock %}

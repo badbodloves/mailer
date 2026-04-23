@@ -53,17 +53,14 @@
     <div>
         <div class="card">
             <h3>Proxy</h3>
-            <label>Mode</label>
-            <select name="proxy_mode">
-                <option value="off" {{ 'selected' if cfg.proxy_mode == 'off' }}>Off — direct connection</option>
-                <option value="single" {{ 'selected' if cfg.proxy_mode == 'single' }}>Single Proxy</option>
-                <option value="list" {{ 'selected' if cfg.proxy_mode == 'list' }}>Proxy List (rotate)</option>
-            </select>
-            <label>Proxy (single or one per line for list)</label>
-            <textarea name="proxy_value" rows="3" style="font-family:monospace;font-size:12px" placeholder="ip:port:user:pass&#10;socks5://ip:port:user:pass">{{ cfg.proxy_value or '' }}</textarea>
-            <label>Rotate Every N Sends</label>
-            <input name="proxy_rotate_every" type="number" value="{{ cfg.proxy_rotate_every }}">
-            <div class="form-help">Formats: ip:port:user:pass | user:pass@ip:port | socks5://ip:port</div>
+            <p style="font-size:13px;color:var(--fg2)">
+                Proxy configs are managed on the <a href="/proxies" style="color:var(--accent)">Proxies</a> page.
+                {% if cfg.proxy_value %}
+                <br>Active: <strong>{{ cfg.proxy_mode }}</strong> — {{ cfg.proxy_value.splitlines()[0][:40] }}
+                {% else %}
+                <br>No proxy active.
+                {% endif %}
+            </p>
         </div>
         <div class="card">
             <h3>Anti-Fingerprint</h3>
@@ -77,9 +74,7 @@
             </label>
             <label>Variation Probability (0.0-1.0)</label>
             <input name="structure_variation" type="number" step="0.1" min="0" max="1" value="{{ cfg.structure_variation }}">
-            <label>HTML Rotate Every N Sends</label>
-            <input name="html_rotate_every" type="number" value="{{ cfg.html_rotate_every }}" min="0">
-            <div class="form-help">Cycle through HTML templates every N sends. 0 = random.</div>
+            <div class="form-help">HTML rotation is configured on the <a href="/templates" style="color:var(--accent)">HTML Editor</a> page.</div>
         </div>
         <div class="card">
             <h3>Image / Logo (CID)</h3>

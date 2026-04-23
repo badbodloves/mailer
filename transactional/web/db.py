@@ -104,6 +104,14 @@ class TransDB:
                     finished_at TIMESTAMP,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS trans_proxies (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    proxy_type TEXT DEFAULT 'single',
+                    value TEXT DEFAULT '',
+                    rotate_every INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE TABLE IF NOT EXISTS trans_users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL UNIQUE,
@@ -401,6 +409,32 @@ class TransDB:
     def delete_redirect(self, rid: int):
         c = self._conn()
         c.execute("DELETE FROM trans_redirect_links WHERE id=?", (rid,))
+        c.commit()
+
+    # ── Proxies ────────────────────────────────────────────
+    def add_proxy(self, name: str, proxy_type: str = "single",
+                  value: str = "", rotate_every: int = 0) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO trans_proxies (name,proxy_type,value,rotate_every) VALUES (?,?,?,?)",
+                  (name, proxy_type, value, rotate_every))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_proxies(self) -> list:
+        return self._conn().execute("SELECT * FROM trans_proxies ORDER BY name").fetchall()
+
+    def get_proxy(self, pid: int):
+        return self._conn().execute("SELECT * FROM trans_proxies WHERE id=?", (pid,)).fetchone()
+
+    def update_proxy(self, pid: int, **kw):
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in kw)
+        c.execute(f"UPDATE trans_proxies SET {sets} WHERE id=?", list(kw.values()) + [pid])
+        c.commit()
+
+    def delete_proxy(self, pid: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_proxies WHERE id=?", (pid,))
         c.commit()
 
     # ── Campaigns ─────────────────────────────────────────

@@ -22,7 +22,14 @@
                             hx-post="/smtps/{{ sl.id }}/check-all"
                             hx-target="#check-results"
                             hx-swap="innerHTML"
-                            hx-include="[name=check_threads]">Check All</button>
+                            onclick="this.setAttribute('hx-vals', JSON.stringify({
+                                check_threads: document.getElementById('checker-threads').value,
+                                proxy_id: document.getElementById('checker-proxy').value,
+                                send_test: document.getElementById('checker-send-test').checked?1:0,
+                                test_to: document.getElementById('checker-test-to')?.value||'',
+                                test_subject: document.getElementById('checker-test-subject')?.value||'',
+                                test_from_name: document.getElementById('checker-test-from')?.value||''
+                            })); htmx.process(this);">Check All</button>
                     <form method="post" action="/smtps/list/{{ sl.id }}/delete" onsubmit="return confirm('Delete list + all SMTPs?')">
                         <button class="btn btn-danger btn-sm">Delete List</button>
                     </form>
@@ -50,9 +57,35 @@
     </details>
     <div class="card">
         <h3>Bulk Checker</h3>
-        <label>Threads</label>
-        <input name="check_threads" type="number" value="5" min="1" max="50">
-        <div class="form-help">Uses proxy from Config if enabled. Select a list above and click "Check All".</div>
+        <div class="grid-2">
+            <div>
+                <label>Threads</label>
+                <input name="check_threads" type="number" value="5" min="1" max="50" id="checker-threads">
+                <label>Proxy</label>
+                <select name="proxy_id" id="checker-proxy">
+                    <option value="0">Active config proxy</option>
+                    {% for p in db.get_proxies() %}
+                    <option value="{{ p.id }}">{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                    <input type="checkbox" id="checker-send-test" style="width:auto"
+                           onchange="document.getElementById('checker-test-opts').style.display=this.checked?'block':'none'">
+                    <span>Send test email from each valid SMTP</span>
+                </label>
+                <div id="checker-test-opts" style="display:none">
+                    <label>Send To</label>
+                    <input id="checker-test-to" placeholder="test@inbox.com">
+                    <label>Subject</label>
+                    <input id="checker-test-subject" value="SMTP Check">
+                    <label>From Name</label>
+                    <input id="checker-test-from" value="Test">
+                </div>
+            </div>
+        </div>
+        <div class="form-help" style="margin-top:8px">Select a list above and click "Check All".</div>
         <div id="check-results" style="margin-top:12px" hx-get="/smtps/check-results" hx-trigger="every 2s" hx-swap="innerHTML"></div>
     </div>
 </div>

@@ -140,7 +140,13 @@ async def test_smtp(request: Request, sid: int):
 
 
 @router.post("/smtps/{lid}/check-all", response_class=HTMLResponse)
-async def check_all(request: Request, lid: int, check_threads: int = Form(5)):
+async def check_all(request: Request, lid: int,
+                    check_threads: int = Form(5),
+                    proxy_id: int = Form(0),
+                    send_test: int = Form(0),
+                    test_to: str = Form(""),
+                    test_subject: str = Form("SMTP Test"),
+                    test_from_name: str = Form("Test")):
     global _check_running, _check_results
     if _check_running:
         return HTMLResponse('<div class="alert alert-warning">Already running.</div>')
@@ -150,8 +156,18 @@ async def check_all(request: Request, lid: int, check_threads: int = Form(5)):
     if not smtps:
         return HTMLResponse('<div class="alert alert-warning">No SMTPs.</div>')
 
-    cfg = db.get_config()
-    proxy = cfg.get("proxy_value", "").split("\n")[0].strip() if cfg.get("proxy_mode") != "off" else ""
+    proxy = ""
+    if proxy_id:
+        p = db.get_proxy(proxy_id)
+        if p:
+            proxy = dict(p)["value"].splitlines()[0].strip()
+    if not proxy:
+        cfg = db.get_config()
+        pv = cfg.get("proxy_value", "")
+        if pv.strip():
+            proxy = pv.splitlines()[0].strip()
+
+    do_send = bool(send_test and test_to.strip())
 
     _check_results.clear()
     _check_running = True
@@ -162,7 +178,20 @@ async def check_all(request: Request, lid: int, check_threads: int = Form(5)):
                                     "username": s["username"], "host": s["host"]}
         server, error, etype = _connect_smtp(s["host"], s["port"], s["username"], s["password"], proxy, 20)
         if server:
-            _check_results[s["id"]].update(status="valid", error="", error_type=None)
+            if do_send:
+                try:
+                    from email.mime.text import MIMEText
+                    msg = MIMEText("SMTP connectivity test.", "plain", "utf-8")
+                    msg["From"] = f'{test_from_name} <{s["username"]}>'
+                    msg["To"] = test_to.strip()
+                    msg["Subject"] = test_subject
+                    server.send_message(msg)
+                    _check_results[s["id"]].update(status="valid_sent", error="", error_type=None)
+                except Exception as e:
+                    _check_results[s["id"]].update(status="valid_send_failed",
+                                                    error=str(e)[:150], error_type="send")
+            else:
+                _check_results[s["id"]].update(status="valid", error="", error_type=None)
             try:
                 server.quit()
             except Exception:
@@ -193,8 +222,8 @@ async def check_results(request: Request):
     if not _check_results:
         return HTMLResponse('<p style="color:var(--fg2)">Starting...</p>' if _check_running else '')
 
-    valid = sum(1 for r in _check_results.values() if r["status"] == "valid")
-    invalid = sum(1 for r in _check_results.values() if r["status"] == "invalid")
+    valid = sum(1 for r in _check_results.values() if r["status"] in ("valid", "valid_sent"))
+    invalid = sum(1 for r in _check_results.values() if r["status"] in ("invalid", "valid_send_failed"))
     auth_err = sum(1 for r in _check_results.values() if r.get("error_type") == "auth")
     checking = sum(1 for r in _check_results.values() if r["status"] == "checking")
 
@@ -207,7 +236,8 @@ async def check_results(request: Request):
 
     rows = ""
     for sid, r in _check_results.items():
-        badge = {"checking": "draft", "valid": "running", "invalid": "failed"}.get(r["status"], "draft")
+        badge = {"checking": "draft", "valid": "running", "valid_sent": "running",
+                 "valid_send_failed": "paused", "invalid": "failed"}.get(r["status"], "draft")
         label = r["status"].upper() if r["status"] != "checking" else "..."
         if r.get("error_type"):
             label = r["error_type"].upper()

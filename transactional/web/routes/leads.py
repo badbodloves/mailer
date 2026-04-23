@@ -29,6 +29,23 @@ async def create_list(request: Request, name: str = Form("")):
     return RedirectResponse("/leads", status_code=303)
 
 
+@router.post("/leads/bulk-upload")
+async def bulk_upload(request: Request, files: TList[UploadFile] = File(...)):
+    """Upload multiple files — each file becomes its own list, named by filename."""
+    db = request.app.state.db
+    for f in files:
+        if not f.filename:
+            continue
+        content = (await f.read()).decode("utf-8", errors="replace")
+        emails = [e.lower() for e in EMAIL_RE.findall(content)]
+        if not emails:
+            continue
+        name = os.path.splitext(f.filename)[0]
+        lid = db.create_lead_list(name, f.filename)
+        db.import_leads(lid, emails)
+    return RedirectResponse("/leads", status_code=303)
+
+
 @router.post("/leads/{lid}/import-text", response_class=HTMLResponse)
 async def import_text(request: Request, lid: int, leads_text: str = Form("")):
     db = request.app.state.db

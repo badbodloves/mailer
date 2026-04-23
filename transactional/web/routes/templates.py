@@ -1,8 +1,10 @@
-"""HTML Templates — CRUD + preview + advanced previews."""
+"""HTML Templates — CRUD + bulk upload + preview + advanced previews."""
+import os
 import re
 from html import escape
-from fastapi import APIRouter, Request, Form
+from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
+from typing import List as TList
 
 router = APIRouter()
 
@@ -21,6 +23,24 @@ async def add_template(request: Request, name: str = Form(""),
                        html_content: str = Form("")):
     if name.strip():
         request.app.state.db.add_template(name.strip(), html_content)
+    return RedirectResponse("/templates", status_code=303)
+
+
+@router.post("/templates/bulk-upload")
+async def bulk_upload_templates(request: Request,
+                                files: TList[UploadFile] = File(...)):
+    """Upload multiple HTML files — each becomes a template, named by filename."""
+    db = request.app.state.db
+    added = 0
+    for f in files:
+        if not f.filename:
+            continue
+        content = (await f.read()).decode("utf-8", errors="replace")
+        if not content.strip():
+            continue
+        name = os.path.splitext(f.filename)[0]
+        db.add_template(name, content)
+        added += 1
     return RedirectResponse("/templates", status_code=303)
 
 
