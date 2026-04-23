@@ -1,85 +1,150 @@
-# Transactional Mailer Web UI — Rebuild Plan
+# Transactional Web UI — Kompletter Rebuild-Plan
 
-## What exists in GUI that's MISSING in web:
+## Grundprinzip
+Die Web-UI bildet JEDE config.ini Option + JEDES GUI-Feature ab.
+Keine Proxies in SMTP-Imports. Keine Leads in Campaigns. Saubere Trennung.
 
-### Campaign Tab
-- [x] Start/Stop — exists but broken threading
-- [ ] PAUSE (graceful, resume later)  
-- [ ] Pre-Generate Logos button
-- [ ] Pre-Generate Redirects button
-- [ ] Blacklist Check button
-- [ ] Scheduler (HH:MM with Schedule/Cancel buttons)
-- [ ] Lead Preview (first N lines)
-- [ ] Events Log (real-time sidebar)
-- [ ] Speed in mails/sec, elapsed time, ETA
-- [ ] Test Mail: Pre-check send + Interval test config
-- [ ] Mailing Source: select leads file + SMTP file (now DB-based)
+## Sidebar (= alte GUI Tabs)
+1. **Campaign** — Mailing starten/stoppen, Live-Stats, Konfiguration
+2. **HTML Editor** — Templates verwalten, alle Previews
+3. **Macros** — Spintax-Pools + File-Import (Betreffe.txt → Macro "Betreffe")
+4. **SMTP** — SMTP-Listen verwalten (OHNE Proxy), Bulk-Import, Checker
+5. **Leads** — Lead-Listen verwalten, Import, Bulk-Upload
+6. **Logos** — Logo-Upload, Varianten generieren
+7. **Redirects** — Google Share Links generieren, manuell hinzufügen
+8. **Config** — ALLE Einstellungen (Proxy, Sending, Content, Image, Redirect)
+9. **Logs** — SMTP Error Log, Events
 
-### HTML Editor Tab
-- [ ] Template selector dropdown
-- [ ] Code editor (monospace, large)
-- [ ] Preview Raw HTML
-- [ ] Preview Processed (variables resolved)
-- [ ] Preview + AntiFingerprint
-- [ ] Preview + Advanced AF
-- [ ] 3-Way Diff view
-- [ ] Raw MIME preview
-- [ ] Text:Image Ratio analysis
-- [ ] Save / Save As
+## Seite: Campaign (/campaigns)
+Kein Erstell-Formular mit Details. Eine Campaign = ein Versand-Lauf.
+Zum Starten wählt man:
+- SMTP-Liste (Dropdown aus DB)
+- Lead-Liste (Dropdown aus DB)  
+- HTML Template(s) (Multi-Select oder alle nutzen)
+- Absendername: Feld ODER Macro-Referenz {from_name} → zieht aus Macro "from_name"
+- Absender-Email: Feld oder leer = SMTP account email
+- Betreff: Feld ODER Macro-Referenz {subject} → zieht aus Macro "subject"
+- Alle Config-Einstellungen werden aus der globalen Config gezogen
 
-### Files Tab (not needed as-is, replaced by DB uploads)
-- [x] Leads import — exists
-- [x] SMTP import — exists
+Controls:
+- START / PAUSE / STOP
+- Pre-Generate Logos
+- Pre-Generate Redirects  
+- Blacklist Check
+- Schedule (HH:MM)
 
-### Logos Tab
-- [ ] Logo upload (multiple files)
-- [ ] Logo list with thumbnails
-- [ ] Variant generation: enter lead count → calculate template count
-- [ ] Generate & Preview button
-- [ ] Variant info: count, avg/min/max size
+Live Stats:
+- Progress bar
+- Total / Sent / Failed / Pending
+- Speed (mails/sec)
+- Elapsed time / ETA
+- Lead Preview (erste 8)
 
-### Redirects Tab
-- [ ] Google Share redirect generation: target URL, count, threads
-- [ ] Manual add / bulk add
-- [ ] Redirect pool table (short URL + created)
-- [ ] Delete/clear
+## Seite: HTML Editor (/templates)
+- Template-Liste (Dropdown/Accordions)
+- Großer Code-Editor (monospace)
+- Buttons: Preview Raw | Preview Processed | Preview + AF | Preview + Advanced AF | 3-Way Diff | Raw MIME | Text:Image Ratio
+- Save / Save As / Delete
+- Upload HTML-Dateien (Multi-Upload)
+- HTML Rotate Every N → Konfiguration
 
-### Config Tab
-- [x] Thread count — exists but per-campaign
-- [ ] Proxy mode: Off / Single Proxy / Proxy List  
-- [ ] Proxy field + rotation
-- [ ] All sending params with descriptions
-- [ ] Spintax file editor (create/edit named pools)
-- [ ] All path configs → now DB-based content pools
+## Seite: Macros (/macros) — NEU!
+Ersetzt "Content Pools" komplett.
+- Macro-Liste: Name + Werte (Zeilen)
+- Import von .txt Files: Dateiname = Macro-Name (Betreffe.txt → {Betreffe})
+- Bulk-Import: mehrere .txt Dateien gleichzeitig
+- Standard-Macros die die Engine kennt:
+  - {from_name} → Names pool
+  - {subject} → Subjects pool
+  - Beliebige {TAG} → Spintax file TAG.txt
+  - {email}, {email_user}, {domain} → Built-in
+  - [RANDSTR:N:charset:case] → Built-in
+- Edit: Werte bearbeiten (textarea, eine pro Zeile)
+- Jeder Macro hat: Name, Werte (one per line), Rotate Every
+- Alt-Texts als eigener Macro
 
-### Logs Tab
-- [x] SMTP error log — exists
-- [ ] Auto-refresh toggle
-- [ ] Reset IN_PROGRESS button
-- [ ] Delete DB button
+## Seite: SMTP (/smtps)
+- SMTP-LISTEN (nicht einzelne SMTPs!)
+  - Liste erstellen: Name + Bulk-Import (host,port,user,pass)
+  - KEIN Proxy im Import-Format!
+  - Mehrere Listen möglich
+  - Pro Liste: Anzahl Accounts, Edit, Delete
+  - Bulk Checker mit Threads
+- Einzelne SMTPs innerhalb einer Liste editierbar
 
-## Architecture Changes
+## Seite: Leads (/leads)
+- Lead-LISTEN (wie beim Bulk Mailer)
+  - Liste erstellen: Name + Bulk-Import / File-Upload
+  - Mehrere Listen möglich
+  - Pro Liste: Lead-Count, Browse, Delete
+  - Exclude Rules beim Import
 
-### Proxy handling
-OLD: per-SMTP proxy in smtps.txt line
-NEW: Campaign-level proxy config:
-- proxy_mode: off / single / list
-- proxy_value: single proxy string OR multi-line proxy list
-- proxy_rotate_every: N
-- SMTPs imported WITHOUT proxy (clean separation)
+## Seite: Config (/config) — Alles aus config.ini
+### [sending]
+- threads (1-200, default 40)
+- normal_delay (default 0.3)
+- provider_delay (default 6.0)
+- warmup_delay (default 30.0)
+- warmup_count (default 5)
+- smtp_timeout (default 30)
+- ignore_ssl_errors (toggle)
+- schedule_time (HH:MM)
 
-### Campaign structure
-One campaign = one complete mailing configuration:
-- Sender: from_name, from_email, subject (with pools)
-- Content: template selection, AF settings, logo settings
-- Delivery: SMTP selection, proxy config, threading, delays
-- Testing: pre-check recipients, interval test
-- Leads: imported per-campaign
+### Proxy (eigener Bereich in Config)
+- Mode: Off / Single / List
+- Proxy-Feld (single) oder Textarea (list)
+- Rotate Every N
+- Formate: ip:port:user:pass | user:pass@ip:port | socks5://ip:port
+
+### [content]
+- antifingerprint_classes (toggle)
+- advanced_antifingerprint (toggle)
+- structure_variation (0.0-1.0)
+
+### [IMAGE_API]
+- enabled (toggle)
+- mode: cid / cloudinary
+- quantize (toggle)
+- downscale (toggle)
+- logo_max_colors (2-256)
+- logo_rotate_every
+
+### [CLOUDINARY]
+- cloud_name
+- api_key
+- api_secret
+
+### [redirect]
+- enabled (toggle)
+- target_url
+- rotate_every
+- gen_threads
+
+### [test]
+- test_recipients
+- test_interval
+- interval_recipients
+
+### [sender]
+- from_name (default, or use {from_name} macro)
+- from_email (default, empty = SMTP account)
+- subject (default, or use {subject} macro)
+
+## DB-Änderungen
+- trans_smtp_lists: id, name, created_at
+- trans_smtps: + list_id FK
+- trans_lead_lists: id, name, file_origin, lead_count, created_at
+- trans_leads: campaign_id → list_id
+- trans_macros: id, name, values_text, rotate_every
+- trans_config: alle Settings als JSON (eine Row)
+- trans_campaigns: referenziert smtp_list_id, lead_list_id, speichert status/stats
 
 ## Implementation Order
-1. Rewrite campaigns.py route + template (biggest piece)
-2. Add HTML editor with preview endpoints
-3. Add logo management
-4. Add redirect management  
-5. Fix proxy to be campaign-level
-6. Add missing DB fields
+1. DB rewrite — neue Tabellen
+2. Config page — alle Einstellungen
+3. SMTP page — Listen-basiert
+4. Leads page — Listen-basiert
+5. Macros page — mit File-Import
+6. HTML Editor — mit allen Previews + HTML Rotation
+7. Campaign page — alles zusammen, Start/Stop
+8. Campaign runner — nutzt config + Listen + Macros
