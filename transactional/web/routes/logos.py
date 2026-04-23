@@ -49,7 +49,8 @@ def clear_variants():
 @router.get("/logos", response_class=HTMLResponse)
 async def logos_page(request: Request):
     db = request.app.state.db
-    logos = [dict(l) for l in db.get_logos()]
+    uid = request.state.user["id"]
+    logos = [dict(l) for l in db.get_logos(uid)]
     return request.app.state.templates.TemplateResponse(request, "logos.html", {
         "active": "logos", "logos": logos, "db": db,
         "variant_running": _variant_progress["running"],
@@ -73,7 +74,8 @@ async def upload_logos(request: Request, files: TList[UploadFile] = File(...)):
         dest = os.path.join(UPLOAD_DIR, safe)
         with open(dest, "wb") as fh:
             fh.write(data)
-        db.add_logo(f.filename, f"/static/uploads/logos/{safe}")
+        uid = request.state.user['id']
+        db.add_logo(f.filename, f"/static/uploads/logos/{safe}", uid)
     return RedirectResponse("/logos", status_code=303)
 
 
@@ -98,7 +100,8 @@ async def generate_variants(request: Request, variant_count: int = Form(25)):
         return HTMLResponse('<div class="alert alert-warning">Already running.</div>')
 
     db = request.app.state.db
-    logos = [dict(l) for l in db.get_logos()]
+    uid = request.state.user['id']
+    logos = [dict(l) for l in db.get_logos(uid)]
     if not logos:
         return HTMLResponse('<div class="alert alert-warning">No logos uploaded.</div>')
 

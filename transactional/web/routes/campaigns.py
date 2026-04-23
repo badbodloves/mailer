@@ -50,9 +50,10 @@ def _enrich(db, cd):
 @router.get("/campaigns", response_class=HTMLResponse)
 async def campaigns_page(request: Request):
     db = request.app.state.db
-    campaigns = [_enrich(db, dict(c)) for c in db.get_campaigns()]
-    smtp_lists = [dict(sl, count=db.get_smtp_count(sl["id"])) for sl in db.get_smtp_lists()]
-    lead_lists = [dict(ll, count=db.get_lead_count(ll["id"])) for ll in db.get_lead_lists()]
+    uid = request.state.user["id"]
+    campaigns = [_enrich(db, dict(c)) for c in db.get_campaigns(uid)]
+    smtp_lists = [dict(sl, count=db.get_smtp_count(sl["id"])) for sl in db.get_smtp_lists(uid)]
+    lead_lists = [dict(ll, count=db.get_lead_count(ll["id"])) for ll in db.get_lead_lists(uid)]
     return request.app.state.templates.TemplateResponse(request, "campaigns.html", {
         "active": "campaigns", "campaigns": campaigns,
         "smtp_lists": smtp_lists, "lead_lists": lead_lists, "db": db,
@@ -68,10 +69,11 @@ async def add_campaign(request: Request,
     if not smtp_list_id or not lead_list_id:
         return RedirectResponse("/campaigns", status_code=303)
     total = db.get_lead_count(lead_list_id)
+    uid = request.state.user['id']
     db.create_campaign(
         name=name.strip() or f"Campaign {time.strftime('%Y-%m-%d %H:%M')}",
         smtp_list_id=smtp_list_id, lead_list_id=lead_list_id,
-        total_leads=total)
+        total_leads=total, user_id=uid)
     return RedirectResponse("/campaigns", status_code=303)
 
 
@@ -108,6 +110,7 @@ async def reset_campaign(request: Request, cid: int):
 async def preflight_check(request: Request, cid: int):
     """Run all pre-flight checks and show Start button only if passed."""
     db = request.app.state.db
+    uid = request.state.user['id']
     camp = db.get_campaign(cid)
     if not camp:
         return HTMLResponse('<div class="alert alert-danger">Campaign not found.</div>')
@@ -135,7 +138,7 @@ async def preflight_check(request: Request, cid: int):
 
     # 2. Check redirects
     if cfg.get("redirect_enabled"):
-        count = db.get_redirect_count()
+        count = db.get_redirect_count(uid)
         if count > 0:
             log.append(f'<span style="color:var(--green)">&#10003; {count} redirect links in pool</span>')
         else:
@@ -145,7 +148,7 @@ async def preflight_check(request: Request, cid: int):
         log.append('<span style="color:var(--fg2)">Redirect links disabled</span>')
 
     # 3. Check templates
-    html_count = len(db.get_all_template_htmls())
+    html_count = len(db.get_all_template_htmls(uid))
     if html_count > 0:
         log.append(f'<span style="color:var(--green)">&#10003; {html_count} HTML templates loaded</span>')
     else:
@@ -242,6 +245,7 @@ async def test_send(request: Request, cid: int):
     if not recipients_raw.strip():
         return HTMLResponse('<div class="alert alert-warning">No test recipients in Config.</div>')
 
+    uid = request.state.user['id']
     recipients = [r.strip() for r in recipients_raw.split(",") if r.strip()]
     camp = db.get_campaign(cid)
     if not camp:
@@ -253,12 +257,12 @@ async def test_send(request: Request, cid: int):
     if not smtps:
         return HTMLResponse('<div class="alert alert-danger">No SMTPs in selected list.</div>')
 
-    html_bodies = db.get_all_template_htmls()
+    html_bodies = db.get_all_template_htmls(uid)
     if not html_bodies:
         return HTMLResponse('<div class="alert alert-danger">No HTML templates. Add on HTML Editor page.</div>')
 
     macros = {}
-    for m in db.get_macros():
+    for m in db.get_macros(uid):
         md = dict(m)
         lines = [l.strip() for l in (md.get("values_text") or "").splitlines() if l.strip()]
         if lines:
@@ -296,7 +300,7 @@ async def test_send(request: Request, cid: int):
         afp = AntiFingerprintEngine(enable_classes=True)
 
     # Load redirects + logos for test
-    redirect_links = [dict(r)["short_url"] for r in db.get_redirects()] if cfg.get("redirect_enabled") else []
+    redirect_links = [dict(r)["short_url"] for r in db.get_redirects(uid)] if cfg.get("redirect_enabled") else []
 
     import glob, os
     logo_files = []
@@ -492,7 +496,8 @@ async def campaign_stats(request: Request, cid: int):
 @router.get("/campaigns/table", response_class=HTMLResponse)
 async def campaigns_table(request: Request):
     db = request.app.state.db
-    campaigns = [_enrich(db, dict(c)) for c in db.get_campaigns()]
+    uid = request.state.user['id']
+    campaigns = [_enrich(db, dict(c)) for c in db.get_campaigns(uid)]
     html = f'<div class="card-header"><h3>Campaigns <span class="count">{len(campaigns)}</span></h3></div>'
     html += '<table><thead><tr><th>Name</th><th>SMTP</th><th>Leads</th><th>Progress</th><th>Total</th><th>Sent</th><th>Failed</th><th>Speed</th><th></th></tr></thead><tbody>'
     for c in campaigns:
@@ -613,10 +618,10 @@ def _run_campaign(db, cid: int):
         else:
             afp = None
 
-        html_bodies = db.get_all_template_htmls()
+        html_bodies = db.get_all_template_htmls(uid)
 
         macros = {}
-        for m in db.get_macros():
+        for m in db.get_macros(uid):
             md = dict(m)
             lines = [l.strip() for l in (md.get("values_text") or "").splitlines() if l.strip()]
             if lines:
@@ -644,7 +649,7 @@ def _run_campaign(db, cid: int):
         # Redirect setup
         redirect_links = []
         if cfg.get("redirect_enabled"):
-            redirects = db.get_redirects()
+            redirects = db.get_redirects(uid)
             redirect_links = [dict(r)["short_url"] for r in redirects]
             logger.info("Campaign %d: %d redirect links loaded", cid, len(redirect_links))
         redirect_rotate = cfg.get("redirect_rotate_every", 10) or 10

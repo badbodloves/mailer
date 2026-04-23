@@ -12,7 +12,8 @@ router = APIRouter()
 @router.get("/templates", response_class=HTMLResponse)
 async def templates_page(request: Request):
     db = request.app.state.db
-    templates = [dict(t) for t in db.get_templates()]
+    uid = request.state.user["id"]
+    templates = [dict(t) for t in db.get_templates(uid)]
     return request.app.state.templates.TemplateResponse(request, "trans_templates.html", {
         "active": "templates", "templates": templates, "db": db,
     })
@@ -22,7 +23,8 @@ async def templates_page(request: Request):
 async def add_template(request: Request, name: str = Form(""),
                        html_content: str = Form("")):
     if name.strip():
-        request.app.state.db.add_template(name.strip(), html_content)
+        uid = request.state.user['id']
+        request.app.state.db.add_template(name.strip(), html_content, uid)
     return RedirectResponse("/templates", status_code=303)
 
 

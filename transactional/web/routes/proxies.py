@@ -8,7 +8,8 @@ router = APIRouter()
 @router.get("/proxies", response_class=HTMLResponse)
 async def proxies_page(request: Request):
     db = request.app.state.db
-    proxies = [dict(p) for p in db.get_proxies()]
+    uid = request.state.user["id"]
+    proxies = [dict(p) for p in db.get_proxies(uid)]
     cfg = db.get_config()
     return request.app.state.templates.TemplateResponse(request, "proxies.html", {
         "active": "proxies", "proxies": proxies, "cfg": cfg, "db": db,
@@ -22,7 +23,8 @@ async def add_proxy(request: Request,
                     value: str = Form(""),
                     rotate_every: int = Form(0)):
     if name.strip() and value.strip():
-        request.app.state.db.add_proxy(name.strip(), proxy_type, value.strip(), rotate_every)
+        uid = request.state.user['id']
+        request.app.state.db.add_proxy(name.strip(), proxy_type, value.strip(), rotate_every, uid)
     return RedirectResponse("/proxies", status_code=303)
 
 

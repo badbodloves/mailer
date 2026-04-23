@@ -12,8 +12,9 @@ EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 @router.get("/leads", response_class=HTMLResponse)
 async def leads_page(request: Request):
     db = request.app.state.db
+    uid = request.state.user["id"]
     lead_lists = []
-    for ll in db.get_lead_lists():
+    for ll in db.get_lead_lists(uid):
         lld = dict(ll)
         lld["count"] = db.get_lead_count(ll["id"])
         lead_lists.append(lld)
@@ -25,7 +26,8 @@ async def leads_page(request: Request):
 @router.post("/leads/create-list")
 async def create_list(request: Request, name: str = Form("")):
     if name.strip():
-        request.app.state.db.create_lead_list(name.strip())
+        uid = request.state.user['id']
+        request.app.state.db.create_lead_list(name.strip(), '', uid)
     return RedirectResponse("/leads", status_code=303)
 
 
@@ -41,7 +43,8 @@ async def bulk_upload(request: Request, files: TList[UploadFile] = File(...)):
         if not emails:
             continue
         name = os.path.splitext(f.filename)[0]
-        lid = db.create_lead_list(name, f.filename)
+        uid = request.state.user['id']
+        lid = db.create_lead_list(name, f.filename, uid)
         db.import_leads(lid, emails)
     return RedirectResponse("/leads", status_code=303)
 

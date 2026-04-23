@@ -200,6 +200,15 @@ class TransDB:
                 cols = {r[1] for r in c.execute(f"PRAGMA table_info({tbl})").fetchall()}
                 if col not in cols:
                     c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} DEFAULT {default}")
+        # Assign orphaned data (user_id=0) to first admin
+        first_admin = c.execute("SELECT id FROM trans_users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()
+        if first_admin:
+            aid = first_admin[0]
+            for tbl in ["trans_smtp_lists", "trans_lead_lists", "trans_macros",
+                         "trans_templates", "trans_logos", "trans_redirect_links",
+                         "trans_campaigns", "trans_proxies"]:
+                if tbl in tables:
+                    c.execute(f"UPDATE {tbl} SET user_id=? WHERE user_id=0 OR user_id IS NULL", (aid,))
         c.commit()
 
     # ── Config (single row JSON) ──────────────────────────
@@ -248,13 +257,15 @@ class TransDB:
         self.save_config(cfg)
 
     # ── SMTP Lists ────────────────────────────────────────
-    def create_smtp_list(self, name: str) -> int:
+    def create_smtp_list(self, name: str, user_id: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_smtp_lists (name) VALUES (?)", (name,))
+        c.execute("INSERT INTO trans_smtp_lists (name,user_id) VALUES (?,?)", (name, user_id))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def get_smtp_lists(self) -> list:
+    def get_smtp_lists(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_smtp_lists WHERE user_id=? ORDER BY name", (user_id,)).fetchall()
         return self._conn().execute("SELECT * FROM trans_smtp_lists ORDER BY name").fetchall()
 
     def delete_smtp_list(self, lid: int):
@@ -312,14 +323,16 @@ class TransDB:
         c.commit()
 
     # ── Lead Lists ────────────────────────────────────────
-    def create_lead_list(self, name: str, file_origin: str = "") -> int:
+    def create_lead_list(self, name: str, file_origin: str = "", user_id: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_lead_lists (name,file_origin) VALUES (?,?)",
-                  (name, file_origin))
+        c.execute("INSERT INTO trans_lead_lists (name,file_origin,user_id) VALUES (?,?,?)",
+                  (name, file_origin, user_id))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def get_lead_lists(self) -> list:
+    def get_lead_lists(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_lead_lists WHERE user_id=? ORDER BY name", (user_id,)).fetchall()
         return self._conn().execute("SELECT * FROM trans_lead_lists ORDER BY name").fetchall()
 
     def delete_lead_list(self, lid: int):
@@ -402,14 +415,16 @@ class TransDB:
                                      (list_id, limit)).fetchall()
 
     # ── Macros ────────────────────────────────────────────
-    def add_macro(self, name: str, values_text: str = "", rotate_every: int = 0) -> int:
+    def add_macro(self, name: str, values_text: str = "", rotate_every: int = 0, user_id: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT OR REPLACE INTO trans_macros (name,values_text,rotate_every) VALUES (?,?,?)",
-                  (name, values_text, rotate_every))
+        c.execute("INSERT OR REPLACE INTO trans_macros (name,values_text,rotate_every,user_id) VALUES (?,?,?,?)",
+                  (name, values_text, rotate_every, user_id))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def get_macros(self) -> list:
+    def get_macros(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_macros WHERE user_id=? ORDER BY name", (user_id,)).fetchall()
         return self._conn().execute("SELECT * FROM trans_macros ORDER BY name").fetchall()
 
     def get_macro(self, name: str) -> str:
@@ -428,14 +443,16 @@ class TransDB:
         c.commit()
 
     # ── Templates ─────────────────────────────────────────
-    def add_template(self, name: str, html_content: str = "") -> int:
+    def add_template(self, name: str, html_content: str = "", user_id: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_templates (name,html_content) VALUES (?,?)",
-                  (name, html_content))
+        c.execute("INSERT INTO trans_templates (name,html_content,user_id) VALUES (?,?,?)",
+                  (name, html_content, user_id))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def get_templates(self) -> list:
+    def get_templates(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_templates WHERE user_id=? ORDER BY name", (user_id,)).fetchall()
         return self._conn().execute("SELECT * FROM trans_templates ORDER BY name").fetchall()
 
     def get_template(self, tid: int):
@@ -474,10 +491,10 @@ class TransDB:
         c.execute("DELETE FROM trans_template_files WHERE id=?", (fid,))
         c.commit()
 
-    def get_all_template_htmls(self) -> list:
+    def get_all_template_htmls(self, user_id: int = 0) -> list:
         """Get all HTML bodies: from template_files first, fall back to template.html_content."""
         bodies = []
-        for t in self.get_templates():
+        for t in self.get_templates(user_id):
             t = dict(t)
             files = self.get_template_files(t["id"])
             if files:
@@ -488,14 +505,16 @@ class TransDB:
         return bodies
 
     # ── Logos ─────────────────────────────────────────────
-    def add_logo(self, filename: str, file_path: str) -> int:
+    def add_logo(self, filename: str, file_path: str, user_id: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_logos (filename,file_path) VALUES (?,?)",
-                  (filename, file_path))
+        c.execute("INSERT INTO trans_logos (filename,file_path,user_id) VALUES (?,?,?)",
+                  (filename, file_path, user_id))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def get_logos(self) -> list:
+    def get_logos(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_logos WHERE user_id=? ORDER BY filename", (user_id,)).fetchall()
         return self._conn().execute("SELECT * FROM trans_logos ORDER BY filename").fetchall()
 
     def delete_logo(self, lid: int):
@@ -504,23 +523,31 @@ class TransDB:
         c.commit()
 
     # ── Redirect Links ────────────────────────────────────
-    def add_redirect(self, short_url: str, target_url: str = "") -> int:
+    def add_redirect(self, short_url: str, target_url: str = "", user_id: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_redirect_links (short_url,target_url) VALUES (?,?)",
-                  (short_url, target_url))
+        c.execute("INSERT INTO trans_redirect_links (short_url,target_url,user_id) VALUES (?,?,?)",
+                  (short_url, target_url, user_id))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def get_redirects(self) -> list:
+    def get_redirects(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_redirect_links WHERE user_id=? ORDER BY created_at DESC", (user_id,)).fetchall()
         return self._conn().execute("SELECT * FROM trans_redirect_links ORDER BY created_at DESC").fetchall()
 
-    def get_redirect_count(self) -> int:
-        r = self._conn().execute("SELECT COUNT(*) FROM trans_redirect_links").fetchone()
+    def get_redirect_count(self, user_id: int = 0) -> int:
+        if user_id:
+            r = self._conn().execute("SELECT COUNT(*) FROM trans_redirect_links WHERE user_id=?", (user_id,)).fetchone()
+        else:
+            r = self._conn().execute("SELECT COUNT(*) FROM trans_redirect_links").fetchone()
         return r[0] if r else 0
 
-    def clear_redirects(self):
+    def clear_redirects(self, user_id: int = 0):
         c = self._conn()
-        c.execute("DELETE FROM trans_redirect_links")
+        if user_id:
+            c.execute("DELETE FROM trans_redirect_links WHERE user_id=?", (user_id,))
+        else:
+            c.execute("DELETE FROM trans_redirect_links")
         c.commit()
 
     def delete_redirect(self, rid: int):
@@ -530,14 +557,16 @@ class TransDB:
 
     # ── Proxies ────────────────────────────────────────────
     def add_proxy(self, name: str, proxy_type: str = "single",
-                  value: str = "", rotate_every: int = 0) -> int:
+                  value: str = "", rotate_every: int = 0, user_id: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_proxies (name,proxy_type,value,rotate_every) VALUES (?,?,?,?)",
-                  (name, proxy_type, value, rotate_every))
+        c.execute("INSERT INTO trans_proxies (name,proxy_type,value,rotate_every,user_id) VALUES (?,?,?,?,?)",
+                  (name, proxy_type, value, rotate_every, user_id))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def get_proxies(self) -> list:
+    def get_proxies(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_proxies WHERE user_id=? ORDER BY name", (user_id,)).fetchall()
         return self._conn().execute("SELECT * FROM trans_proxies ORDER BY name").fetchall()
 
     def get_proxy(self, pid: int):
@@ -564,7 +593,9 @@ class TransDB:
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
-    def get_campaigns(self) -> list:
+    def get_campaigns(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_campaigns WHERE user_id=? ORDER BY created_at DESC", (user_id,)).fetchall()
         return self._conn().execute("SELECT * FROM trans_campaigns ORDER BY created_at DESC").fetchall()
 
     def get_campaign(self, cid: int):

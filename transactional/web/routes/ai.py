@@ -38,8 +38,9 @@ def _llm_call(api_url: str, api_key: str, model: str,
 @router.get("/ai", response_class=HTMLResponse)
 async def ai_page(request: Request):
     db = request.app.state.db
+    uid = request.state.user["id"]
     cfg = db.get_config()
-    macros = [dict(m) for m in db.get_macros()]
+    macros = [dict(m) for m in db.get_macros(uid)]
     return request.app.state.templates.TemplateResponse(request, "ai.html", {
         "active": "ai", "cfg": cfg, "macros": macros, "db": db,
     })

@@ -10,7 +10,8 @@ router = APIRouter()
 @router.get("/macros", response_class=HTMLResponse)
 async def macros_page(request: Request):
     db = request.app.state.db
-    macros = [dict(m) for m in db.get_macros()]
+    uid = request.state.user["id"]
+    macros = [dict(m) for m in db.get_macros(uid)]
     for m in macros:
         lines = [l for l in (m.get("values_text") or "").splitlines() if l.strip()]
         m["line_count"] = len(lines)
@@ -23,7 +24,8 @@ async def macros_page(request: Request):
 async def add_macro(request: Request, name: str = Form(""),
                     values_text: str = Form(""), rotate_every: int = Form(0)):
     if name.strip():
-        request.app.state.db.add_macro(name.strip(), values_text, rotate_every)
+        uid = request.state.user['id']
+        request.app.state.db.add_macro(name.strip(), values_text, rotate_every, uid)
     return RedirectResponse("/macros", status_code=303)
 
 
@@ -50,7 +52,7 @@ async def import_files(request: Request, files: TList[UploadFile] = File(...)):
             continue
         content = (await f.read()).decode("utf-8", errors="replace")
         name = os.path.splitext(f.filename)[0]
-        db.add_macro(name, content.strip())
+        db.add_macro(name, content.strip(), 0, uid)
         added += 1
     from html import escape
     return HTMLResponse(

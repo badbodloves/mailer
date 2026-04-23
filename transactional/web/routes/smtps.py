@@ -86,8 +86,9 @@ def _connect_smtp(host, port, username, password, proxy_str="", timeout=15):
 @router.get("/smtps", response_class=HTMLResponse)
 async def smtps_page(request: Request):
     db = request.app.state.db
+    uid = request.state.user["id"]
     smtp_lists = []
-    for sl in db.get_smtp_lists():
+    for sl in db.get_smtp_lists(uid):
         sld = dict(sl)
         sld["count"] = db.get_smtp_count(sl["id"])
         smtp_lists.append(sld)
@@ -100,7 +101,8 @@ async def smtps_page(request: Request):
 @router.post("/smtps/create-list")
 async def create_list(request: Request, name: str = Form("")):
     if name.strip():
-        request.app.state.db.create_smtp_list(name.strip())
+        uid = request.state.user['id']
+        request.app.state.db.create_smtp_list(name.strip(), uid)
     return RedirectResponse("/smtps", status_code=303)
 
 

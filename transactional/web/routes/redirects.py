@@ -15,8 +15,9 @@ _gen_progress = {"running": False, "total": 0, "done": 0, "ok": 0, "errors": 0}
 @router.get("/redirects", response_class=HTMLResponse)
 async def redirects_page(request: Request):
     db = request.app.state.db
-    redirects = [dict(r) for r in db.get_redirects()]
-    count = db.get_redirect_count()
+    uid = request.state.user["id"]
+    redirects = [dict(r) for r in db.get_redirects(uid)]
+    count = db.get_redirect_count(uid)
     return request.app.state.templates.TemplateResponse(request, "redirects.html", {
         "active": "redirects", "redirects": redirects, "db": db,
         "redirect_count": count, "gen_progress": _gen_progress,
@@ -41,6 +42,7 @@ async def generate_redirects(request: Request,
     count = max(1, min(count, 5000))
     gen_threads = max(1, min(gen_threads, 10))
     db = request.app.state.db
+    gen_uid = request.state.user["id"]
 
     _gen_progress.update(running=True, total=count, done=0, ok=0, errors=0)
 
@@ -53,7 +55,7 @@ async def generate_redirects(request: Request,
                 url = RedirectManager._generate_one(target)
                 if url:
                     try:
-                        db.add_redirect(url, target)
+                        db.add_redirect(url, target, gen_uid)
                         generated += 1
                     except Exception:
                         pass
@@ -86,18 +88,20 @@ async def generate_redirects(request: Request,
 async def add_redirect(request: Request, short_url: str = Form("")):
     url = short_url.strip()
     if url:
-        request.app.state.db.add_redirect(url)
+        uid = request.state.user['id']
+        request.app.state.db.add_redirect(url, '', uid)
     return RedirectResponse("/redirects", status_code=303)
 
 
 @router.post("/redirects/bulk-add", response_class=HTMLResponse)
 async def bulk_add(request: Request, urls: str = Form("")):
     db = request.app.state.db
+    uid = request.state.user["id"]
     added = 0
     for line in urls.splitlines():
         url = line.strip()
         if url and (url.startswith("http://") or url.startswith("https://")):
-            db.add_redirect(url)
+            db.add_redirect(url, '', uid)
             added += 1
     if added:
         return HTMLResponse(
@@ -120,7 +124,8 @@ async def delete_redirect(request: Request, rid: int):
 async def export_redirects(request: Request):
     """Export all redirect URLs as .txt download."""
     db = request.app.state.db
-    redirects = db.get_redirects()
+    uid = request.state.user['id']
+    redirects = db.get_redirects(uid)
     lines = "\n".join(dict(r)["short_url"] for r in redirects)
     from fastapi.responses import Response
     return Response(content=lines, media_type="text/plain",
@@ -129,7 +134,8 @@ async def export_redirects(request: Request):
 
 @router.post("/redirects/clear")
 async def clear_redirects(request: Request):
-    request.app.state.db.clear_redirects()
+    uid = request.state.user['id']
+    request.app.state.db.clear_redirects(uid)
     return RedirectResponse("/redirects", status_code=303)
 
 
