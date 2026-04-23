@@ -26,10 +26,10 @@ async def add_template(request: Request, name: str = Form(""),
     return RedirectResponse("/templates", status_code=303)
 
 
-@router.post("/templates/bulk-upload")
-async def bulk_upload_templates(request: Request,
-                                files: TList[UploadFile] = File(...)):
-    """Upload multiple HTML files — each becomes a template, named by filename."""
+@router.post("/templates/{tid}/upload-htmls")
+async def upload_htmls_to_template(request: Request, tid: int,
+                                    files: TList[UploadFile] = File(...)):
+    """Upload multiple HTML files INTO an existing template."""
     db = request.app.state.db
     added = 0
     for f in files:
@@ -38,9 +38,14 @@ async def bulk_upload_templates(request: Request,
         content = (await f.read()).decode("utf-8", errors="replace")
         if not content.strip():
             continue
-        name = os.path.splitext(f.filename)[0]
-        db.add_template(name, content)
+        db.add_template_file(tid, f.filename, content)
         added += 1
+    return RedirectResponse("/templates", status_code=303)
+
+
+@router.post("/templates/files/{fid}/delete")
+async def delete_template_file(request: Request, fid: int):
+    request.app.state.db.delete_template_file(fid)
     return RedirectResponse("/templates", status_code=303)
 
 

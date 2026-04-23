@@ -65,7 +65,9 @@ async def add_campaign(request: Request,
                        smtp_list_id: int = Form(0),
                        lead_list_id: int = Form(0)):
     db = request.app.state.db
-    total = db.get_lead_count(lead_list_id) if lead_list_id else 0
+    if not smtp_list_id or not lead_list_id:
+        return RedirectResponse("/campaigns", status_code=303)
+    total = db.get_lead_count(lead_list_id)
     db.create_campaign(
         name=name.strip() or f"Campaign {time.strftime('%Y-%m-%d %H:%M')}",
         smtp_list_id=smtp_list_id, lead_list_id=lead_list_id,
@@ -79,9 +81,13 @@ async def save_campaign(request: Request, cid: int,
                         smtp_list_id: int = Form(0),
                         lead_list_id: int = Form(0)):
     db = request.app.state.db
-    total = db.get_lead_count(lead_list_id) if lead_list_id else 0
-    db.update_campaign(cid, name=name.strip(), smtp_list_id=smtp_list_id,
-                       lead_list_id=lead_list_id, total_leads=total)
+    updates = {"name": name.strip()}
+    if smtp_list_id:
+        updates["smtp_list_id"] = smtp_list_id
+    if lead_list_id:
+        updates["lead_list_id"] = lead_list_id
+        updates["total_leads"] = db.get_lead_count(lead_list_id)
+    db.update_campaign(cid, **updates)
     return RedirectResponse("/campaigns", status_code=303)
 
 
@@ -203,6 +209,63 @@ async def delete_campaign(request: Request, cid: int):
     _runners.pop(cid, None)
     request.app.state.db.delete_campaign(cid)
     return RedirectResponse("/campaigns", status_code=303)
+
+
+@router.post("/campaigns/{cid}/check-proxy", response_class=HTMLResponse)
+async def check_proxy(request: Request, cid: int):
+    """Pre-flight proxy connectivity test."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    proxy_value = cfg.get("proxy_value", "").strip()
+    if not proxy_value:
+        return HTMLResponse('<div class="alert alert-warning">No proxy configured. Set one on the Proxies page.</div>')
+    first_proxy = proxy_value.splitlines()[0].strip()
+    try:
+        import socks
+        p = first_proxy.replace("socks5://", "").replace("socks://", "")
+        parts = p.split(":")
+        if len(parts) < 2:
+            return HTMLResponse(f'<div class="alert alert-danger">Invalid proxy format: {escape(first_proxy[:40])}</div>')
+        s = socks.socksocket()
+        host, port = parts[0], int(parts[1])
+        user = parts[2] if len(parts) > 2 else ""
+        pwd = parts[3] if len(parts) > 3 else ""
+        s.set_proxy(socks.SOCKS5, host, port, username=user or None, password=pwd or None)
+        s.settimeout(10)
+        s.connect(("api.ipify.org", 80))
+        s.sendall(b"GET / HTTP/1.1\r\nHost: api.ipify.org\r\nConnection: close\r\n\r\n")
+        resp = s.recv(4096).decode()
+        s.close()
+        ip = resp.split("\r\n\r\n")[-1].strip() if "\r\n\r\n" in resp else "?"
+        return HTMLResponse(f'<div class="alert alert-success">Proxy OK — egress IP: <strong>{escape(ip)}</strong></div>')
+    except ImportError:
+        return HTMLResponse('<div class="alert alert-danger">PySocks not installed</div>')
+    except Exception as e:
+        return HTMLResponse(f'<div class="alert alert-danger">Proxy failed: {escape(str(e)[:100])}</div>')
+
+
+@router.post("/campaigns/{cid}/check-blacklist", response_class=HTMLResponse)
+async def check_blacklist(request: Request, cid: int):
+    """MXToolbox blacklist check."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    api_key = cfg.get("mxtoolbox_api_key", "")
+    if not api_key:
+        return HTMLResponse('<div class="alert alert-warning">No MXToolbox API key in Config.</div>')
+    try:
+        from mailer.blacklist_checker import BlacklistChecker
+        checker = BlacklistChecker(api_key)
+        results = checker.check_sending_ips()
+        html_parts = []
+        for label, info in results.items():
+            if info["clean"]:
+                html_parts.append(f'<span style="color:var(--green)">&#10003; {escape(label)} clean</span>')
+            else:
+                count = len(info.get("details", []))
+                html_parts.append(f'<span style="color:var(--red)">&#10007; {escape(label)} listed on {count} blacklists</span>')
+        return HTMLResponse('<div style="display:flex;flex-wrap:wrap;gap:12px">' + " ".join(html_parts) + '</div>')
+    except Exception as e:
+        return HTMLResponse(f'<div class="alert alert-danger">{escape(str(e)[:100])}</div>')
 
 
 @router.get("/campaigns/{cid}/stats", response_class=HTMLResponse)
@@ -335,8 +398,7 @@ def _run_campaign(db, cid: int):
         else:
             afp = None
 
-        templates = [dict(t) for t in db.get_templates()]
-        html_bodies = [t["html_content"] for t in templates if t.get("html_content")]
+        html_bodies = db.get_all_template_htmls()
 
         macros = {}
         for m in db.get_macros():

@@ -77,6 +77,14 @@ class TransDB:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,
                     html_content TEXT DEFAULT '',
+                    rotate_every INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS trans_template_files (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    template_id INTEGER NOT NULL REFERENCES trans_templates(id) ON DELETE CASCADE,
+                    filename TEXT DEFAULT '',
+                    html_content TEXT NOT NULL,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS trans_logos (
@@ -369,6 +377,41 @@ class TransDB:
         c = self._conn()
         c.execute("DELETE FROM trans_templates WHERE id=?", (tid,))
         c.commit()
+
+    def add_template_file(self, template_id: int, filename: str, html_content: str) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO trans_template_files (template_id,filename,html_content) VALUES (?,?,?)",
+                  (template_id, filename, html_content))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_template_files(self, template_id: int) -> list:
+        return self._conn().execute(
+            "SELECT * FROM trans_template_files WHERE template_id=? ORDER BY filename",
+            (template_id,)).fetchall()
+
+    def get_template_file_count(self, template_id: int) -> int:
+        r = self._conn().execute("SELECT COUNT(*) FROM trans_template_files WHERE template_id=?",
+                                  (template_id,)).fetchone()
+        return r[0] if r else 0
+
+    def delete_template_file(self, fid: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_template_files WHERE id=?", (fid,))
+        c.commit()
+
+    def get_all_template_htmls(self) -> list:
+        """Get all HTML bodies: from template_files first, fall back to template.html_content."""
+        bodies = []
+        for t in self.get_templates():
+            t = dict(t)
+            files = self.get_template_files(t["id"])
+            if files:
+                for f in files:
+                    bodies.append(dict(f)["html_content"])
+            elif t.get("html_content", "").strip():
+                bodies.append(t["html_content"])
+        return bodies
 
     # ── Logos ─────────────────────────────────────────────
     def add_logo(self, filename: str, file_path: str) -> int:

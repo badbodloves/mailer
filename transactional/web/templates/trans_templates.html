@@ -4,28 +4,79 @@
 <div class="page-header"><h1>HTML Editor</h1></div>
 
 <div class="card">
+    <h3>HTML Rotation</h3>
+    <form method="post" action="/config/save" style="display:flex;gap:12px;align-items:flex-end">
+        <div>
+            <label>Rotate Every N Sends</label>
+            <input name="html_rotate_every" type="number" value="{{ db.get_config().get('html_rotate_every', 0) }}" min="0" style="width:120px">
+        </div>
+        <button class="btn btn-primary btn-sm">Save</button>
+    </form>
+    <div class="form-help">0 = random pick. N = use HTML #1 for N sends, then #2, etc. Applies to all HTML files across all templates.</div>
+</div>
+
+<div class="card">
     <div class="card-header"><h3>Templates <span class="count">{{ templates|length }}</span></h3></div>
     {% if templates %}
     {% for t in templates %}
+    {% set files = db.get_template_files(t.id) %}
     <details>
-        <summary>{{ t.name }} <span style="margin-left:auto;font-size:12px;color:var(--fg2)">{{ t.html_content|length }} chars</span></summary>
+        <summary>
+            {{ t.name }}
+            <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
+                {% if files %}
+                <span class="badge badge-info">{{ files|length }} HTML files</span>
+                {% elif t.html_content %}
+                <span class="badge badge-draft">inline</span>
+                {% else %}
+                <span class="badge badge-failed">empty</span>
+                {% endif %}
+            </span>
+        </summary>
         <div class="details-body" style="padding-top:12px">
+            <!-- Inline HTML editor -->
             <form method="post" action="/templates/{{ t.id }}/save">
                 <label>Name</label><input name="name" value="{{ t.name }}">
-                <label>HTML Content</label>
-                <textarea name="html_content" rows="18" style="font-family:'SF Mono',Consolas,monospace;font-size:12px;line-height:1.5">{{ t.html_content }}</textarea>
-                <div class="form-help">Variables: {email}, {email_user}, {domain}, {from_name}, {subject}, {Logo}, {RedirectLink} — Spintax: {opt1|opt2|opt3} — Random: [RANDSTR:N:charset:case]</div>
-                <div style="margin-top:10px"><button class="btn btn-primary btn-sm">Save</button></div>
+                <label>Inline HTML (used if no files uploaded)</label>
+                <textarea name="html_content" rows="10" style="font-family:'SF Mono',Consolas,monospace;font-size:12px;line-height:1.5">{{ t.html_content }}</textarea>
+                <div class="form-help">Variables: {email}, {email_user}, {domain}, {Logo}, {RedirectLink}, {MacroName}, {opt1|opt2}, [RANDSTR:N:charset:case]</div>
+                <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Save</button></div>
             </form>
 
+            <!-- Uploaded HTML files -->
+            {% if files %}
             <div class="divider"></div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px">
-                <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-raw" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Raw HTML</button>
+            <label style="font-weight:600">Uploaded HTML Files ({{ files|length }})</label>
+            {% for f in files %}
+            <div class="file-item">
+                <span class="file-name">{{ f.filename }}</span>
+                <span style="font-size:11px;color:var(--fg2)">{{ f.html_content|length }} chars</span>
+                <form method="post" action="/templates/files/{{ f.id }}/delete" style="display:inline">
+                    <button class="btn btn-danger btn-xs btn-icon">&#10005;</button>
+                </form>
+            </div>
+            {% endfor %}
+            {% endif %}
+
+            <!-- Bulk upload -->
+            <div class="divider"></div>
+            <form method="post" action="/templates/{{ t.id }}/upload-htmls" enctype="multipart/form-data" style="display:flex;gap:12px;align-items:flex-end">
+                <div style="flex:1">
+                    <label>Upload HTML files into this template</label>
+                    <input type="file" name="files" multiple accept=".html,.htm" required>
+                </div>
+                <button class="btn btn-primary btn-sm">Upload</button>
+            </form>
+
+            <!-- Preview buttons -->
+            <div class="divider"></div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">
+                <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-raw" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Raw</button>
                 <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-processed" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Processed</button>
                 <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-af" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">+ AntiFingerprint</button>
                 <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-mime" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Raw MIME</button>
                 <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/text-ratio" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Text:Image Ratio</button>
-                <form method="post" action="/templates/{{ t.id }}/delete" onsubmit="return confirm('Delete?')"><button class="btn btn-danger btn-xs">Delete</button></form>
+                <form method="post" action="/templates/{{ t.id }}/delete" onsubmit="return confirm('Delete template + all files?')"><button class="btn btn-danger btn-xs">Delete</button></form>
             </div>
             <div id="tpl-out-{{ t.id }}"></div>
         </div>
@@ -36,40 +87,15 @@
     {% endif %}
 </div>
 
-<div class="card">
-    <h3>HTML Rotation</h3>
-    <form method="post" action="/config/save" style="display:flex;gap:12px;align-items:flex-end">
-        <div>
-            <label>Rotate Every N Sends</label>
-            <input name="html_rotate_every" type="number" value="{{ db.get_config().get('html_rotate_every', 0) }}" min="0" style="width:120px">
-        </div>
-        <button class="btn btn-primary btn-sm">Save</button>
-    </form>
-    <div class="form-help">0 = random pick per send. N = use template #1 for N sends, then #2, etc. Uses all templates above.</div>
-</div>
-
-<div class="grid-2" style="align-items:start">
-    <details {{ 'open' if not templates }}>
-        <summary>Create Template</summary>
-        <div class="details-body" style="padding-top:12px">
-            <form method="post" action="/templates/add">
-                <label>Template Name</label><input name="name" placeholder="Welcome Email" required>
-                <label>HTML Content</label>
-                <textarea name="html_content" rows="12" placeholder="<html>&#10;<body>&#10;  <p>Hello {email_user},</p>&#10;  {Logo}&#10;  <a href='{RedirectLink}'>Click</a>&#10;</body>&#10;</html>" style="font-family:'SF Mono',Consolas,monospace;font-size:12px;line-height:1.5"></textarea>
-                <div style="margin-top:12px"><button class="btn btn-primary">Create Template</button></div>
-            </form>
-        </div>
-    </details>
-    <details>
-        <summary>Bulk Upload HTMLs</summary>
-        <div class="details-body" style="padding-top:12px">
-            <form method="post" action="/templates/bulk-upload" enctype="multipart/form-data">
-                <label>Upload .html files — each file = one template, named by filename</label>
-                <input type="file" name="files" multiple accept=".html,.htm" required>
-                <div class="form-help">e.g. "Marke_XY.html" → template "Marke_XY"</div>
-                <div style="margin-top:10px"><button class="btn btn-primary">Upload All</button></div>
-            </form>
-        </div>
-    </details>
-</div>
+<details {{ 'open' if not templates }}>
+    <summary>Create Template</summary>
+    <div class="details-body" style="padding-top:12px">
+        <form method="post" action="/templates/add">
+            <label>Template Name</label><input name="name" placeholder="e.g. Marke XY" required>
+            <label>HTML Content (optional — can upload files after)</label>
+            <textarea name="html_content" rows="8" placeholder="<html><body>&#10;  <p>Hello {email_user}</p>&#10;</body></html>" style="font-family:'SF Mono',Consolas,monospace;font-size:12px"></textarea>
+            <div style="margin-top:12px"><button class="btn btn-primary">Create Template</button></div>
+        </form>
+    </div>
+</details>
 {% endblock %}

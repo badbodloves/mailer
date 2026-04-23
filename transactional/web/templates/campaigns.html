@@ -75,22 +75,37 @@
             </form>
         </div>
         <div id="c-actions-{{ c.id }}" class="tab-content">
+            <h3 style="font-size:14px;margin-bottom:8px">Controls</h3>
             <div class="btn-group" style="flex-wrap:wrap;margin-bottom:12px">
                 {% if not c.running %}
                 <form method="post" action="/campaigns/{{ c.id }}/start"><button class="btn btn-success btn-sm">Start</button></form>
                 {% else %}
                 <form method="post" action="/campaigns/{{ c.id }}/stop"><button class="btn btn-danger btn-sm">Stop</button></form>
                 {% endif %}
-                <button class="btn btn-secondary btn-sm"
-                        hx-post="/campaigns/{{ c.id }}/test-send"
-                        hx-target="#test-result-{{ c.id }}"
-                        hx-swap="innerHTML">Send Test Mail</button>
                 <form method="post" action="/campaigns/{{ c.id }}/reset" onsubmit="return confirm('Reset all leads?')"><button class="btn btn-secondary btn-sm">Reset & Resend</button></form>
                 <form method="post" action="/campaigns/{{ c.id }}/delete" onsubmit="return confirm('Delete?')"><button class="btn btn-danger btn-sm">Delete</button></form>
             </div>
-            <div id="test-result-{{ c.id }}"></div>
+
+            <h3 style="font-size:14px;margin-bottom:8px">Pre-Flight Checks</h3>
+            <div class="btn-group" style="flex-wrap:wrap;margin-bottom:8px">
+                <button class="btn btn-secondary btn-sm"
+                        hx-post="/campaigns/{{ c.id }}/test-send"
+                        hx-target="#preflight-{{ c.id }}"
+                        hx-swap="innerHTML">Send Test Mail</button>
+                <button class="btn btn-secondary btn-sm"
+                        hx-post="/campaigns/{{ c.id }}/check-proxy"
+                        hx-target="#preflight-{{ c.id }}"
+                        hx-swap="innerHTML">Check Proxy</button>
+                <button class="btn btn-secondary btn-sm"
+                        hx-post="/campaigns/{{ c.id }}/check-blacklist"
+                        hx-target="#preflight-{{ c.id }}"
+                        hx-swap="innerHTML">Blacklist Check</button>
+            </div>
+            <div id="preflight-{{ c.id }}"></div>
             <div class="form-help" style="margin-top:8px">
-                Test recipients + interval configured in <a href="/config" style="color:var(--accent)">Config</a>.
+                Test recipients in <a href="/config" style="color:var(--accent)">Config</a>.
+                Proxy on <a href="/proxies" style="color:var(--accent)">Proxies</a> page.
+                MXToolbox key in <a href="/config" style="color:var(--accent)">Config</a>.
             </div>
         </div>
     </div>
