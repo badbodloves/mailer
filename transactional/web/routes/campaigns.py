@@ -701,6 +701,7 @@ def _run_campaign(db, cid: int):
 
         def _send_one(lead_id, email):
             nonlocal sent, failed
+            logger.info("Campaign %d: _send_one called for lead %d (%s)", cid, lead_id, email)
             if cid not in _runners:
                 return
             account = pool.acquire()
@@ -835,8 +836,10 @@ def _run_campaign(db, cid: int):
                     try:
                         f.result(timeout=120)
                     except Exception as e:
+                        lid = futures[f]
+                        logger.error("Campaign %d EXECUTOR error for lead %d: %s", cid, lid, e, exc_info=True)
                         with _lock:
-                            db.mark_failed(futures[f], str(e)[:500])
+                            db.mark_failed(lid, str(e)[:500])
                             failed += 1
 
             # Retry failed leads once
@@ -862,8 +865,8 @@ def _run_campaign(db, cid: int):
                         for f in as_completed(futs):
                             try:
                                 f.result(timeout=120)
-                            except Exception:
-                                pass
+                            except Exception as e:
+                                logger.error("Campaign %d RETRY error: %s", cid, e)
 
         status = "FINISHED" if cid not in _runners else "PAUSED"
         from datetime import datetime
