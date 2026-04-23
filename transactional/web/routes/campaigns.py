@@ -284,6 +284,25 @@ async def campaign_stats(request: Request, cid: int):
     speed = _speed.get(cid, 0)
     speed_str = f"{speed:,}/h" if speed else "—"
     status = cd.get("status", "DRAFT")
+
+    elapsed_str = "—"
+    eta_str = "—"
+    if cd.get("started_at") and running:
+        from datetime import datetime
+        try:
+            started = datetime.fromisoformat(cd["started_at"])
+            elapsed_sec = (datetime.now() - started).total_seconds()
+            elapsed_h = int(elapsed_sec // 3600)
+            elapsed_m = int((elapsed_sec % 3600) // 60)
+            elapsed_str = f"{elapsed_h}h {elapsed_m}m"
+            if speed > 0 and remaining > 0:
+                eta_sec = remaining / speed * 3600
+                eta_h = int(eta_sec // 3600)
+                eta_m = int((eta_sec % 3600) // 60)
+                eta_str = f"{eta_h}h {eta_m}m"
+        except Exception:
+            pass
+
     return HTMLResponse(f"""
     <div class="grid-4" style="margin-bottom:12px">
         <div class="metric"><div class="value" style="color:var(--green)">{sent:,}</div><div class="label">Sent</div></div>
@@ -294,6 +313,7 @@ async def campaign_stats(request: Request, cid: int):
     <div class="progress"><div class="progress-bar" style="width:{pct}%">{pct}%</div></div>
     <p style="margin-top:8px;font-size:12px;color:var(--fg2)">
         Status: <span class="badge badge-{'running' if running else status.lower()}">{status}</span>
+        &nbsp; Elapsed: {elapsed_str} &nbsp; ETA: {eta_str}
     </p>""")
 
 
@@ -332,7 +352,8 @@ def _run_campaign(db, cid: int):
 
     camp = dict(db.get_campaign(cid))
     cfg = db.get_config()
-    db.update_campaign(cid, status="RUNNING")
+    from datetime import datetime
+    db.update_campaign(cid, status="RUNNING", started_at=datetime.now().isoformat())
 
     lead_list_id = camp.get("lead_list_id", 0)
     smtp_list_id = camp.get("smtp_list_id", 0)
@@ -545,9 +566,16 @@ def _run_campaign(db, cid: int):
                             failed += 1
 
         status = "FINISHED" if cid not in _runners else "PAUSED"
+        from datetime import datetime
         logger.info("Campaign %d %s: sent=%d, failed=%d", cid, status, sent, failed)
-        db.update_campaign(cid, status=status, sent=sent, failed=failed)
+        db.update_campaign(cid, status=status, sent=sent, failed=failed,
+                           finished_at=datetime.now().isoformat())
         db.reset_in_progress(lead_list_id)
+
+        if status == "FINISHED":
+            from .logos import clear_variants
+            clear_variants()
+            logger.info("Campaign %d: logo variants cleared", cid)
 
     finally:
         os.unlink(smtp_file.name)

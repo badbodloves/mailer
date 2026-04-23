@@ -4,7 +4,7 @@
 <div class="page-header"><h1>Logos</h1></div>
 
 <div class="card">
-    <div class="card-header"><h3>Logo Files <span class="count">{{ logos|length }}</span></h3></div>
+    <div class="card-header"><h3>Source Logos <span class="count">{{ logos|length }}</span></h3></div>
     {% if logos %}
     <div class="grid-4" style="margin-bottom:16px">
         {% for l in logos %}
@@ -18,13 +18,13 @@
         {% endfor %}
     </div>
     {% else %}
-    <div class="empty-state"><div class="icon">&#128247;</div><p>No logos. Upload below.</p></div>
+    <div class="empty-state"><div class="icon">&#128247;</div><p>No source logos. Upload below.</p></div>
     {% endif %}
 </div>
 
 <div class="grid-2" style="align-items:start">
     <div class="card">
-        <h3>Upload Logos</h3>
+        <h3>Upload Source Logos</h3>
         <form method="post" action="/logos/upload" enctype="multipart/form-data">
             <label>Select Images (PNG, JPG, GIF, WebP — max 5MB)</label>
             <input type="file" name="files" multiple accept=".png,.jpg,.jpeg,.gif,.webp" required>
@@ -33,17 +33,30 @@
     </div>
 
     <div class="card">
-        <h3>Generate Variants</h3>
-        <p style="font-size:13px;color:var(--fg2);margin-bottom:12px">
-            Creates brightness/color/contrast variations of each logo for unique email fingerprints.
+        <h3>Generated Variants <span class="count">{{ variant_count }}</span></h3>
+        <p style="font-size:13px;color:var(--fg2);margin-bottom:10px">
+            Variants are stored separately in /logo_variants/ and used during mailing.
+            They are automatically cleaned up when you regenerate or clear.
         </p>
-        <button class="btn btn-primary btn-sm"
-                hx-post="/logos/generate-variants"
+        <form hx-post="/logos/generate-variants" hx-target="#variant-result" hx-swap="innerHTML" style="margin-bottom:8px">
+            <div class="form-row">
+                <div>
+                    <label>Total Variants to Generate</label>
+                    <input name="variant_count" type="number" value="25" min="1" max="500" style="margin:0">
+                </div>
+                <div class="shrink">
+                    <label>&nbsp;</label>
+                    <button class="btn btn-primary btn-sm">Generate</button>
+                </div>
+            </div>
+        </form>
+        {% if variant_count > 0 %}
+        <button class="btn btn-danger btn-sm"
+                hx-post="/logos/clear-variants"
                 hx-target="#variant-result"
                 hx-swap="innerHTML"
-                {{ 'disabled' if variant_running }}>
-            {{ 'Generating...' if variant_running else 'Generate Variants' }}
-        </button>
+                hx-confirm="Clear all {{ variant_count }} variants?">Clear Variants</button>
+        {% endif %}
         <div id="variant-result" style="margin-top:10px"></div>
     </div>
 </div>

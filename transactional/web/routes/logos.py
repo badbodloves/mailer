@@ -1,11 +1,12 @@
-"""Logos — upload, list, delete, generate variants."""
+"""Logos — upload source logos, generate variants to separate dir, cleanup."""
 import os
 import time
+import shutil
 import threading
 import logging
 import secrets
 from html import escape
-from fastapi import APIRouter, Request, UploadFile, File
+from fastapi import APIRouter, Request, UploadFile, File, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 from typing import List as TList
 
@@ -13,12 +14,36 @@ logger = logging.getLogger("trans.logos")
 router = APIRouter()
 
 UPLOAD_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "uploads", "logos")
+VARIANT_DIR = os.path.join(os.path.dirname(__file__), "..", "static", "uploads", "logo_variants")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+os.makedirs(VARIANT_DIR, exist_ok=True)
 
 ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
-MAX_FILE_SIZE = 5 * 1024 * 1024  # 5 MB
 
-_variant_progress = {"running": False, "done": 0, "total": 0, "error": ""}
+_variant_progress = {"running": False, "done": 0, "total": 0, "count": 0, "error": ""}
+
+
+def _resolve_path(file_path: str) -> str:
+    if file_path.startswith("/static/"):
+        return os.path.normpath(os.path.join(
+            os.path.dirname(__file__), "..", file_path.lstrip("/")))
+    return file_path
+
+
+def get_variant_count() -> int:
+    try:
+        return len([f for f in os.listdir(VARIANT_DIR)
+                     if os.path.isfile(os.path.join(VARIANT_DIR, f))])
+    except OSError:
+        return 0
+
+
+def clear_variants():
+    try:
+        shutil.rmtree(VARIANT_DIR)
+        os.makedirs(VARIANT_DIR, exist_ok=True)
+    except OSError:
+        pass
 
 
 @router.get("/logos", response_class=HTMLResponse)
@@ -28,12 +53,12 @@ async def logos_page(request: Request):
     return request.app.state.templates.TemplateResponse(request, "logos.html", {
         "active": "logos", "logos": logos, "db": db,
         "variant_running": _variant_progress["running"],
+        "variant_count": get_variant_count(),
     })
 
 
 @router.post("/logos/upload")
-async def upload_logos(request: Request,
-                       files: TList[UploadFile] = File(...)):
+async def upload_logos(request: Request, files: TList[UploadFile] = File(...)):
     db = request.app.state.db
     for f in files:
         if not f.filename:
@@ -42,14 +67,13 @@ async def upload_logos(request: Request,
         if ext not in ALLOWED_EXT:
             continue
         data = await f.read()
-        if not data or len(data) > MAX_FILE_SIZE:
+        if not data or len(data) > 5 * 1024 * 1024:
             continue
-        safe_name = f"{int(time.time())}_{secrets.token_hex(4)}{ext}"
-        dest = os.path.join(UPLOAD_DIR, safe_name)
+        safe = f"{int(time.time())}_{secrets.token_hex(4)}{ext}"
+        dest = os.path.join(UPLOAD_DIR, safe)
         with open(dest, "wb") as fh:
             fh.write(data)
-        rel_path = f"/static/uploads/logos/{safe_name}"
-        db.add_logo(f.filename, rel_path)
+        db.add_logo(f.filename, f"/static/uploads/logos/{safe}")
     return RedirectResponse("/logos", status_code=303)
 
 
@@ -58,18 +82,7 @@ async def delete_logo(request: Request, lid: int):
     db = request.app.state.db
     row = db._conn().execute("SELECT * FROM trans_logos WHERE id=?", (lid,)).fetchone()
     if row:
-        row = dict(row)
-        file_path = row.get("file_path", "")
-        # Handle both absolute paths and relative /static/ paths
-        if file_path.startswith("/static/uploads/logos/"):
-            abs_path = os.path.join(
-                os.path.dirname(__file__), "..",
-                file_path.lstrip("/").split("/", 1)[0],
-                *file_path.lstrip("/").split("/")[1:]
-            )
-            abs_path = os.path.normpath(abs_path)
-        else:
-            abs_path = file_path
+        abs_path = _resolve_path(dict(row).get("file_path", ""))
         if os.path.isfile(abs_path):
             try:
                 os.unlink(abs_path)
@@ -80,48 +93,34 @@ async def delete_logo(request: Request, lid: int):
 
 
 @router.post("/logos/generate-variants", response_class=HTMLResponse)
-async def generate_variants(request: Request):
+async def generate_variants(request: Request, variant_count: int = Form(25)):
     if _variant_progress["running"]:
-        return HTMLResponse(
-            '<div class="alert alert-warning">Variant generation already running.</div>'
-        )
+        return HTMLResponse('<div class="alert alert-warning">Already running.</div>')
 
     db = request.app.state.db
     logos = [dict(l) for l in db.get_logos()]
     if not logos:
-        return HTMLResponse(
-            '<div class="alert alert-warning">No logos uploaded. Upload logos first.</div>'
-        )
+        return HTMLResponse('<div class="alert alert-warning">No logos uploaded.</div>')
 
-    _variant_progress.update(running=True, done=0, total=len(logos), error="")
+    clear_variants()
+    per_logo = max(1, variant_count // len(logos))
+    _variant_progress.update(running=True, done=0, total=len(logos) * per_logo, count=0, error="")
 
     def worker():
         try:
-            from PIL import Image, ImageEnhance, ImageFilter
+            from PIL import Image, ImageEnhance
         except ImportError:
-            _variant_progress["error"] = "Pillow is not installed"
+            _variant_progress["error"] = "Pillow not installed"
             _variant_progress["running"] = False
             return
 
         import random
-
+        generated = 0
         try:
-            for idx, logo in enumerate(logos):
-                file_path = logo.get("file_path", "")
-                if file_path.startswith("/static/uploads/logos/"):
-                    abs_path = os.path.join(
-                        os.path.dirname(__file__), "..",
-                        file_path.lstrip("/").split("/", 1)[0],
-                        *file_path.lstrip("/").split("/")[1:]
-                    )
-                    abs_path = os.path.normpath(abs_path)
-                else:
-                    abs_path = file_path
-
+            for logo in logos:
+                abs_path = _resolve_path(logo.get("file_path", ""))
                 if not os.path.isfile(abs_path):
-                    _variant_progress["done"] = idx + 1
                     continue
-
                 try:
                     img = Image.open(abs_path)
                     if img.mode == "P":
@@ -129,69 +128,61 @@ async def generate_variants(request: Request):
                     elif img.mode not in ("RGB", "RGBA"):
                         img = img.convert("RGB")
 
-                    for v in range(3):
+                    ext = os.path.splitext(abs_path)[1].lower()
+                    if ext not in (".png", ".jpg", ".jpeg"):
+                        ext = ".png"
+                    fmt = "PNG" if ext == ".png" else "JPEG"
+
+                    for v in range(per_logo):
                         variant = img.copy()
                         variant = ImageEnhance.Brightness(variant).enhance(
                             1.0 + random.uniform(-0.05, 0.05))
                         variant = ImageEnhance.Color(variant).enhance(
-                            1.0 + random.uniform(-0.05, 0.05))
+                            1.0 + random.uniform(-0.08, 0.08))
                         variant = ImageEnhance.Contrast(variant).enhance(
-                            1.0 + random.uniform(-0.02, 0.02))
+                            1.0 + random.uniform(-0.03, 0.03))
 
-                        ext = os.path.splitext(abs_path)[1].lower()
-                        if ext not in (".png", ".jpg", ".jpeg"):
-                            ext = ".png"
-                        vname = f"{int(time.time())}_{secrets.token_hex(4)}_v{v}{ext}"
-                        vpath = os.path.join(UPLOAD_DIR, vname)
-                        fmt = "PNG" if ext == ".png" else "JPEG"
+                        vname = f"v_{generated:04d}_{secrets.token_hex(3)}{ext}"
+                        vpath = os.path.join(VARIANT_DIR, vname)
                         save_kw = {"optimize": True}
                         if fmt == "JPEG":
                             save_kw["quality"] = 95
                         variant.save(vpath, format=fmt, **save_kw)
-                        rel = f"/static/uploads/logos/{vname}"
-                        db.add_logo(f"{logo['filename']}_v{v}", rel)
-
+                        generated += 1
+                        _variant_progress["done"] = generated
                 except Exception as e:
-                    logger.error("Variant gen error for %s: %s", logo["filename"], e)
+                    logger.error("Variant error for %s: %s", logo["filename"], e)
 
-                _variant_progress["done"] = idx + 1
-                time.sleep(0.1)
-
+            _variant_progress["count"] = generated
         except Exception as e:
-            logger.error("Variant generation failed: %s", e, exc_info=True)
             _variant_progress["error"] = str(e)[:200]
         finally:
             _variant_progress["running"] = False
 
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
+    threading.Thread(target=worker, daemon=True).start()
     return HTMLResponse(
-        f'<div class="alert alert-info">Generating variants for {len(logos)} logo(s)...</div>'
-        f'<div id="variant-progress" hx-get="/logos/variant-status" '
-        f'hx-trigger="every 2s" hx-swap="innerHTML"></div>'
-    )
+        f'<div class="alert alert-info">Generating {per_logo} variants per logo ({len(logos)} logos)...</div>'
+        f'<div hx-get="/logos/variant-status" hx-trigger="every 2s" hx-swap="innerHTML"></div>')
 
 
 @router.get("/logos/variant-status", response_class=HTMLResponse)
 async def variant_status(request: Request):
     p = _variant_progress
     if p["error"]:
-        return HTMLResponse(
-            f'<div class="alert alert-danger">Error: {escape(p["error"])}</div>'
-        )
+        return HTMLResponse(f'<div class="alert alert-danger">Error: {escape(p["error"])}</div>')
     if not p["running"] and p["total"] == 0:
         return HTMLResponse("")
-
-    done = p["done"]
-    total = p["total"]
+    done, total = p["done"], p["total"]
     pct = int(done / total * 100) if total > 0 else 0
-
     if p["running"]:
         return HTMLResponse(
-            f'<div class="progress"><div class="progress-bar" style="width:{pct}%">'
-            f'{done}/{total}</div></div>'
-        )
+            f'<div class="progress"><div class="progress-bar" style="width:{pct}%">{done}/{total}</div></div>')
     return HTMLResponse(
-        f'<div class="alert alert-success">Done! Generated variants for {total} logo(s). '
-        f'<a href="/logos" style="color:var(--accent)">Reload page</a></div>'
-    )
+        f'<div class="alert alert-success">{p["count"]} variants generated in /logo_variants/. '
+        f'<a href="/logos" style="color:var(--accent)">Reload</a></div>')
+
+
+@router.post("/logos/clear-variants", response_class=HTMLResponse)
+async def clear_variant_files(request: Request):
+    clear_variants()
+    return HTMLResponse('<div class="alert alert-success">Variants cleared.</div>')
