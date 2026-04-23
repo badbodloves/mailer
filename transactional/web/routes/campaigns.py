@@ -127,6 +127,77 @@ async def stop_campaign(request: Request, cid: int):
     return RedirectResponse("/campaigns", status_code=303)
 
 
+@router.post("/campaigns/{cid}/test-send", response_class=HTMLResponse)
+async def test_send(request: Request, cid: int):
+    """Send test email to test_recipients from config."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    recipients_raw = cfg.get("test_recipients", "")
+    if not recipients_raw.strip():
+        return HTMLResponse('<div class="alert alert-warning">No test recipients in Config.</div>')
+
+    recipients = [r.strip() for r in recipients_raw.split(",") if r.strip()]
+    camp = db.get_campaign(cid)
+    if not camp:
+        return HTMLResponse('<div class="alert alert-danger">Campaign not found.</div>')
+    camp = dict(camp)
+
+    smtp_list_id = camp.get("smtp_list_id", 0)
+    smtps = [dict(s) for s in db.get_smtps(smtp_list_id)] if smtp_list_id else []
+    if not smtps:
+        return HTMLResponse('<div class="alert alert-danger">No SMTPs in selected list.</div>')
+
+    results = []
+    import smtplib, ssl
+    from email.mime.text import MIMEText
+
+    templates = [dict(t) for t in db.get_templates()]
+    html_bodies = [t["html_content"] for t in templates if t.get("html_content")]
+    html = html_bodies[0] if html_bodies else "<p>Hello {email_user}, this is a test.</p>"
+
+    from_name = cfg.get("from_name", "") or "Test"
+    from_email_cfg = cfg.get("from_email", "")
+    subject = cfg.get("subject", "") or "Test Email"
+
+    s = smtps[0]
+    from_email = from_email_cfg or s["username"]
+
+    for recipient in recipients:
+        user = recipient.split("@")[0]
+        cur_html = html.replace("{email}", recipient).replace("{email_user}", user).replace("{domain}", recipient.split("@")[1] if "@" in recipient else "")
+        cur_subject = subject.replace("{email_user}", user).replace("{email}", recipient)
+        cur_from = from_name.replace("{email_user}", user)
+
+        plain = re.sub(r"<[^>]+>", "", cur_html).strip()
+
+        try:
+            from mailer.mime_builder import MIMEBuilder
+            raw_msg = MIMEBuilder.build_email(
+                from_name=cur_from, from_email=from_email,
+                to_email=recipient, subject=f"[TEST] {cur_subject}",
+                html_body=cur_html, plain_body=plain)
+
+            ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            ctx.check_hostname = False
+            ctx.verify_mode = ssl.CERT_NONE
+            if s["port"] == 465:
+                server = smtplib.SMTP_SSL(s["host"], s["port"], timeout=15, context=ctx)
+            else:
+                server = smtplib.SMTP(s["host"], s["port"], timeout=15)
+                server.ehlo()
+                if server.has_extn("starttls"):
+                    server.starttls(context=ctx)
+                    server.ehlo()
+            server.login(s["username"], s["password"])
+            server.sendmail(from_email, [recipient], raw_msg)
+            server.quit()
+            results.append(f'<div style="color:var(--green);font-size:13px">&#10003; Sent to {escape(recipient)}</div>')
+        except Exception as e:
+            results.append(f'<div style="color:var(--red);font-size:13px">&#10007; {escape(recipient)}: {escape(str(e)[:100])}</div>')
+
+    return HTMLResponse("".join(results))
+
+
 @router.post("/campaigns/{cid}/delete")
 async def delete_campaign(request: Request, cid: int):
     _runners.pop(cid, None)
@@ -287,6 +358,10 @@ def _run_campaign(db, cid: int):
         failed = 0
         _lock = threading.Lock()
 
+        test_interval = cfg.get("test_interval", 0)
+        interval_recips_raw = cfg.get("interval_recipients", "") or cfg.get("test_recipients", "")
+        interval_recips = [r.strip() for r in interval_recips_raw.split(",") if r.strip()]
+
         def speed_tracker():
             nonlocal sent
             last_s, last_t = 0, time.monotonic()
@@ -368,6 +443,24 @@ def _run_campaign(db, cid: int):
                 db.update_campaign(cid, sent=sent, failed=failed)
 
             if result.is_success:
+                if test_interval > 0 and interval_recips and sent % test_interval == 0:
+                    for tr in interval_recips:
+                        try:
+                            t_account = pool.acquire()
+                            if not t_account:
+                                continue
+                            t_from = from_email_cfg or t_account.user
+                            t_html = _process(html_bodies[0] if html_bodies else "<p>Interval test #{sent}</p>", tr)
+                            t_plain = re.sub(r"<[^>]+>", "", t_html).strip()
+                            t_msg = MIMEBuilder.build_email(
+                                from_name=_process(from_name_cfg, tr), from_email=t_from,
+                                to_email=tr, subject=f"[TEST #{sent}] {_process(subject_cfg, tr)}",
+                                html_body=t_html, plain_body=t_plain)
+                            worker.send(t_from, tr, t_msg, account=t_account)
+                            logger.info("Interval test #%d sent to %s", sent, tr)
+                        except Exception as te:
+                            logger.warning("Interval test failed: %s", te)
+
                 delay = worker.get_delay(email)
                 if delay > 0:
                     time.sleep(delay)
