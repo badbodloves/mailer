@@ -1,41 +1,18 @@
-"""SMTP Management — add, import, edit, test, bulk check, delete."""
+"""SMTP Lists — list-based management, bulk import (no proxy), checker."""
 import time
 import threading
-import logging
 import smtplib
 import ssl
-from email.mime.text import MIMEText
 from html import escape
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-logger = logging.getLogger("trans.smtps")
 router = APIRouter()
-
 _check_results = {}
 _check_running = False
 
 
-def _parse_proxy(proxy_str: str):
-    if not proxy_str or not proxy_str.strip():
-        return None
-    p = proxy_str.strip().replace("socks5://", "").replace("socks://", "")
-    user, pwd = "", ""
-    if "@" in p:
-        auth, p = p.rsplit("@", 1)
-        if ":" in auth:
-            user, pwd = auth.split(":", 1)
-    parts = p.split(":")
-    if len(parts) >= 4:
-        return parts[0], int(parts[1]), parts[2], parts[3]
-    if len(parts) >= 2:
-        return parts[0], int(parts[1]), user, pwd
-    return None
-
-
 def _connect_smtp(host, port, username, password, proxy_str="", timeout=15):
-    """Connect + login. Returns (server, error_str, error_type).
-    error_type: None=ok, 'auth', 'timeout', 'connection', 'other'"""
     try:
         import socks as _socks
         HAS_SOCKS = True
@@ -47,18 +24,27 @@ def _connect_smtp(host, port, username, password, proxy_str="", timeout=15):
     ctx.verify_mode = ssl.CERT_NONE
     ctx.set_ciphers("DEFAULT:@SECLEVEL=1")
 
-    proxy = _parse_proxy(proxy_str)
     proxy_sock = None
-    if proxy and HAS_SOCKS:
-        try:
-            ph, pp, pu, ppw = proxy
-            proxy_sock = _socks.socksocket()
-            proxy_sock.set_proxy(_socks.SOCKS5, ph, pp,
-                                 username=pu or None, password=ppw or None)
-            proxy_sock.settimeout(timeout)
-            proxy_sock.connect((host, port))
-        except Exception as e:
-            return None, f"Proxy: {e}", "connection"
+    if proxy_str and HAS_SOCKS:
+        p = proxy_str.strip().replace("socks5://", "").replace("socks://", "")
+        user, pwd = "", ""
+        if "@" in p:
+            auth, p = p.rsplit("@", 1)
+            if ":" in auth:
+                user, pwd = auth.split(":", 1)
+        parts = p.split(":")
+        if len(parts) >= 2:
+            try:
+                proxy_sock = _socks.socksocket()
+                ph, pp = parts[0], int(parts[1])
+                pu = parts[2] if len(parts) > 2 else user
+                ppw = parts[3] if len(parts) > 3 else pwd
+                proxy_sock.set_proxy(_socks.SOCKS5, ph, pp,
+                                     username=pu or None, password=ppw or None)
+                proxy_sock.settimeout(timeout)
+                proxy_sock.connect((host, port))
+            except Exception as e:
+                return None, f"Proxy: {e}", "connection"
 
     try:
         if port == 465:
@@ -85,12 +71,10 @@ def _connect_smtp(host, port, username, password, proxy_str="", timeout=15):
             if server.has_extn("starttls"):
                 server.starttls(context=ctx)
                 server.ehlo()
-
         server.login(username, password)
         return server, None, None
-
     except smtplib.SMTPAuthenticationError as e:
-        return None, f"Auth failed: {e}", "auth"
+        return None, f"Auth: {e}", "auth"
     except (TimeoutError, OSError) as e:
         if "timed out" in str(e).lower():
             return None, f"Timeout: {e}", "timeout"
@@ -99,42 +83,37 @@ def _connect_smtp(host, port, username, password, proxy_str="", timeout=15):
         return None, str(e), "other"
 
 
-# ─── CRUD ──────────────────────────────────────────────
-
 @router.get("/smtps", response_class=HTMLResponse)
 async def smtps_page(request: Request):
     db = request.app.state.db
-    smtps = [dict(s) for s in db.get_smtps()]
+    smtp_lists = []
+    for sl in db.get_smtp_lists():
+        sld = dict(sl)
+        sld["count"] = db.get_smtp_count(sl["id"])
+        smtp_lists.append(sld)
     return request.app.state.templates.TemplateResponse(request, "smtps.html", {
-        "active": "smtps", "smtps": smtps, "db": db,
+        "active": "smtps", "smtp_lists": smtp_lists, "db": db,
         "check_running": _check_running,
     })
 
 
-@router.post("/smtps/add")
-async def add_smtp(request: Request, host: str = Form(""), port: int = Form(587),
-                   username: str = Form(""), password: str = Form(""),
-                   proxy: str = Form(""), daily_limit: int = Form(0)):
-    request.app.state.db.add_smtp(host.strip(), port, username.strip(),
-                                    password.strip(), proxy.strip(), daily_limit)
+@router.post("/smtps/create-list")
+async def create_list(request: Request, name: str = Form("")):
+    if name.strip():
+        request.app.state.db.create_smtp_list(name.strip())
     return RedirectResponse("/smtps", status_code=303)
 
 
-@router.post("/smtps/import", response_class=HTMLResponse)
-async def import_smtps(request: Request, smtp_text: str = Form("")):
-    added = request.app.state.db.import_smtps(smtp_text)
-    return HTMLResponse(f'<div class="alert alert-success">{added} SMTPs imported</div>')
+@router.post("/smtps/{lid}/import", response_class=HTMLResponse)
+async def import_smtps(request: Request, lid: int, smtp_text: str = Form("")):
+    added = request.app.state.db.import_smtps(lid, smtp_text)
+    return HTMLResponse(f'<div class="alert alert-success">{added} SMTPs imported (host,port,user,pass). '
+                        f'<a href="/smtps" style="color:var(--accent)">Reload</a></div>')
 
 
-@router.post("/smtps/{sid}/save")
-async def save_smtp(request: Request, sid: int, host: str = Form(""), port: int = Form(587),
-                    username: str = Form(""), password: str = Form(""),
-                    proxy: str = Form(""), daily_limit: int = Form(0)):
-    kw = {"host": host.strip(), "port": port, "username": username.strip(),
-          "proxy": proxy.strip(), "daily_limit": daily_limit}
-    if password.strip():
-        kw["password"] = password.strip()
-    request.app.state.db.update_smtp(sid, **kw)
+@router.post("/smtps/list/{lid}/delete")
+async def delete_list(request: Request, lid: int):
+    request.app.state.db.delete_smtp_list(lid)
     return RedirectResponse("/smtps", status_code=303)
 
 
@@ -151,79 +130,52 @@ async def test_smtp(request: Request, sid: int):
     if not row:
         return HTMLResponse('<span style="color:var(--red)">Not found</span>')
     row = dict(row)
-    server, error, etype = _connect_smtp(row["host"], row["port"],
-                                          row["username"], row["password"],
-                                          row.get("proxy", ""))
+    cfg = db.get_config()
+    proxy = cfg.get("proxy_value", "").split("\n")[0].strip() if cfg.get("proxy_mode") != "off" else ""
+    server, error, _ = _connect_smtp(row["host"], row["port"], row["username"], row["password"], proxy)
     if server:
         server.quit()
-        return HTMLResponse(f'<span style="color:var(--green)">&#10003; OK {row["host"]}:{row["port"]}</span>')
-    return HTMLResponse(f'<span style="color:var(--red)">&#10007; {escape(error)}</span>')
+        return HTMLResponse(f'<span style="color:var(--green)">&#10003; OK</span>')
+    return HTMLResponse(f'<span style="color:var(--red)">&#10007; {escape(error[:80])}</span>')
 
 
-# ─── Bulk Checker ──────────────────────────────────────
-
-@router.post("/smtps/check-all", response_class=HTMLResponse)
-async def start_bulk_check(request: Request,
-                           proxy_override: str = Form(""),
-                           check_threads: int = Form(5),
-                           send_test: int = Form(0),
-                           test_to: str = Form(""),
-                           test_subject: str = Form("SMTP Test"),
-                           test_from_name: str = Form("Test"),
-                           test_body: str = Form("SMTP connectivity test.")):
+@router.post("/smtps/{lid}/check-all", response_class=HTMLResponse)
+async def check_all(request: Request, lid: int, check_threads: int = Form(5)):
     global _check_running, _check_results
     if _check_running:
-        return HTMLResponse('<div class="alert alert-warning">Check already running.</div>')
+        return HTMLResponse('<div class="alert alert-warning">Already running.</div>')
 
     db = request.app.state.db
-    smtps = [dict(s) for s in db.get_smtps()]
+    smtps = [dict(s) for s in db.get_smtps(lid)]
     if not smtps:
-        return HTMLResponse('<div class="alert alert-warning">No SMTPs to check.</div>')
+        return HTMLResponse('<div class="alert alert-warning">No SMTPs.</div>')
+
+    cfg = db.get_config()
+    proxy = cfg.get("proxy_value", "").split("\n")[0].strip() if cfg.get("proxy_mode") != "off" else ""
 
     _check_results.clear()
     _check_running = True
-
-    do_send = bool(send_test and test_to.strip())
     num_threads = max(1, min(check_threads, 50))
 
     def check_one(s):
-        sid = s["id"]
-        proxy = proxy_override.strip() or s.get("proxy", "")
-        _check_results[sid] = {"status": "checking", "error": "",
-                                "error_type": None, "username": s["username"],
-                                "host": s["host"]}
-
-        server, error, etype = _connect_smtp(
-            s["host"], s["port"], s["username"], s["password"], proxy, 20)
-
+        _check_results[s["id"]] = {"status": "checking", "error": "", "error_type": None,
+                                    "username": s["username"], "host": s["host"]}
+        server, error, etype = _connect_smtp(s["host"], s["port"], s["username"], s["password"], proxy, 20)
         if server:
-            if do_send:
-                try:
-                    msg = MIMEText(test_body.strip() or "Test.", "plain", "utf-8")
-                    msg["From"] = f'{test_from_name.strip()} <{s["username"]}>'
-                    msg["To"] = test_to.strip()
-                    msg["Subject"] = test_subject.strip() or "Test"
-                    server.send_message(msg)
-                    _check_results[sid].update(status="valid_sent", error="", error_type=None)
-                except Exception as e:
-                    _check_results[sid].update(status="valid_send_failed",
-                                                error=str(e)[:200], error_type="send")
-            else:
-                _check_results[sid].update(status="valid", error="", error_type=None)
+            _check_results[s["id"]].update(status="valid", error="", error_type=None)
             try:
                 server.quit()
             except Exception:
                 pass
         else:
-            _check_results[sid].update(status="invalid", error=error or "Unknown",
-                                        error_type=etype)
+            _check_results[s["id"]].update(status="invalid", error=error or "Unknown", error_type=etype)
 
     def worker():
         global _check_running
         try:
             from concurrent.futures import ThreadPoolExecutor, as_completed
-            with ThreadPoolExecutor(max_workers=num_threads) as executor:
-                futures = {executor.submit(check_one, s): s["id"] for s in smtps}
+            with ThreadPoolExecutor(max_workers=num_threads) as ex:
+                futures = {ex.submit(check_one, s): s["id"] for s in smtps}
                 for f in as_completed(futures):
                     try:
                         f.result(timeout=30)
@@ -232,78 +184,49 @@ async def start_bulk_check(request: Request,
         finally:
             _check_running = False
 
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    return HTMLResponse(f'<div class="alert alert-info">Checking {len(smtps)} SMTPs with {num_threads} threads...</div>')
+    threading.Thread(target=worker, daemon=True).start()
+    return HTMLResponse(f'<div class="alert alert-info">Checking {len(smtps)} SMTPs ({num_threads} threads)...</div>')
 
 
 @router.get("/smtps/check-results", response_class=HTMLResponse)
-async def check_results_endpoint(request: Request):
+async def check_results(request: Request):
     if not _check_results:
-        if _check_running:
-            return HTMLResponse('<p style="color:var(--fg2)">Starting...</p>')
-        return HTMLResponse('')
+        return HTMLResponse('<p style="color:var(--fg2)">Starting...</p>' if _check_running else '')
 
-    total = len(_check_results)
-    checking = sum(1 for r in _check_results.values() if r["status"] == "checking")
-    valid = sum(1 for r in _check_results.values() if r["status"] in ("valid", "valid_sent"))
-    send_fail = sum(1 for r in _check_results.values() if r["status"] == "valid_send_failed")
+    valid = sum(1 for r in _check_results.values() if r["status"] == "valid")
     invalid = sum(1 for r in _check_results.values() if r["status"] == "invalid")
-    auth_errors = sum(1 for r in _check_results.values()
-                      if r["status"] == "invalid" and r.get("error_type") == "auth")
+    auth_err = sum(1 for r in _check_results.values() if r.get("error_type") == "auth")
+    checking = sum(1 for r in _check_results.values() if r["status"] == "checking")
 
-    header = '<div style="margin-bottom:10px">'
-    if _check_running:
-        header += f'<span class="badge badge-running">Checking {total - checking}/{total}</span> '
-    else:
-        header += '<span class="badge badge-finished">Done</span> '
-    header += (f'<span style="color:var(--green);font-weight:600">{valid} valid</span> · '
-               f'<span style="color:var(--red);font-weight:600">{invalid} invalid</span>')
-    if send_fail:
-        header += f' · <span style="color:var(--yellow)">{send_fail} send failed</span>'
-    if auth_errors:
-        header += f' · <span style="color:var(--red)">{auth_errors} auth</span>'
+    header = f'<div style="margin-bottom:8px">'
+    header += f'<span class="badge badge-{"running" if _check_running else "finished"}">{"Checking..." if _check_running else "Done"}</span> '
+    header += f'<span style="color:var(--green)">{valid} valid</span> · <span style="color:var(--red)">{invalid} invalid</span>'
+    if auth_err:
+        header += f' · <span style="color:var(--red)">{auth_err} auth</span>'
     header += '</div>'
 
     rows = ""
     for sid, r in _check_results.items():
-        if r["status"] == "checking":
-            badge = '<span class="badge badge-draft">...</span>'
-        elif r["status"] in ("valid", "valid_sent"):
-            extra = " + sent" if r["status"] == "valid_sent" else ""
-            badge = f'<span class="badge badge-running">Valid{extra}</span>'
-        elif r["status"] == "valid_send_failed":
-            badge = '<span class="badge badge-paused">Login OK</span>'
-        else:
-            badge = f'<span class="badge badge-failed">{(r.get("error_type") or "error").upper()}</span>'
+        badge = {"checking": "draft", "valid": "running", "invalid": "failed"}.get(r["status"], "draft")
+        label = r["status"].upper() if r["status"] != "checking" else "..."
+        if r.get("error_type"):
+            label = r["error_type"].upper()
+        err = f'<span style="font-size:11px;color:var(--red)">{escape(r.get("error","")[:60])}</span>' if r.get("error") else ""
+        rows += f'<tr><td style="font-family:monospace;font-size:12px">{escape(r["username"])}</td><td style="font-size:12px">{escape(r["host"])}</td><td><span class="badge badge-{badge}">{label}</span></td><td>{err}</td></tr>'
 
-        err = f'<span style="font-size:11px;color:var(--red)">{escape(r.get("error","")[:80])}</span>' if r.get("error") else ""
-        rows += (f'<tr><td style="font-family:monospace;font-size:12px">{escape(r["username"])}</td>'
-                 f'<td style="font-size:12px">{escape(r["host"])}</td>'
-                 f'<td>{badge}</td><td>{err}</td></tr>')
-
-    html = header
-    html += '<table><thead><tr><th>User</th><th>Host</th><th>Status</th><th>Error</th></tr></thead>'
-    html += f'<tbody>{rows}</tbody></table>'
+    html = header + f'<table><thead><tr><th>User</th><th>Host</th><th>Status</th><th>Error</th></tr></thead><tbody>{rows}</tbody></table>'
 
     if not _check_running and invalid > 0:
-        html += '<div style="margin-top:14px" class="btn-group">'
-        if auth_errors:
-            html += (f'<button class="btn btn-danger btn-sm" '
-                     f'hx-post="/smtps/cleanup?mode=auth" hx-target="#check-results" '
-                     f'hx-swap="innerHTML" hx-confirm="Delete {auth_errors} auth failures?">'
-                     f'Delete Auth Failures ({auth_errors})</button>')
-        html += (f'<button class="btn btn-danger btn-sm" '
-                 f'hx-post="/smtps/cleanup?mode=all" hx-target="#check-results" '
-                 f'hx-swap="innerHTML" hx-confirm="Delete ALL {invalid} invalid?">'
-                 f'Delete All Invalid ({invalid})</button>')
+        html += '<div style="margin-top:12px" class="btn-group">'
+        if auth_err:
+            html += f'<button class="btn btn-danger btn-sm" hx-post="/smtps/cleanup?mode=auth" hx-target="#check-results" hx-swap="innerHTML" hx-confirm="Delete {auth_err} auth failures?">Delete Auth Failures ({auth_err})</button>'
+        html += f'<button class="btn btn-danger btn-sm" hx-post="/smtps/cleanup?mode=all" hx-target="#check-results" hx-swap="innerHTML" hx-confirm="Delete ALL {invalid} invalid?">Delete All Invalid ({invalid})</button>'
         html += '</div>'
-
     return HTMLResponse(html)
 
 
 @router.post("/smtps/cleanup", response_class=HTMLResponse)
-async def cleanup_smtps(request: Request, mode: str = "auth"):
+async def cleanup(request: Request, mode: str = "auth"):
     db = request.app.state.db
     deleted = 0
     for sid, r in list(_check_results.items()):
@@ -314,6 +237,4 @@ async def cleanup_smtps(request: Request, mode: str = "auth"):
         db.delete_smtp(sid)
         deleted += 1
         _check_results.pop(sid, None)
-    return HTMLResponse(
-        f'<div class="alert alert-success">{deleted} deleted. '
-        f'<a href="/smtps" style="color:var(--accent)">Reload page</a></div>')
+    return HTMLResponse(f'<div class="alert alert-success">{deleted} deleted. <a href="/smtps" style="color:var(--accent)">Reload</a></div>')

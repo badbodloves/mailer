@@ -1,4 +1,5 @@
-"""Leads — import, view, bulk upload."""
+"""Lead Lists — list-based management, import, upload."""
+import os
 import re
 from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -8,39 +9,76 @@ router = APIRouter()
 EMAIL_RE = re.compile(r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}")
 
 
-@router.post("/leads/{cid}/upload")
-async def upload_leads(request: Request, cid: int,
+@router.get("/leads", response_class=HTMLResponse)
+async def leads_page(request: Request):
+    db = request.app.state.db
+    lead_lists = []
+    for ll in db.get_lead_lists():
+        lld = dict(ll)
+        lld["count"] = db.get_lead_count(ll["id"])
+        lead_lists.append(lld)
+    return request.app.state.templates.TemplateResponse(request, "leads.html", {
+        "active": "leads", "lead_lists": lead_lists, "db": db,
+    })
+
+
+@router.post("/leads/create-list")
+async def create_list(request: Request, name: str = Form("")):
+    if name.strip():
+        request.app.state.db.create_lead_list(name.strip())
+    return RedirectResponse("/leads", status_code=303)
+
+
+@router.post("/leads/{lid}/import-text", response_class=HTMLResponse)
+async def import_text(request: Request, lid: int, leads_text: str = Form("")):
+    db = request.app.state.db
+    emails = [e.lower() for e in EMAIL_RE.findall(leads_text)]
+    added = db.import_leads(lid, emails)
+    from html import escape
+    return HTMLResponse(f'<div class="alert alert-success">{added} leads imported. '
+                        f'<a href="/leads" style="color:var(--accent)">Reload</a></div>')
+
+
+@router.post("/leads/{lid}/upload")
+async def upload_leads(request: Request, lid: int,
                        files: TList[UploadFile] = File(...)):
     db = request.app.state.db
     total = 0
     for f in files:
         content = (await f.read()).decode("utf-8", errors="replace")
-        emails = EMAIL_RE.findall(content)
-        total += db.import_leads(cid, emails)
-    db.update_campaign(cid, total_leads=db.get_lead_count(cid))
-    return RedirectResponse("/campaigns", status_code=303)
+        emails = [e.lower() for e in EMAIL_RE.findall(content)]
+        total += db.import_leads(lid, emails)
+    db._conn().execute("UPDATE trans_lead_lists SET lead_count=? WHERE id=?",
+                        (db.get_lead_count(lid), lid))
+    db._conn().commit()
+    return RedirectResponse("/leads", status_code=303)
 
 
-@router.get("/leads/{cid}", response_class=HTMLResponse)
-async def view_leads(request: Request, cid: int, q: str = ""):
+@router.post("/leads/list/{lid}/delete")
+async def delete_list(request: Request, lid: int):
+    request.app.state.db.delete_lead_list(lid)
+    return RedirectResponse("/leads", status_code=303)
+
+
+@router.get("/leads/{lid}/browse", response_class=HTMLResponse)
+async def browse_leads(request: Request, lid: int, q: str = ""):
     db = request.app.state.db
-    camp = db.get_campaign(cid)
-    if not camp:
-        return RedirectResponse("/campaigns", status_code=303)
-    camp = dict(camp)
-    states = db.get_lead_states(cid)
+    ll = db._conn().execute("SELECT * FROM trans_lead_lists WHERE id=?", (lid,)).fetchone()
+    if not ll:
+        return RedirectResponse("/leads", status_code=303)
+    ll = dict(ll)
+    states = db.get_lead_states(lid)
 
     if q:
         leads = db._conn().execute(
-            "SELECT id, email, state FROM trans_leads WHERE campaign_id=? AND email LIKE ? LIMIT 500",
-            (cid, f"%{q}%")).fetchall()
+            "SELECT id,email,state FROM trans_leads WHERE list_id=? AND email LIKE ? LIMIT 500",
+            (lid, f"%{q}%")).fetchall()
     else:
         leads = db._conn().execute(
-            "SELECT id, email, state FROM trans_leads WHERE campaign_id=? LIMIT 500",
-            (cid,)).fetchall()
-    leads = [dict(l) for l in leads]
+            "SELECT id,email,state FROM trans_leads WHERE list_id=? LIMIT 500",
+            (lid,)).fetchall()
 
-    return request.app.state.templates.TemplateResponse(request, "leads.html", {
-        "active": "campaigns", "campaign": camp, "leads": leads,
-        "states": states, "query": q,
+    return request.app.state.templates.TemplateResponse(request, "leads_detail.html", {
+        "active": "leads", "list": ll, "leads": [dict(l) for l in leads],
+        "states": states, "query": q, "lid": lid,
     })

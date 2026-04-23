@@ -1,39 +1,57 @@
 {% extends "base.html" %}
 {% block title %} — Leads{% endblock %}
 {% block content %}
-<div class="page-header">
-    <h1>{{ campaign.name }} — Leads</h1>
-    <a href="/campaigns" class="btn btn-secondary btn-sm">Back</a>
-</div>
-
-<div class="grid-4" style="margin-bottom:16px">
-    <div class="metric"><div class="value">{{ "{:,}".format(states.PENDING) }}</div><div class="label">Pending</div></div>
-    <div class="metric"><div class="value" style="color:var(--green)">{{ "{:,}".format(states.SENT) }}</div><div class="label">Sent</div></div>
-    <div class="metric"><div class="value" style="color:var(--red)">{{ "{:,}".format(states.FAILED) }}</div><div class="label">Failed</div></div>
-    <div class="metric"><div class="value">{{ "{:,}".format(states.IN_PROGRESS) }}</div><div class="label">In Progress</div></div>
-</div>
+<div class="page-header"><h1>Lead Lists</h1></div>
 
 <div class="card">
-    <form method="get" action="/leads/{{ campaign.id }}" style="display:flex;gap:8px;margin-bottom:16px">
-        <input name="q" value="{{ query }}" placeholder="Search emails..." style="flex:1;margin:0">
-        <button class="btn btn-primary btn-sm">Search</button>
-    </form>
-    {% if leads %}
-    <table>
-        <thead><tr><th style="width:60px">ID</th><th>Email</th><th style="width:100px">State</th></tr></thead>
-        <tbody>
-        {% for l in leads %}
-        <tr>
-            <td style="color:var(--fg2)">{{ l.id }}</td>
-            <td style="font-family:monospace;font-size:12px">{{ l.email }}</td>
-            <td><span class="badge badge-{{ l.state|lower }}">{{ l.state }}</span></td>
-        </tr>
-        {% endfor %}
-        {% if leads|length >= 500 %}<tr><td colspan="3" style="text-align:center;color:var(--fg2);font-size:12px">Showing first 500</td></tr>{% endif %}
-        </tbody>
-    </table>
+    <div class="card-header"><h3>Lists <span class="count">{{ lead_lists|length }}</span></h3></div>
+    {% if lead_lists %}
+    {% for ll in lead_lists %}
+    <details>
+        <summary>
+            <strong>{{ ll.name }}</strong>
+            <span style="margin-left:auto"><span class="badge badge-info">{{ "{:,}".format(ll.count) }} leads</span></span>
+        </summary>
+        <div class="details-body" style="padding-top:12px">
+            <div class="grid-2" style="align-items:start">
+                <div>
+                    <form hx-post="/leads/{{ ll.id }}/import-text" hx-target="#lead-import-{{ ll.id }}" hx-swap="innerHTML">
+                        <label>Paste Leads</label>
+                        <textarea name="leads_text" rows="5" placeholder="user1@example.com&#10;user2@example.com" style="font-family:monospace;font-size:12px"></textarea>
+                        <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Import</button></div>
+                    </form>
+                    <div id="lead-import-{{ ll.id }}" style="margin-top:8px"></div>
+                </div>
+                <div>
+                    <form method="post" action="/leads/{{ ll.id }}/upload" enctype="multipart/form-data">
+                        <label>Upload Files (.txt/.csv)</label>
+                        <input type="file" name="files" multiple accept=".txt,.csv" required>
+                        <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Upload</button></div>
+                    </form>
+                    <div style="margin-top:12px" class="btn-group">
+                        <a href="/leads/{{ ll.id }}/browse" class="btn btn-secondary btn-sm">Browse Leads</a>
+                        <form method="post" action="/leads/list/{{ ll.id }}/delete" onsubmit="return confirm('Delete list + all leads?')">
+                            <button class="btn btn-danger btn-sm">Delete List</button>
+                        </form>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </details>
+    {% endfor %}
     {% else %}
-    <div class="empty-state"><p>No leads{% if query %} matching "{{ query }}"{% endif %}.</p></div>
+    <div class="empty-state"><div class="icon">&#9776;</div><p>No lead lists. Create one below.</p></div>
     {% endif %}
 </div>
+
+<details {{ 'open' if not lead_lists }}>
+    <summary>Create Lead List</summary>
+    <div class="details-body" style="padding-top:12px">
+        <form method="post" action="/leads/create-list">
+            <label>List Name</label>
+            <input name="name" placeholder="e.g. B2B Germany 50k" required>
+            <div style="margin-top:10px"><button class="btn btn-primary">Create</button></div>
+        </form>
+    </div>
+</details>
 {% endblock %}

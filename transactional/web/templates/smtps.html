@@ -1,121 +1,59 @@
 {% extends "base.html" %}
 {% block title %} — SMTP{% endblock %}
 {% block content %}
-<div class="page-header"><h1>SMTP Accounts</h1></div>
+<div class="page-header"><h1>SMTP Lists</h1></div>
 
 <div class="card">
-    <div class="card-header"><h3>Accounts <span class="count">{{ smtps|length }}</span></h3></div>
-    {% if smtps %}
-    {% for s in smtps %}
+    <div class="card-header"><h3>Lists <span class="count">{{ smtp_lists|length }}</span></h3></div>
+    {% if smtp_lists %}
+    {% for sl in smtp_lists %}
     <details>
         <summary>
-            <strong>{{ s.username }}</strong>
-            <span style="margin-left:auto;display:flex;gap:8px;align-items:center">
-                <span style="font-size:12px;color:var(--fg2)">{{ s.host }}:{{ s.port }}</span>
-                {% if s.proxy %}<span class="badge badge-draft">Proxy</span>{% endif %}
-                {% if s.is_dead %}<span class="badge badge-failed">Dead</span>{% endif %}
-            </span>
+            <strong>{{ sl.name }}</strong>
+            <span style="margin-left:auto"><span class="badge badge-info">{{ sl.count }} accounts</span></span>
         </summary>
         <div class="details-body" style="padding-top:12px">
-            <form method="post" action="/smtps/{{ s.id }}/save">
-                <div class="grid-2">
-                    <div>
-                        <label>Host</label><input name="host" value="{{ s.host }}">
-                        <label>Port</label><input name="port" type="number" value="{{ s.port }}">
-                        <label>Username</label><input name="username" value="{{ s.username }}">
-                        <label>Password</label><input name="password" type="password" placeholder="Keep current">
-                    </div>
-                    <div>
-                        <label>Proxy</label><input name="proxy" value="{{ s.proxy or '' }}" placeholder="socks5://ip:port:user:pass">
-                        <label>Daily Limit</label><input name="daily_limit" type="number" value="{{ s.daily_limit or 0 }}">
-                    </div>
+            <form hx-post="/smtps/{{ sl.id }}/import" hx-target="#import-{{ sl.id }}" hx-swap="innerHTML">
+                <label>Import SMTPs (host,port,user,pass — NO proxy)</label>
+                <textarea name="smtp_text" rows="4" placeholder="smtp.gmail.com,587,user@gmail.com,password&#10;smtp.outlook.com,465,user@outlook.com,password" style="font-family:monospace;font-size:12px"></textarea>
+                <div style="margin-top:8px" class="btn-group">
+                    <button class="btn btn-primary btn-sm">Import</button>
+                    <button type="button" class="btn btn-secondary btn-sm"
+                            hx-post="/smtps/{{ sl.id }}/check-all"
+                            hx-target="#check-results"
+                            hx-swap="innerHTML"
+                            hx-include="[name=check_threads]">Check All</button>
+                    <form method="post" action="/smtps/list/{{ sl.id }}/delete" onsubmit="return confirm('Delete list + all SMTPs?')">
+                        <button class="btn btn-danger btn-sm">Delete List</button>
+                    </form>
                 </div>
-                <div style="margin-top:12px" class="btn-group">
-                    <button class="btn btn-primary btn-sm">Save</button>
-                    <button type="button" class="btn btn-secondary btn-sm" hx-post="/smtps/{{ s.id }}/test" hx-target="#smtp-test-{{ s.id }}" hx-swap="innerHTML">Test</button>
-                    <form method="post" action="/smtps/{{ s.id }}/delete" onsubmit="return confirm('Delete?')"><button class="btn btn-danger btn-sm">Delete</button></form>
-                </div>
-                <div id="smtp-test-{{ s.id }}" style="margin-top:6px"></div>
             </form>
+            <div id="import-{{ sl.id }}" style="margin-top:8px"></div>
         </div>
     </details>
     {% endfor %}
     {% else %}
-    <div class="empty-state"><div class="icon">&#9993;</div><p>No SMTP accounts. Add below or bulk import.</p></div>
+    <div class="empty-state"><div class="icon">&#9993;</div><p>No SMTP lists. Create one below.</p></div>
     {% endif %}
 </div>
 
-<!-- Bulk Checker -->
-<div class="card">
-    <div class="card-header"><h3>Bulk SMTP Checker</h3></div>
-    <form hx-post="/smtps/check-all" hx-target="#check-start-msg" hx-swap="innerHTML">
-        <div class="grid-2">
-            <div>
-                <label>Proxy Override (optional — use for ALL checks)</label>
-                <input name="proxy_override" placeholder="socks5://ip:port:user:pass">
-                <div class="form-help">Leave empty to use each SMTP's own proxy</div>
-
-                <label>Threads</label>
-                <input name="check_threads" type="number" value="5" min="1" max="50">
-                <div class="form-help">Parallel connections for faster checking</div>
-
-                <label style="display:flex;align-items:center;gap:8px;margin-top:14px;cursor:pointer">
-                    <input type="checkbox" name="send_test" value="1" style="width:auto"
-                           onchange="document.getElementById('test-send-opts').style.display=this.checked?'block':'none'">
-                    <span>Send test email from each valid SMTP</span>
-                </label>
-            </div>
-            <div id="test-send-opts" style="display:none">
-                <label>Send Test To</label>
-                <input name="test_to" placeholder="your-test@inbox.com">
-                <label>Subject</label>
-                <input name="test_subject" value="SMTP Check" placeholder="Test subject">
-                <label>From Name</label>
-                <input name="test_from_name" value="Test" placeholder="Sender name">
-                <label>Body</label>
-                <textarea name="test_body" rows="2" placeholder="SMTP test message." style="font-size:12px">SMTP connectivity and delivery test.</textarea>
-            </div>
-        </div>
-        <div style="margin-top:14px">
-            <button class="btn btn-primary" {{ 'disabled' if check_running }}>
-                {{ 'Check Running...' if check_running else 'Check All SMTPs (' ~ smtps|length ~ ')' }}
-            </button>
-        </div>
-    </form>
-    <div id="check-start-msg" style="margin-top:10px"></div>
-    <div id="check-results" style="margin-top:12px"
-         hx-get="/smtps/check-results"
-         hx-trigger="every 2s"
-         hx-swap="innerHTML"></div>
-</div>
-
-<!-- Add / Import -->
 <div class="grid-2" style="align-items:start">
-    <details {{ 'open' if not smtps }}>
-        <summary>Add SMTP Account</summary>
+    <details {{ 'open' if not smtp_lists }}>
+        <summary>Create SMTP List</summary>
         <div class="details-body" style="padding-top:12px">
-            <form method="post" action="/smtps/add">
-                <label>Host</label><input name="host" placeholder="smtp.gmail.com" required>
-                <label>Port</label><input name="port" type="number" value="587">
-                <label>Username</label><input name="username" required>
-                <label>Password</label><input name="password" type="password" required>
-                <label>Proxy</label><input name="proxy" placeholder="socks5://ip:port:user:pass">
-                <label>Daily Limit</label><input name="daily_limit" type="number" value="0">
-                <div style="margin-top:12px"><button class="btn btn-primary">Add</button></div>
+            <form method="post" action="/smtps/create-list">
+                <label>List Name</label>
+                <input name="name" placeholder="e.g. SES Frankfurt, Gmail Pool" required>
+                <div style="margin-top:10px"><button class="btn btn-primary">Create</button></div>
             </form>
         </div>
     </details>
-
-    <details>
-        <summary>Bulk Import SMTPs</summary>
-        <div class="details-body" style="padding-top:12px">
-            <form hx-post="/smtps/import" hx-target="#import-result" hx-swap="innerHTML">
-                <label>Paste SMTPs (host,port,user,pass[,proxy] per line)</label>
-                <textarea name="smtp_text" rows="8" placeholder="smtp.gmail.com,587,user@gmail.com,password&#10;smtp.outlook.com,465,user@outlook.com,password,socks5://proxy:port" style="font-family:monospace;font-size:12px"></textarea>
-                <div style="margin-top:10px"><button class="btn btn-primary btn-sm">Import All</button></div>
-            </form>
-            <div id="import-result" style="margin-top:10px"></div>
-        </div>
-    </details>
+    <div class="card">
+        <h3>Bulk Checker</h3>
+        <label>Threads</label>
+        <input name="check_threads" type="number" value="5" min="1" max="50">
+        <div class="form-help">Uses proxy from Config if enabled. Select a list above and click "Check All".</div>
+        <div id="check-results" style="margin-top:12px" hx-get="/smtps/check-results" hx-trigger="every 2s" hx-swap="innerHTML"></div>
+    </div>
 </div>
 {% endblock %}

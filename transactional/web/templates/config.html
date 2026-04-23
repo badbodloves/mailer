@@ -1,0 +1,136 @@
+{% extends "base.html" %}
+{% block title %} — Config{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Configuration</h1></div>
+<form method="post" action="/config/save">
+<div class="grid-2" style="align-items:start">
+    <div>
+        <div class="card">
+            <h3>Sender</h3>
+            <label>From Name</label>
+            <input name="from_name" value="{{ cfg.from_name or '' }}" placeholder="Support Team or {from_name} macro">
+            <div class="form-help">{from_name} picks random line from macro "from_name"</div>
+            <label>From Email</label>
+            <input name="from_email" value="{{ cfg.from_email or '' }}" placeholder="Empty = SMTP account email">
+            <label>Subject</label>
+            <input name="subject" value="{{ cfg.subject or '' }}" placeholder="Hello {email_user} — {subject|Your Update}">
+            <div class="form-help">Supports macros, spintax {a|b|c}, [RANDSTR:N:charset:case]</div>
+        </div>
+        <div class="card">
+            <h3>Sending</h3>
+            <label>Threads (1-200)</label>
+            <input name="threads" type="number" value="{{ cfg.threads }}" min="1" max="200">
+            <label>Normal Delay (sec)</label>
+            <input name="normal_delay" type="number" step="0.1" value="{{ cfg.normal_delay }}">
+            <div class="form-help">Gaussian jitter applied. For normal domains.</div>
+            <label>Provider Delay (sec)</label>
+            <input name="provider_delay" type="number" step="0.1" value="{{ cfg.provider_delay }}">
+            <div class="form-help">For Gmail, Yahoo, Outlook, iCloud, etc.</div>
+            <label>SMTP Timeout (sec)</label>
+            <input name="smtp_timeout" type="number" value="{{ cfg.smtp_timeout }}">
+            <label>Warmup Count</label>
+            <input name="warmup_count" type="number" value="{{ cfg.warmup_count }}">
+            <div class="form-help">First N emails per SMTP at warmup speed</div>
+            <label>Warmup Delay (sec)</label>
+            <input name="warmup_delay" type="number" step="0.1" value="{{ cfg.warmup_delay }}">
+            <label>Schedule (HH:MM)</label>
+            <input name="schedule_time" value="{{ cfg.schedule_time or '' }}" placeholder="14:30">
+            <label style="display:flex;align-items:center;gap:8px;margin-top:12px;cursor:pointer">
+                <input type="checkbox" name="ignore_ssl_errors" {{ 'checked' if cfg.ignore_ssl_errors }} style="width:auto">
+                <span>Ignore SSL Errors</span>
+            </label>
+        </div>
+        <div class="card">
+            <h3>Test</h3>
+            <label>Pre-check Recipients</label>
+            <input name="test_recipients" value="{{ cfg.test_recipients or '' }}" placeholder="test@inbox.com, test2@inbox.com">
+            <label>Interval Recipients</label>
+            <input name="interval_recipients" value="{{ cfg.interval_recipients or '' }}" placeholder="Fallback to pre-check if empty">
+            <label>Test Interval (every N sends)</label>
+            <input name="test_interval" type="number" value="{{ cfg.test_interval }}">
+        </div>
+    </div>
+    <div>
+        <div class="card">
+            <h3>Proxy</h3>
+            <label>Mode</label>
+            <select name="proxy_mode">
+                <option value="off" {{ 'selected' if cfg.proxy_mode == 'off' }}>Off — direct connection</option>
+                <option value="single" {{ 'selected' if cfg.proxy_mode == 'single' }}>Single Proxy</option>
+                <option value="list" {{ 'selected' if cfg.proxy_mode == 'list' }}>Proxy List (rotate)</option>
+            </select>
+            <label>Proxy (single or one per line for list)</label>
+            <textarea name="proxy_value" rows="3" style="font-family:monospace;font-size:12px" placeholder="ip:port:user:pass&#10;socks5://ip:port:user:pass">{{ cfg.proxy_value or '' }}</textarea>
+            <label>Rotate Every N Sends</label>
+            <input name="proxy_rotate_every" type="number" value="{{ cfg.proxy_rotate_every }}">
+            <div class="form-help">Formats: ip:port:user:pass | user:pass@ip:port | socks5://ip:port</div>
+        </div>
+        <div class="card">
+            <h3>Anti-Fingerprint</h3>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" name="antifingerprint_classes" {{ 'checked' if cfg.antifingerprint_classes }} style="width:auto">
+                <span>CSS Class Injection</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px">
+                <input type="checkbox" name="advanced_antifingerprint" {{ 'checked' if cfg.advanced_antifingerprint }} style="width:auto">
+                <span>Advanced Structure Variation (tag swaps, pixel jitter, table-to-div)</span>
+            </label>
+            <label>Variation Probability (0.0-1.0)</label>
+            <input name="structure_variation" type="number" step="0.1" min="0" max="1" value="{{ cfg.structure_variation }}">
+            <label>HTML Rotate Every N Sends</label>
+            <input name="html_rotate_every" type="number" value="{{ cfg.html_rotate_every }}" min="0">
+            <div class="form-help">Cycle through HTML templates every N sends. 0 = random.</div>
+        </div>
+        <div class="card">
+            <h3>Image / Logo (CID)</h3>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" name="image_enabled" {{ 'checked' if cfg.image_enabled }} style="width:auto">
+                <span>Enable Logo Embedding</span>
+            </label>
+            <label>Mode</label>
+            <select name="image_mode">
+                <option value="cid" {{ 'selected' if cfg.image_mode == 'cid' }}>CID Inline (embedded in email)</option>
+                <option value="cloudinary" {{ 'selected' if cfg.image_mode == 'cloudinary' }}>Cloudinary CDN</option>
+            </select>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px">
+                <input type="checkbox" name="image_quantize" {{ 'checked' if cfg.image_quantize }} style="width:auto">
+                <span>Palette Quantization (smaller file size)</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:4px">
+                <input type="checkbox" name="image_downscale" {{ 'checked' if cfg.image_downscale }} style="width:auto">
+                <span>Downscale to 220px width</span>
+            </label>
+            <label>Max Colors (2-256)</label>
+            <input name="logo_max_colors" type="number" value="{{ cfg.logo_max_colors }}" min="2" max="256">
+            <label>Logo Rotate Every N</label>
+            <input name="logo_rotate_every" type="number" value="{{ cfg.logo_rotate_every }}">
+        </div>
+        <div class="card">
+            <h3>Redirect Links</h3>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" name="redirect_enabled" {{ 'checked' if cfg.redirect_enabled }} style="width:auto">
+                <span>Enable Redirect Link Rotation</span>
+            </label>
+            <label>Target URL</label>
+            <input name="redirect_target_url" value="{{ cfg.redirect_target_url or '' }}">
+            <label>Rotate Every</label>
+            <input name="redirect_rotate_every" type="number" value="{{ cfg.redirect_rotate_every }}">
+            <label>Gen Threads</label>
+            <input name="redirect_gen_threads" type="number" value="{{ cfg.redirect_gen_threads }}">
+        </div>
+        <div class="card">
+            <h3>Cloudinary</h3>
+            <label>Cloud Name</label><input name="cloudinary_cloud_name" value="{{ cfg.cloudinary_cloud_name or '' }}">
+            <label>API Key</label><input name="cloudinary_api_key" value="{{ cfg.cloudinary_api_key or '' }}">
+            <label>API Secret</label><input name="cloudinary_api_secret" type="password" value="{{ cfg.cloudinary_api_secret or '' }}">
+        </div>
+        <div class="card">
+            <h3>Blacklist</h3>
+            <label>MXToolbox API Key</label>
+            <input name="mxtoolbox_api_key" value="{{ cfg.mxtoolbox_api_key or '' }}" placeholder="For pre-flight IP check">
+        </div>
+    </div>
+</div>
+<div style="margin-top:16px"><button class="btn btn-primary" style="padding:12px 24px">Save All Settings</button></div>
+</form>
+{% endblock %}
