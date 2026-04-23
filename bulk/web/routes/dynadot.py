@@ -147,6 +147,10 @@ async def check_balance(request: Request):
         bal_resp = data.get("AccountBalanceResponse", data)
         balance = bal_resp.get("AccountBalance", "?")
         currency = bal_resp.get("Currency", "USD")
+        if balance == "?":
+            return HTMLResponse(
+                f'<span style="color:var(--red)">Parse error. Raw: '
+                f'<pre style="font-size:10px;white-space:pre-wrap">{escape(json.dumps(data))}</pre></span>')
         return HTMLResponse(
             f'<span style="color:var(--green);font-weight:600">{balance} {currency}</span>'
         )
@@ -194,6 +198,7 @@ async def buy_domain(request: Request, domain: str = Form(""), cf_account_id: in
         })
         reg_resp = data.get("RegisterResponse", data)
         resp_code = str(reg_resp.get("ResponseCode", "-1"))
+        log.append(f"[DEBUG] Raw register response: {json.dumps(data)[:500]}")
         if resp_code != "0":
             error_msg = reg_resp.get("Error", reg_resp.get("Status", str(reg_resp)))
             log.append(f"Registration failed: {error_msg}")
@@ -256,6 +261,7 @@ async def buy_domain(request: Request, domain: str = Form(""), cf_account_id: in
                 })
                 ns_resp = data.get("SetNsResponse", data)
                 resp_code = str(ns_resp.get("ResponseCode", "-1"))
+                log.append(f"[DEBUG] NS response: {json.dumps(data)[:300]}")
                 ns_str = str(ns_resp).lower()
                 if "dns queries" in ns_str or "must respond" in ns_str:
                     log.append("NS not ready yet (DNS queries check).")
@@ -304,8 +310,9 @@ async def retry_set_ns(request: Request, did: int):
             db.update_purchased_domain(row["domain"], ns_set=1)
             return HTMLResponse('<span class="badge badge-running">NS set!</span>')
         else:
-            error = ns_resp.get("Error", str(ns_resp))
-            return HTMLResponse(f'<span style="color:var(--red)">Failed: {escape(str(error)[:100])}</span>')
+            return HTMLResponse(
+                f'<span style="color:var(--red)">Failed. Raw: '
+                f'<pre style="font-size:10px;white-space:pre-wrap">{escape(json.dumps(data)[:300])}</pre></span>')
     except Exception as e:
         return HTMLResponse(f'<span style="color:var(--red)">{escape(str(e))}</span>')
 
@@ -326,6 +333,11 @@ async def list_remote_domains(request: Request):
             items = domain_list if isinstance(domain_list, list) else []
         if not isinstance(items, list):
             items = [items] if items else []
+
+        if not items:
+            return HTMLResponse(
+                f'<div class="alert alert-info">No domains found. Raw: '
+                f'<pre style="font-size:10px;white-space:pre-wrap">{escape(json.dumps(data)[:500])}</pre></div>')
 
         rows = ""
         for d in items:
