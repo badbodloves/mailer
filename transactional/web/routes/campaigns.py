@@ -695,6 +695,33 @@ def _run_campaign(db, cid: int):
         redirect_rotate = cfg.get("redirect_rotate_every", 10) or 10
         mime_profile_mode = cfg.get("mime_profile", "default")
 
+        # Get user_id for bounce logging
+        camp_user_id = camp.get("user_id", 0)
+
+        def _classify_error(error_str: str, code: int = 0) -> str:
+            e = error_str.lower()
+            if code >= 550 or "spam" in e or "rejected" in e or "policy" in e or "content" in e:
+                if "spam" in e or "content" in e or "policy" in e or "dnsbl" in e or "blacklist" in e:
+                    return "spam_reject"
+                if "mailbox" in e or "user" in e or "recipient" in e or "exist" in e:
+                    return "mailbox_not_found"
+                return "permanent_reject"
+            if code >= 400 or "rate" in e or "throttl" in e or "too many" in e:
+                return "rate_limit"
+            if "auth" in e:
+                return "auth_fail"
+            if "timeout" in e or "timed out" in e:
+                return "timeout"
+            if "connect" in e or "refused" in e:
+                return "connection"
+            return "other"
+
+        def _log_bounce(lead_id, email, error_str, code=0, smtp_host="", smtp_user=""):
+            etype = _classify_error(error_str, code)
+            profile = mime_profile_mode if mime_profile_mode != "rotate" else "rotated"
+            db.log_bounce(campaign_id, lead_id, email, code, etype,
+                          error_str[:500], profile, smtp_host, smtp_user, camp_user_id)
+
         thread_count = min(cfg.get("threads", 40), pool.size * 2, 200)
         thread_count = max(thread_count, 1)
         logger.info("Campaign %d starting: %d pending, %d SMTPs, %d threads",
@@ -758,6 +785,7 @@ def _run_campaign(db, cid: int):
                     logger.error("Campaign %d: all SMTPs dead", campaign_id)
                     with _lock:
                         db.mark_failed(lead_id, "All SMTPs dead")
+                        _log_bounce(lead_id, email, "All SMTPs dead")
                         failed += 1
                         db.update_campaign(campaign_id, sent=sent, failed=failed)
                     return
@@ -828,6 +856,7 @@ def _run_campaign(db, cid: int):
                 logger.error("Campaign %d BUILD error for %s: %s", campaign_id, email, build_exc, exc_info=True)
                 with _lock:
                     db.mark_failed(lead_id, f"BUILD: {str(build_exc)[:400]}")
+                    _log_bounce(lead_id, email, f"BUILD: {build_exc}")
                     failed += 1
                     db.update_campaign(campaign_id, sent=sent, failed=failed)
                 return
@@ -838,6 +867,7 @@ def _run_campaign(db, cid: int):
                 logger.error("Campaign %d send exception for %s: %s", campaign_id, email, send_exc, exc_info=True)
                 with _lock:
                     db.mark_failed(lead_id, str(send_exc)[:500])
+                    _log_bounce(lead_id, email, str(send_exc), 0, account.host, account.user)
                     failed += 1
                     db.update_campaign(campaign_id, sent=sent, failed=failed)
                 return
@@ -848,11 +878,13 @@ def _run_campaign(db, cid: int):
                     sent += 1
                 elif result.is_fatal:
                     db.mark_failed(lead_id, result.error[:500])
+                    _log_bounce(lead_id, email, result.error, result.smtp_code if hasattr(result, 'smtp_code') else 0, account.host, account.user)
                     failed += 1
                     logger.warning("Campaign %d FATAL for %s: %s", campaign_id, email, result.error[:200])
                 else:
                     db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lead_id,))
                     db._conn().commit()
+                    _log_bounce(lead_id, email, result.error, 0, account.host, account.user)
                     logger.warning("Campaign %d transient for %s: %s", campaign_id, email, result.error[:200])
                 db.update_campaign(campaign_id, sent=sent, failed=failed)
 

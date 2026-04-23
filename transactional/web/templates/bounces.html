@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block title %} — Bounces{% endblock %}
+{% block content %}
+<div class="page-header"><h1>Bounce Analytics</h1></div>
+
+<div class="card">
+    <h3>Filters</h3>
+    <form hx-post="/bounces/filter" hx-target="#bounce-results" hx-swap="innerHTML">
+        <div class="grid-4">
+            <div>
+                <label>Campaign</label>
+                <select name="campaign_id">
+                    <option value="0">All Campaigns</option>
+                    {% for c in campaigns %}
+                    <option value="{{ c.campaign_id }}">{{ c.name or ('#' ~ c.campaign_id) }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Error Type</label>
+                <select name="error_type">
+                    <option value="">All Types</option>
+                    <option value="spam_reject">Spam Reject</option>
+                    <option value="mailbox_not_found">Mailbox Not Found</option>
+                    <option value="permanent_reject">Permanent Reject</option>
+                    <option value="rate_limit">Rate Limit</option>
+                    <option value="timeout">Timeout</option>
+                    <option value="connection">Connection</option>
+                    <option value="auth_fail">Auth Fail</option>
+                    <option value="other">Other</option>
+                </select>
+            </div>
+            <div>
+                <label>ISP / Domain</label>
+                <input name="domain" placeholder="e.g. gmail.com">
+            </div>
+            <div>
+                <label>MIME Profile</label>
+                <select name="profile">
+                    <option value="">All Profiles</option>
+                    <option value="default">Default</option>
+                    <option value="outlook_desktop">Outlook</option>
+                    <option value="apple_mail_mac">Apple Mac</option>
+                    <option value="apple_mail_iphone">iPhone</option>
+                    <option value="thunderbird">Thunderbird</option>
+                    <option value="rotated">Rotated</option>
+                </select>
+            </div>
+        </div>
+        <div style="margin-top:10px">
+            <button class="btn btn-primary btn-sm">Apply Filters</button>
+        </div>
+    </form>
+</div>
+
+<div id="bounce-results"
+     hx-post="/bounces/filter"
+     hx-trigger="load"
+     hx-swap="innerHTML">
+    <p style="color:var(--fg2)">Loading...</p>
+</div>
+{% endblock %}

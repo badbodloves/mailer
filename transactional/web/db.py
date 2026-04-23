@@ -121,6 +121,24 @@ class TransDB:
                     rotate_every INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS trans_bounce_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    campaign_id INTEGER DEFAULT 0,
+                    lead_id INTEGER DEFAULT 0,
+                    email TEXT DEFAULT '',
+                    recipient_domain TEXT DEFAULT '',
+                    error_code INTEGER DEFAULT 0,
+                    error_type TEXT DEFAULT '',
+                    error_message TEXT DEFAULT '',
+                    mime_profile TEXT DEFAULT '',
+                    smtp_host TEXT DEFAULT '',
+                    smtp_user TEXT DEFAULT '',
+                    user_id INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_tbl_camp ON trans_bounce_log(campaign_id);
+                CREATE INDEX IF NOT EXISTS idx_tbl_type ON trans_bounce_log(error_type);
+                CREATE INDEX IF NOT EXISTS idx_tbl_domain ON trans_bounce_log(recipient_domain);
                 CREATE TABLE IF NOT EXISTS trans_users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT NOT NULL UNIQUE,
@@ -173,6 +191,17 @@ class TransDB:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL,
                 file_path TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        if "trans_bounce_log" not in tables:
+            c.execute("""CREATE TABLE IF NOT EXISTS trans_bounce_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER DEFAULT 0,
+                lead_id INTEGER DEFAULT 0, email TEXT DEFAULT '', recipient_domain TEXT DEFAULT '',
+                error_code INTEGER DEFAULT 0, error_type TEXT DEFAULT '',
+                error_message TEXT DEFAULT '', mime_profile TEXT DEFAULT '',
+                smtp_host TEXT DEFAULT '', smtp_user TEXT DEFAULT '',
+                user_id INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_tbl_camp ON trans_bounce_log(campaign_id)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_tbl_type ON trans_bounce_log(error_type)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_tbl_domain ON trans_bounce_log(recipient_domain)")
         if "trans_app_config" not in tables:
             c.execute("""CREATE TABLE IF NOT EXISTS trans_app_config (
                 id INTEGER PRIMARY KEY CHECK(id=1),
@@ -557,6 +586,97 @@ class TransDB:
         c = self._conn()
         c.execute("DELETE FROM trans_redirect_links WHERE id=?", (rid,))
         c.commit()
+
+    # ── Bounce Log ─────────────────────────────────────────
+    def log_bounce(self, campaign_id: int, lead_id: int, email: str,
+                   error_code: int, error_type: str, error_message: str,
+                   mime_profile: str = "", smtp_host: str = "",
+                   smtp_user: str = "", user_id: int = 0):
+        domain = email.split("@")[1].lower() if "@" in email else ""
+        c = self._conn()
+        c.execute("INSERT INTO trans_bounce_log "
+                  "(campaign_id,lead_id,email,recipient_domain,error_code,"
+                  "error_type,error_message,mime_profile,smtp_host,smtp_user,user_id) "
+                  "VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                  (campaign_id, lead_id, email, domain, error_code,
+                   error_type, error_message[:500], mime_profile, smtp_host, smtp_user, user_id))
+        c.commit()
+
+    def get_bounce_stats(self, campaign_id: int = 0, user_id: int = 0) -> dict:
+        c = self._conn()
+        where = "WHERE 1=1"
+        params = []
+        if campaign_id:
+            where += " AND campaign_id=?"
+            params.append(campaign_id)
+        if user_id:
+            where += " AND user_id=?"
+            params.append(user_id)
+
+        total = c.execute(f"SELECT COUNT(*) FROM trans_bounce_log {where}", params).fetchone()[0]
+
+        by_type = c.execute(
+            f"SELECT error_type, COUNT(*) as cnt FROM trans_bounce_log {where} "
+            f"GROUP BY error_type ORDER BY cnt DESC", params).fetchall()
+
+        by_domain = c.execute(
+            f"SELECT recipient_domain, COUNT(*) as cnt FROM trans_bounce_log {where} "
+            f"GROUP BY recipient_domain ORDER BY cnt DESC LIMIT 20", params).fetchall()
+
+        by_profile = c.execute(
+            f"SELECT mime_profile, error_type, COUNT(*) as cnt FROM trans_bounce_log {where} "
+            f"GROUP BY mime_profile, error_type ORDER BY cnt DESC", params).fetchall()
+
+        spam_by_domain = c.execute(
+            f"SELECT recipient_domain, mime_profile, COUNT(*) as cnt FROM trans_bounce_log "
+            f"{where} AND error_type='spam_reject' "
+            f"GROUP BY recipient_domain, mime_profile ORDER BY cnt DESC LIMIT 30", params).fetchall()
+
+        return {
+            "total": total,
+            "by_type": [dict(r) for r in by_type],
+            "by_domain": [dict(r) for r in by_domain],
+            "by_profile": [dict(r) for r in by_profile],
+            "spam_by_domain": [dict(r) for r in spam_by_domain],
+        }
+
+    def get_bounce_log(self, campaign_id: int = 0, user_id: int = 0,
+                       error_type: str = "", domain: str = "",
+                       profile: str = "", limit: int = 100) -> list:
+        c = self._conn()
+        where = "WHERE 1=1"
+        params = []
+        if campaign_id:
+            where += " AND campaign_id=?"
+            params.append(campaign_id)
+        if user_id:
+            where += " AND user_id=?"
+            params.append(user_id)
+        if error_type:
+            where += " AND error_type=?"
+            params.append(error_type)
+        if domain:
+            where += " AND recipient_domain=?"
+            params.append(domain)
+        if profile:
+            where += " AND mime_profile=?"
+            params.append(profile)
+        params.append(limit)
+        return c.execute(
+            f"SELECT * FROM trans_bounce_log {where} ORDER BY created_at DESC LIMIT ?",
+            params).fetchall()
+
+    def get_campaigns_with_bounces(self, user_id: int = 0) -> list:
+        c = self._conn()
+        if user_id:
+            return c.execute(
+                "SELECT DISTINCT b.campaign_id, c.name FROM trans_bounce_log b "
+                "LEFT JOIN trans_campaigns c ON b.campaign_id=c.id "
+                "WHERE b.user_id=? ORDER BY b.campaign_id DESC", (user_id,)).fetchall()
+        return c.execute(
+            "SELECT DISTINCT b.campaign_id, c.name FROM trans_bounce_log b "
+            "LEFT JOIN trans_campaigns c ON b.campaign_id=c.id "
+            "ORDER BY b.campaign_id DESC").fetchall()
 
     # ── Proxies ────────────────────────────────────────────
     def add_proxy(self, name: str, proxy_type: str = "single",
