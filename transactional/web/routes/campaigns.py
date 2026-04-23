@@ -719,53 +719,61 @@ def _run_campaign(db, cid: int):
                     return
 
             cur_from_email = from_email_cfg or account.user
-            logger.debug("Campaign %d: sending to %s via %s", cid, email, account.key)
-            cur_from_name = _process(from_name_cfg, email)
-            cur_subject = _process(subject_cfg, email)
+            try:
+                cur_from_name = _process(from_name_cfg, email)
+                cur_subject = _process(subject_cfg, email)
 
-            send_idx = sent + failed
-            html = random.choice(html_bodies) if html_bodies else "<p>Hello {email_user}</p>"
-            html = _process(html, email)
+                send_idx = sent + failed
+                html = random.choice(html_bodies) if html_bodies else "<p>Hello {email_user}</p>"
+                html = _process(html, email)
 
-            # Resolve {RedirectLink}
-            if redirect_links and "{RedirectLink}" in html:
-                group = send_idx // redirect_rotate
-                link = redirect_links[group % len(redirect_links)] if redirect_links else ""
-                html = html.replace("{RedirectLink}", link)
-                cur_subject = cur_subject.replace("{RedirectLink}", link)
+                # Resolve {RedirectLink}
+                if redirect_links and "{RedirectLink}" in html:
+                    group = send_idx // redirect_rotate
+                    link = redirect_links[group % len(redirect_links)] if redirect_links else ""
+                    html = html.replace("{RedirectLink}", link)
+                    cur_subject = cur_subject.replace("{RedirectLink}", link)
 
-            # Resolve {Logo} — CID inline
-            inline_images = None
-            if logo_variants and "{Logo}" in html:
-                logo_path = logo_variants[send_idx % len(logo_variants)]
-                try:
-                    import mimetypes as mt
-                    mime_type = mt.guess_type(logo_path)[0] or "image/png"
-                    with open(logo_path, "rb") as lf:
-                        logo_bytes = lf.read()
-                    import secrets as _sec
-                    cid_local = _sec.token_hex(8)
-                    domain_part = (cur_from_email.split("@")[1] if "@" in cur_from_email else "mail")
-                    cid = f"{cid_local}@{domain_part}"
-                    html = html.replace("{Logo}",
-                        f'<img src="cid:{cid}" alt="Logo" style="max-width:200px">')
-                    inline_images = [(logo_bytes, cid, mime_type)]
-                except Exception as le:
-                    logger.warning("Logo embed error: %s", le)
+                # Resolve {Logo} — CID inline
+                inline_images = None
+                if logo_variants and "{Logo}" in html:
+                    logo_path = logo_variants[send_idx % len(logo_variants)]
+                    try:
+                        import mimetypes as mt
+                        mime_type = mt.guess_type(logo_path)[0] or "image/png"
+                        with open(logo_path, "rb") as lf:
+                            logo_bytes = lf.read()
+                        import secrets as _sec
+                        cid_local = _sec.token_hex(8)
+                        domain_part = (cur_from_email.split("@")[1] if "@" in cur_from_email else "mail")
+                        cid = f"{cid_local}@{domain_part}"
+                        html = html.replace("{Logo}",
+                            f'<img src="cid:{cid}" alt="Logo" style="max-width:200px">')
+                        inline_images = [(logo_bytes, cid, mime_type)]
+                    except Exception as le:
+                        logger.warning("Logo embed error: %s", le)
+                        html = html.replace("{Logo}", "")
+                elif "{Logo}" in html:
                     html = html.replace("{Logo}", "")
-            elif "{Logo}" in html:
-                html = html.replace("{Logo}", "")
 
-            if afp:
-                html = afp.transform(html)
-            plain = re.sub(r"<br\s*/?>", "\n", html)
-            plain = re.sub(r"<[^>]+>", "", plain).strip()
+                if afp:
+                    html = afp.transform(html)
+                plain = re.sub(r"<br\s*/?>", "\n", html)
+                plain = re.sub(r"<[^>]+>", "", plain).strip()
 
-            raw_msg = MIMEBuilder.build_email(
-                from_name=cur_from_name, from_email=cur_from_email,
-                to_email=email, subject=cur_subject,
-                html_body=html, plain_body=plain,
-                inline_images=inline_images)
+                raw_msg = MIMEBuilder.build_email(
+                    from_name=cur_from_name, from_email=cur_from_email,
+                    to_email=email, subject=cur_subject,
+                    html_body=html, plain_body=plain,
+                    inline_images=inline_images)
+
+            except Exception as build_exc:
+                logger.error("Campaign %d BUILD error for %s: %s", cid, email, build_exc, exc_info=True)
+                with _lock:
+                    db.mark_failed(lead_id, f"BUILD: {str(build_exc)[:400]}")
+                    failed += 1
+                    db.update_campaign(cid, sent=sent, failed=failed)
+                return
 
             try:
                 result = worker.send(cur_from_email, email, raw_msg, account=account)
