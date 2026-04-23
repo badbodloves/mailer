@@ -142,10 +142,37 @@ async def generate_variants(request: Request, variant_count: int = Form(25)):
                         variant = ImageEnhance.Contrast(variant).enhance(
                             1.0 + random.uniform(-0.03, 0.03))
 
+                        # Random pixel flip (like original image_manager)
+                        pixels = variant.load()
+                        w, h = variant.size
+                        px = random.randint(0, w - 1)
+                        py = random.randint(0, h - 1)
+                        pixel = pixels[px, py]
+                        if len(pixel) == 4:
+                            p = list(pixel[:3])
+                            p[random.randint(0, 2)] = min(255, max(0, p[random.randint(0, 2)] + random.choice([-2, -1, 1, 2])))
+                            pixels[px, py] = (p[0], p[1], p[2], pixel[3])
+                        elif len(pixel) == 3:
+                            p = list(pixel)
+                            p[random.randint(0, 2)] = min(255, max(0, p[random.randint(0, 2)] + random.choice([-2, -1, 1, 2])))
+                            pixels[px, py] = (p[0], p[1], p[2])
+
+                        # Palette quantization for small file size
+                        if ext == ".png":
+                            try:
+                                from PIL import Image as PILImage
+                                method = (PILImage.Quantize.FASTOCTREE if variant.mode == "RGBA"
+                                          else PILImage.Quantize.MEDIANCUT)
+                                variant = variant.quantize(colors=256, method=method)
+                            except Exception:
+                                pass
+
                         vname = f"v_{generated:04d}_{secrets.token_hex(3)}{ext}"
                         vpath = os.path.join(VARIANT_DIR, vname)
                         save_kw = {"optimize": True}
-                        if fmt == "JPEG":
+                        if fmt == "PNG":
+                            save_kw["compress_level"] = 9
+                        elif fmt == "JPEG":
                             save_kw["quality"] = 95
                         variant.save(vpath, format=fmt, **save_kw)
                         generated += 1

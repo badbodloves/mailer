@@ -320,7 +320,7 @@ async def test_send(request: Request, cid: int):
 
             inline_images = None
             if logo_files and "{Logo}" in html:
-                logo_path = logo_files[idx % len(logo_files)]
+                logo_path = random.choice(logo_files)
                 try:
                     import mimetypes as mt, secrets as _sec
                     mime_type = mt.guess_type(logo_path)[0] or "image/png"
@@ -739,7 +739,7 @@ def _run_campaign(db, cid: int):
                 # Resolve {Logo} — CID inline
                 inline_images = None
                 if logo_variants and "{Logo}" in html:
-                    logo_path = logo_variants[send_idx % len(logo_variants)]
+                    logo_path = random.choice(logo_variants)
                     try:
                         import mimetypes as mt
                         mime_type = mt.guess_type(logo_path)[0] or "image/png"
