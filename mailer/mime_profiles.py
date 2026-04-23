@@ -254,13 +254,13 @@ def _apply_thunderbird(headers, body, domain):
     for ob, nb in bmap.items():
         body = body.replace(ob, nb)
 
-    tb_ver = random.choice(_TB_VERSIONS)
+    tb_ua = "Mozilla Thunderbird"
 
     new_headers = [
         f"Message-ID: {new_mid}",
         f"Date: {date_val}",
         "MIME-Version: 1.0",
-        f"User-Agent: Mozilla Thunderbird {tb_ver}",
+        f"User-Agent: {tb_ua}",
         f"To: {to_val}",
         f"From: {from_val}",
         f"Subject: {subject_val}",
