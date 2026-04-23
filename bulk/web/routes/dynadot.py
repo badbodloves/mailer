@@ -144,9 +144,14 @@ async def check_balance(request: Request):
         return HTMLResponse('<span style="color:var(--red)">No API key</span>')
     try:
         data = _dynadot_call(config["api_key"], "get_account_balance")
-        bal_resp = data.get("AccountBalanceResponse", data)
-        balance = bal_resp.get("AccountBalance", "?")
-        currency = bal_resp.get("Currency", "USD")
+        bal_resp = data.get("GetAccountBalanceResponse", data)
+        bal_list = bal_resp.get("BalanceList", [])
+        if bal_list and isinstance(bal_list, list):
+            balance = bal_list[0].get("Amount", "?")
+            currency = bal_list[0].get("Currency", "USD")
+        else:
+            balance = bal_resp.get("AccountBalance", "?")
+            currency = bal_resp.get("Currency", "USD")
         if balance == "?":
             return HTMLResponse(
                 f'<span style="color:var(--red)">Parse error. Raw: '
@@ -325,14 +330,12 @@ async def list_remote_domains(request: Request):
         return HTMLResponse('<div class="alert alert-danger">No API key</div>')
     try:
         data = _dynadot_call(config["api_key"], "list_domain")
-        list_resp = data.get("DomainListResponse", {})
-        domain_list = list_resp.get("DomainList", {})
-        if isinstance(domain_list, dict):
-            items = domain_list.get("DomainInfo", [])
-        else:
-            items = domain_list if isinstance(domain_list, list) else []
+        list_resp = data.get("ListDomainInfoResponse", data.get("DomainListResponse", {}))
+        items = list_resp.get("MainDomains", list_resp.get("DomainList", {}).get("DomainInfo", []))
+        if isinstance(items, dict):
+            items = [items]
         if not isinstance(items, list):
-            items = [items] if items else []
+            items = []
 
         if not items:
             return HTMLResponse(
