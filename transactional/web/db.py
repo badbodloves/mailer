@@ -231,6 +231,8 @@ class TransDB:
         "llm_api_url": "https://openrouter.ai/api/v1/chat/completions",
         "llm_api_key": "",
         "llm_model": "anthropic/claude-sonnet-4-20250514",
+        "spam_checker": "rspamd",
+        "spam_checker_url": "http://127.0.0.1:11333/checkv2",
     }
 
     def get_config(self) -> dict:

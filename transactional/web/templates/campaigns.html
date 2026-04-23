@@ -106,6 +106,10 @@
                         hx-post="/campaigns/{{ c.id }}/check-blacklist"
                         hx-target="#preflight-{{ c.id }}"
                         hx-swap="innerHTML">Blacklist</button>
+                <button class="btn btn-secondary btn-sm"
+                        hx-post="/campaigns/{{ c.id }}/spam-check"
+                        hx-target="#preflight-{{ c.id }}"
+                        hx-swap="innerHTML">Spam Score</button>
                 <a href="/logos" class="btn btn-secondary btn-sm">Pre-Gen Logos</a>
                 <a href="/redirects" class="btn btn-secondary btn-sm">Pre-Gen Redirects</a>
             </div>

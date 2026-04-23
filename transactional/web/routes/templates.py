@@ -285,3 +285,30 @@ async def text_ratio(request: Request, tid: int):
         f'<tr><td style="padding:2px 12px 2px 0">Images</td><td style="font-weight:600">{img_count}</td></tr>'
         f'</table></div>'
     )
+
+
+@router.post("/templates/{tid}/spam-check", response_class=HTMLResponse)
+async def spam_check_template(request: Request, tid: int):
+    """Build MIME from template and run through spam checker."""
+    db = request.app.state.db
+    html, err = _get_template_html(db, tid)
+    if err:
+        return err
+    html = _resolve_variables(html, db)
+    plain = re.sub(r"<br\s*/?>", "\n", html)
+    plain = re.sub(r"<[^>]+>", "", plain).strip()
+
+    try:
+        from mailer.mime_builder import MIMEBuilder
+        raw_msg = MIMEBuilder.build_email(
+            from_name="Test Sender", from_email="test@example.com",
+            to_email="recipient@example.com", subject="Test Subject",
+            html_body=html, plain_body=plain)
+    except Exception as e:
+        return HTMLResponse(f'<div class="alert alert-danger">MIME build error: {escape(str(e))}</div>')
+
+    cfg = db.get_config()
+    from .spam_check import check_spam, format_result_html
+    result = check_spam(raw_msg, cfg.get("spam_checker", "rspamd"),
+                         cfg.get("spam_checker_url", "http://127.0.0.1:11333/checkv2"))
+    return HTMLResponse(format_result_html(result))

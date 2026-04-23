@@ -519,6 +519,38 @@ async def campaigns_table(request: Request):
     return HTMLResponse(html)
 
 
+@router.post("/campaigns/{cid}/spam-check", response_class=HTMLResponse)
+async def spam_check_campaign(request: Request, cid: int):
+    """Build a sample email and check spam score."""
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    cfg = db.get_config()
+
+    html_bodies = db.get_all_template_htmls(uid)
+    if not html_bodies:
+        return HTMLResponse('<div class="alert alert-warning">No templates to check.</div>')
+
+    html = html_bodies[0]
+    html = html.replace("{email}", "test@example.com").replace("{email_user}", "test")
+    html = html.replace("{domain}", "example.com").replace("{Logo}", "").replace("{RedirectLink}", "https://example.com")
+    plain = re.sub(r"<[^>]+>", "", html).strip()
+    from_email = cfg.get("from_email", "") or "test@example.com"
+
+    try:
+        from mailer.mime_builder import MIMEBuilder
+        raw_msg = MIMEBuilder.build_email(
+            from_name=cfg.get("from_name", "Test"), from_email=from_email,
+            to_email="check@example.com", subject=cfg.get("subject", "Test"),
+            html_body=html, plain_body=plain)
+    except Exception as e:
+        return HTMLResponse(f'<div class="alert alert-danger">Build: {escape(str(e)[:100])}</div>')
+
+    from .spam_check import check_spam, format_result_html
+    result = check_spam(raw_msg, cfg.get("spam_checker", "rspamd"),
+                         cfg.get("spam_checker_url", "http://127.0.0.1:11333/checkv2"))
+    return HTMLResponse(format_result_html(result))
+
+
 def _run_campaign(db, cid: int):
     """Execute campaign using mailer core modules + DB config."""
     from mailer.mime_builder import MIMEBuilder

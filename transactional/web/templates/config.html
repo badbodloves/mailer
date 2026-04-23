@@ -120,6 +120,17 @@
             <label>API Secret</label><input name="cloudinary_api_secret" type="password" value="{{ cfg.cloudinary_api_secret or '' }}">
         </div>
         <div class="card">
+            <h3>Spam Checker</h3>
+            <label>Backend</label>
+            <select name="spam_checker">
+                <option value="rspamd" {{ 'selected' if cfg.spam_checker == 'rspamd' }}>Rspamd (HTTP API)</option>
+                <option value="spamassassin" {{ 'selected' if cfg.spam_checker == 'spamassassin' }}>SpamAssassin (spamc CLI)</option>
+            </select>
+            <label>Rspamd URL</label>
+            <input name="spam_checker_url" value="{{ cfg.spam_checker_url or 'http://127.0.0.1:11333/checkv2' }}">
+            <div class="form-help">Default: http://127.0.0.1:11333/checkv2. Install: sudo apt install rspamd</div>
+        </div>
+        <div class="card">
             <h3>Blacklist</h3>
             <label>MXToolbox API Key</label>
             <input name="mxtoolbox_api_key" value="{{ cfg.mxtoolbox_api_key or '' }}" placeholder="For pre-flight IP check">

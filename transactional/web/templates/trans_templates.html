@@ -95,6 +95,7 @@
             <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-3way" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">3-Way</button>
             <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/preview-mime" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">MIME</button>
             <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/text-ratio" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Ratio</button>
+            <button class="btn btn-secondary btn-xs" hx-post="/templates/{{ t.id }}/spam-check" hx-target="#tpl-out-{{ t.id }}" hx-swap="innerHTML">Spam Score</button>
         </div>
         <div id="tpl-out-{{ t.id }}"></div>
     </div>
