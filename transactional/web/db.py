@@ -192,6 +192,9 @@ class TransDB:
         "proxy_mode": "off", "proxy_value": "", "proxy_rotate_every": 0,
         "mxtoolbox_api_key": "",
         "html_rotate_every": 0,
+        "llm_api_url": "https://openrouter.ai/api/v1/chat/completions",
+        "llm_api_key": "",
+        "llm_model": "anthropic/claude-sonnet-4-20250514",
     }
 
     def get_config(self) -> dict:
