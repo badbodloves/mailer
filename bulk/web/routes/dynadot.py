@@ -18,7 +18,8 @@ def _dynadot_call(api_key: str, command: str, params: dict = None) -> dict:
         for k, v in params.items():
             url += f"&{k}={v}"
     resp = requests.get(url, timeout=20)
-    return resp.json()
+    raw = resp.json()
+    return raw.get("response", raw)
 
 
 def _cf_headers_for(db, cf_account_id: int = 0) -> tuple:
@@ -84,22 +85,20 @@ async def search_domains(request: Request, query: str = Form("")):
         return HTMLResponse(f'<div class="alert alert-danger">API error: {escape(str(e))}</div>')
 
     results = []
-    search_resp = data.get("SearchResponse", data.get("response", data))
-    search_results = search_resp.get("SearchResults", search_resp.get("search_results", []))
-
+    search_results = data.get("SearchResults", data.get("search_results", data))
     if isinstance(search_results, dict):
         items = search_results.get("SearchResult", search_results.get("domain_info", []))
     elif isinstance(search_results, list):
         items = search_results
     else:
         items = []
-
     if not isinstance(items, list):
         items = [items]
 
     for item in items:
-        name = item.get("DomainName", item.get("domain", ""))
-        available = item.get("Available", item.get("status", "")) in ("yes", "available", True)
+        name = item.get("DomainName", item.get("domain", item.get("Name", "")))
+        status_val = item.get("Available", item.get("status", item.get("Status", "")))
+        available = str(status_val).lower() in ("yes", "available", "true")
         price = item.get("Price", item.get("price", ""))
         results.append({"domain": name, "available": available, "price": price})
 
@@ -137,8 +136,8 @@ async def check_balance(request: Request):
         return HTMLResponse('<span style="color:var(--red)">No API key</span>')
     try:
         data = _dynadot_call(config["api_key"], "get_account_balance")
-        bal_resp = data.get("GetAccountBalanceResponse", data.get("response", data))
-        balance = bal_resp.get("AccountBalance", bal_resp.get("account_balance", {}))
+        bal_resp = data.get("GetAccountBalanceResponse", data)
+        balance = bal_resp.get("AccountBalance", bal_resp.get("account_balance", bal_resp))
         if isinstance(balance, dict):
             amt = balance.get("Balance", balance.get("balance", "?"))
             cur = balance.get("Currency", balance.get("currency", "USD"))
@@ -162,13 +161,34 @@ async def buy_domain(request: Request, domain: str = Form(""),
     domain = domain.strip().lower()
     log = []
 
+    # Step 0: Check availability first
+    log.append(f"Checking availability of {domain}...")
+    try:
+        check = _dynadot_call(config["api_key"], "search", {"domain0": domain, "show_price": "1", "currency": "EUR"})
+        sr = check.get("SearchResults", check.get("search_results", {}))
+        items = sr.get("SearchResult", sr.get("domain_info", []))
+        if not isinstance(items, list):
+            items = [items]
+        if items:
+            status_val = str(items[0].get("Available", items[0].get("status", ""))).lower()
+            if status_val not in ("yes", "available", "true"):
+                log.append(f"Domain {domain} is NOT available ({status_val}).")
+                return HTMLResponse(_fmt_log(log))
+            price = items[0].get("Price", items[0].get("price", "?"))
+            log.append(f"Available! Price: {price} EUR")
+        else:
+            log.append("Could not verify availability, proceeding anyway...")
+    except Exception as e:
+        log.append(f"Availability check error: {e}, proceeding...")
+
     # Step 1: Register
     log.append(f"Registering {domain}...")
     try:
         data = _dynadot_call(config["api_key"], "register", {"domain": domain, "duration": "1"})
-        reg_resp = data.get("RegisterResponse", data.get("response", data))
-        if data.get("success") is False or "error" in str(reg_resp).lower():
-            errors = reg_resp.get("errors", reg_resp.get("Error", str(reg_resp)))
+        reg_resp = data.get("DomainRegistrationResponse", data.get("RegisterResponse", data))
+        error_str = str(reg_resp).lower()
+        if "error" in error_str or "not available" in error_str or "insufficient" in error_str:
+            errors = reg_resp.get("Error", reg_resp.get("errors", str(reg_resp)))
             log.append(f"Registration failed: {errors}")
             return HTMLResponse(_fmt_log(log))
         log.append("Registration successful!")
@@ -225,16 +245,18 @@ async def buy_domain(request: Request, domain: str = Form(""),
             try:
                 data = _dynadot_call(config["api_key"], "set_ns", {
                     "domain": domain, "ns1": ns1, "ns2": ns2})
-                ns_resp = data.get("SetNsResponse", data.get("response", data))
-                if "error" in str(ns_resp).lower() and "dns queries" in str(ns_resp).lower():
+                ns_resp = data.get("SetNsResponse", data)
+                ns_str = str(ns_resp).lower()
+                if "dns queries" in ns_str or "must respond" in ns_str:
                     log.append(f"NS not ready yet (DNS queries check).")
                     continue
-                elif data.get("success") is not False:
+                elif "error" in ns_str:
+                    log.append(f"NS error: {ns_resp}")
+                    continue
+                else:
                     db.update_purchased_domain(domain, ns_set=1)
                     log.append("Nameservers set successfully!")
                     break
-                else:
-                    log.append(f"NS set response: {ns_resp}")
             except Exception as e:
                 log.append(f"NS error: {e}")
         else:
@@ -264,12 +286,13 @@ async def retry_set_ns(request: Request, did: int):
     try:
         data = _dynadot_call(config["api_key"], "set_ns", {
             "domain": row["domain"], "ns1": ns1, "ns2": ns2})
-        if data.get("success") is not False:
+        ns_resp = data.get("SetNsResponse", data)
+        ns_str = str(ns_resp).lower()
+        if "error" not in ns_str and "must respond" not in ns_str:
             db.update_purchased_domain(row["domain"], ns_set=1)
             return HTMLResponse('<span class="badge badge-running">NS set!</span>')
         else:
-            resp = data.get("SetNsResponse", data.get("response", ""))
-            return HTMLResponse(f'<span style="color:var(--red)">Failed: {escape(str(resp)[:100])}</span>')
+            return HTMLResponse(f'<span style="color:var(--red)">Failed: {escape(str(ns_resp)[:100])}</span>')
     except Exception as e:
         return HTMLResponse(f'<span style="color:var(--red)">{escape(str(e))}</span>')
 
@@ -283,8 +306,8 @@ async def list_remote_domains(request: Request):
         return HTMLResponse('<div class="alert alert-danger">No API key</div>')
     try:
         data = _dynadot_call(config["api_key"], "list_domain")
-        list_resp = data.get("DomainListResponse", data.get("response", data))
-        domains = list_resp.get("DomainInfoList", list_resp.get("domain_list_response", {}))
+        list_resp = data.get("DomainListResponse", data)
+        domains = list_resp.get("DomainInfoList", list_resp.get("domain_list_response", list_resp))
         if isinstance(domains, dict):
             items = domains.get("DomainInfo", domains.get("domains", []))
         else:
