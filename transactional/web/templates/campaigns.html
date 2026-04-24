@@ -81,6 +81,11 @@
             <h3 style="font-size:14px;margin-bottom:8px">Controls</h3>
             <div class="btn-group" style="flex-wrap:wrap;margin-bottom:12px">
                 {% if not c.running %}
+                {% if c.status == 'PAUSED' %}
+                <form method="post" action="/campaigns/{{ c.id }}/start">
+                    <button class="btn btn-success btn-sm">Resume</button>
+                </form>
+                {% endif %}
                 <button class="btn btn-success btn-sm"
                         hx-post="/campaigns/{{ c.id }}/preflight"
                         hx-target="#preflight-{{ c.id }}"

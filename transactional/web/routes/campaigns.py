@@ -642,11 +642,17 @@ def _run_campaign(db, cid: int):
     db.reset_in_progress(lead_list_id)
     states = db.get_lead_states(lead_list_id)
     pending = states.get("PENDING", 0)
-    if pending == 0:
+    is_resume = camp.get("status") == "PAUSED"
+    if pending == 0 and not is_resume:
         total = sum(states.values())
         if total > 0:
+            logger.info("Campaign %d: 0 pending (fresh start), resetting %d leads", cid, total)
             db.reset_leads(lead_list_id)
             pending = total
+    elif pending == 0 and is_resume:
+        logger.info("Campaign %d: resumed but 0 pending — all leads already processed", cid)
+        db.update_campaign(cid, status="FINISHED")
+        return
 
     smtps = [dict(s) for s in db.get_smtps(smtp_list_id)]
     if not smtps:
