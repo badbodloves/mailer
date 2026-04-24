@@ -27,11 +27,11 @@
                     </div>
                     <div class="shrink" style="display:flex;gap:8px;align-items:flex-end">
                         <button class="btn btn-primary btn-sm">Save</button>
-                        <form method="post" action="/macros/{{ m.id }}/delete" onsubmit="return confirm('Delete?')">
-                            <button class="btn btn-danger btn-sm">Delete</button>
-                        </form>
                     </div>
                 </div>
+            </form>
+            <form method="post" action="/macros/{{ m.id }}/delete" onsubmit="return confirm('Delete?')" style="margin-top:8px;text-align:right">
+                <button class="btn btn-danger btn-sm">Delete</button>
             </form>
         </div>
     </details>
