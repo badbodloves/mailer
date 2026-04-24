@@ -411,10 +411,13 @@ async def builder_save(request: Request):
     if not safe_name:
         return HTMLResponse('<div class="alert alert-warning">Invalid name.</div>')
 
+    import re as _re
+    import random
     from htmlgen.engine import _load_all
 
     block_list = json.loads(blocks_json)
     block_variants, layouts = _load_all(_HTMLGEN_BASE)
+    generic_wrappers = _load_generic_wrappers()
 
     base_layout = None
     for l in layouts:
@@ -424,14 +427,39 @@ async def builder_save(request: Request):
     if not base_layout:
         return HTMLResponse('<div class="alert alert-danger">Base layout not found.</div>')
 
-    block_names_all = ["logo", "referenz", "satz", "hinweis", "frist", "link", "gruss", "footer"]
-    chosen_names = [entry["name"] for entry in block_list]
+    content_rows = ""
+    for entry in block_list:
+        name = entry["name"]
+        variant_id = entry.get("variant", "random")
 
-    custom_html = base_layout
-    for bname in block_names_all:
-        placeholder = "{BLOCK_" + bname.upper() + "}"
-        if bname not in chosen_names:
-            custom_html = custom_html.replace(placeholder, "")
+        if entry.get("custom") or name not in block_variants:
+            ph_name = entry.get("placeholder", name)
+            wrapper_name = entry.get("wrapper", "plain")
+            wrapper_html = None
+            for w in generic_wrappers:
+                if w["name"] == wrapper_name:
+                    wrapper_html = w["html"]
+                    break
+            if not wrapper_html:
+                wrapper_html = '<p style="margin:0;font-family:{font};font-size:14px;color:#333;">{CONTENT}</p>'
+            block_html = wrapper_html.replace("{CONTENT}", "{" + ph_name + "}")
+        else:
+            placeholder = "{BLOCK_" + name.upper() + "}"
+            content_rows += f'<tr><td style="padding:6px 40px 10px;">{placeholder}</td></tr>\n'
+            continue
+
+        content_rows += f'<tr><td style="padding:6px 40px 10px;">{block_html}</td></tr>\n'
+
+    custom_html = _re.sub(
+        r'<tr>\s*<td[^>]*>\s*\{BLOCK_\w+\}\s*</td>\s*</tr>\s*',
+        '', base_layout)
+    custom_html = _re.sub(r'\{BLOCK_\w+\}', '', custom_html)
+
+    last_table = custom_html.rfind("</table>")
+    if last_table > 0:
+        second_last = custom_html.rfind("</table>", 0, last_table)
+        insert_pos = second_last if second_last > 0 else last_table
+        custom_html = custom_html[:insert_pos] + content_rows + custom_html[insert_pos:]
 
     out_path = _HTMLGEN_BASE / "layouts" / f"{safe_name}.html"
     out_path.write_text(custom_html, encoding="utf-8")
