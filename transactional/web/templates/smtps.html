@@ -42,26 +42,33 @@
             <form hx-post="/smtps/{{ sl.id }}/import" hx-target="#import-{{ sl.id }}" hx-swap="innerHTML">
                 <label>Import SMTPs (host,port,user,pass — NO proxy)</label>
                 <textarea name="smtp_text" rows="4" placeholder="smtp.gmail.com,587,user@gmail.com,password&#10;smtp.outlook.com,465,user@outlook.com,password" style="font-family:monospace;font-size:12px"></textarea>
-                <div style="margin-top:8px" class="btn-group">
-                    <button class="btn btn-primary btn-sm">Import</button>
-                    <button type="button" class="btn btn-secondary btn-sm"
-                            hx-post="/smtps/{{ sl.id }}/check-all"
-                            hx-target="#check-results"
-                            hx-swap="innerHTML"
-                            onclick="this.setAttribute('hx-vals', JSON.stringify({
-                                check_threads: document.getElementById('checker-threads').value,
-                                proxy_id: document.getElementById('checker-proxy').value,
-                                send_test: document.getElementById('checker-send-test').checked?1:0,
-                                test_to: document.getElementById('checker-test-to')?.value||'',
-                                test_subject: document.getElementById('checker-test-subject')?.value||'',
-                                test_from_name: document.getElementById('checker-test-from')?.value||''
-                            })); htmx.process(this);">Check All</button>
-                    <form method="post" action="/smtps/list/{{ sl.id }}/delete" onsubmit="return confirm('Delete list + all SMTPs?')">
-                        <button class="btn btn-danger btn-sm">Delete List</button>
-                    </form>
+                <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Import</button></div>
+            </form>
+            <form method="post" action="/smtps/{{ sl.id }}/import-file" enctype="multipart/form-data" style="margin-top:8px;display:flex;gap:8px;align-items:flex-end">
+                <div style="flex:1">
+                    <label>Or upload .txt file</label>
+                    <input type="file" name="file" accept=".txt,.csv" required>
                 </div>
+                <button class="btn btn-primary btn-sm">Upload</button>
             </form>
             <div id="import-{{ sl.id }}" style="margin-top:8px"></div>
+            <div class="btn-group" style="margin-top:12px;flex-wrap:wrap">
+                <button type="button" class="btn btn-secondary btn-sm"
+                        hx-post="/smtps/{{ sl.id }}/check-all"
+                        hx-target="#check-results"
+                        hx-swap="innerHTML"
+                        onclick="this.setAttribute('hx-vals', JSON.stringify({
+                            check_threads: document.getElementById('checker-threads').value,
+                            proxy_id: document.getElementById('checker-proxy').value,
+                            send_test: document.getElementById('checker-send-test').checked?1:0,
+                            test_to: document.getElementById('checker-test-to')?.value||'',
+                            test_subject: document.getElementById('checker-test-subject')?.value||'',
+                            test_from_name: document.getElementById('checker-test-from')?.value||''
+                        })); htmx.process(this);">Check All</button>
+                <form method="post" action="/smtps/list/{{ sl.id }}/delete" onsubmit="return confirm('Delete list + all SMTPs?')" style="display:inline">
+                    <button class="btn btn-danger btn-sm">Delete List</button>
+                </form>
+            </div>
         </div>
     </details>
     {% endfor %}

@@ -116,6 +116,18 @@ async def import_smtps(request: Request, lid: int, smtp_text: str = Form("")):
                         f'<a href="/smtps" style="color:var(--accent)">Reload</a></div>')
 
 
+@router.post("/smtps/{lid}/import-file")
+async def import_smtps_file(request: Request, lid: int):
+    from fastapi import UploadFile
+    form = await request.form()
+    file = form.get("file")
+    if not file or not hasattr(file, "read"):
+        return RedirectResponse("/smtps", status_code=303)
+    content = (await file.read()).decode("utf-8", errors="replace")
+    added = request.app.state.db.import_smtps(lid, content)
+    return RedirectResponse("/smtps", status_code=303)
+
+
 @router.post("/smtps/list/{lid}/delete")
 async def delete_list(request: Request, lid: int):
     request.app.state.db.delete_smtp_list(lid)
