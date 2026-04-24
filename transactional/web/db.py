@@ -616,6 +616,7 @@ class TransDB:
 
     def delete_template(self, tid: int):
         c = self._conn()
+        c.execute("DELETE FROM trans_template_files WHERE template_id=?", (tid,))
         c.execute("DELETE FROM trans_templates WHERE id=?", (tid,))
         c.commit()
 

@@ -21,21 +21,26 @@
     </div>
 
     {% if templates %}
-    <!-- Template selector dropdown -->
-    <div style="margin-bottom:16px">
-        <label>Select Template</label>
-        <select id="tpl-select" onchange="
-            document.querySelectorAll('.tpl-panel').forEach(p => p.style.display='none');
-            var sel = this.value;
-            if(sel) document.getElementById('tpl-'+sel).style.display='block';
-        " style="max-width:400px">
-            <option value="">— Choose —</option>
-            {% for t in templates %}
-            {% set fcount = db.get_template_file_count(t.id) %}
-            <option value="{{ t.id }}">{{ t.name }} ({{ fcount }} files{{ ', inline' if t.html_content }})</option>
-            {% endfor %}
-        </select>
-    </div>
+    <!-- Template list -->
+    <table style="margin-bottom:16px">
+        <thead><tr><th>Name</th><th>Files</th><th></th><th></th></tr></thead>
+        <tbody>
+        {% for t in templates %}
+        {% set fcount = db.get_template_file_count(t.id) %}
+        <tr>
+            <td style="font-weight:500">{{ t.name }}</td>
+            <td>{{ fcount }} files{{ ', +inline' if t.html_content else '' }}</td>
+            <td><button class="btn btn-secondary btn-xs" onclick="
+                document.querySelectorAll('.tpl-panel').forEach(p => p.style.display='none');
+                document.getElementById('tpl-{{ t.id }}').style.display='block';
+            ">Edit</button></td>
+            <td><form method="post" action="/templates/{{ t.id }}/delete" onsubmit="return confirm('Delete {{ t.name }} + all files?')" style="display:inline">
+                <button class="btn btn-danger btn-xs">Delete</button>
+            </form></td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
 
     {% for t in templates %}
     {% set files = db.get_template_files(t.id) %}
