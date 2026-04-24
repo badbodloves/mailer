@@ -135,7 +135,7 @@ async def login_page(request: Request):
 
 @router.post("/login")
 async def login_submit(request: Request, username: str = Form(""), password: str = Form("")):
-    ip = request.client.host if request.client else "unknown"
+    ip = request.headers.get("CF-Connecting-IP") or request.headers.get("X-Real-IP") or request.headers.get("X-Forwarded-For", "").split(",")[0].strip() or (request.client.host if request.client else "unknown")
 
     # Rate limit check
     allowed, wait = _check_rate_limit(ip)
