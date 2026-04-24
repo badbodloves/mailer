@@ -53,18 +53,7 @@
             </form>
             <div id="import-{{ sl.id }}" style="margin-top:8px"></div>
             <div class="btn-group" style="margin-top:12px;flex-wrap:wrap">
-                <button type="button" class="btn btn-secondary btn-sm"
-                        hx-post="/smtps/{{ sl.id }}/check-all"
-                        hx-target="#check-results"
-                        hx-swap="innerHTML"
-                        onclick="this.setAttribute('hx-vals', JSON.stringify({
-                            check_threads: document.getElementById('checker-threads').value,
-                            proxy_id: document.getElementById('checker-proxy').value,
-                            send_test: document.getElementById('checker-send-test').checked?1:0,
-                            test_to: document.getElementById('checker-test-to')?.value||'',
-                            test_subject: document.getElementById('checker-test-subject')?.value||'',
-                            test_from_name: document.getElementById('checker-test-from')?.value||''
-                        })); htmx.process(this);">Check All</button>
+                <button type="button" class="btn btn-secondary btn-sm" onclick="runSmtpCheck({{ sl.id }})">Check All</button>
                 <form method="post" action="/smtps/list/{{ sl.id }}/delete" onsubmit="return confirm('Delete list + all SMTPs?')" style="display:inline">
                     <button class="btn btn-danger btn-sm">Delete List</button>
                 </form>
@@ -122,4 +111,21 @@
         <div id="check-results" style="margin-top:12px" hx-get="/smtps/check-results" hx-trigger="every 2s" hx-swap="innerHTML"></div>
     </div>
 </div>
+<script>
+function runSmtpCheck(lid) {
+    const data = new URLSearchParams({
+        check_threads: document.getElementById('checker-threads').value,
+        proxy_id: document.getElementById('checker-proxy').value,
+        send_test: document.getElementById('checker-send-test').checked ? 1 : 0,
+        test_to: (document.getElementById('checker-test-to') || {}).value || '',
+        test_subject: (document.getElementById('checker-test-subject') || {}).value || 'SMTP Test',
+        test_from_name: (document.getElementById('checker-test-from') || {}).value || 'Test'
+    });
+    fetch('/smtps/' + lid + '/check-all', { method: 'POST', body: data,
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+    })
+    .then(r => r.text())
+    .then(html => { document.getElementById('check-results').innerHTML = html; });
+}
+</script>
 {% endblock %}
