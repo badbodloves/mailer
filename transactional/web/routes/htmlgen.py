@@ -196,14 +196,12 @@ async def load_to_mailer(request: Request,
         return HTMLResponse('<div class="alert alert-warning">No templates to load.</div>')
 
     prefix = load_name.strip() or "HtmlGen"
-    loaded = 0
+    template_id = db.add_template(f"{prefix} ({len(generated)} HTMLs)", "", uid)
     for i, tpl in enumerate(generated, 1):
-        name = f"{prefix} #{i}"
-        db.add_template(name, tpl["html"], uid)
-        loaded += 1
+        db.add_template_file(template_id, f"{prefix}_{i:04d}.html", tpl["html"])
 
     return HTMLResponse(
-        f'<div class="alert alert-success">{loaded} templates as "{escape(prefix)} #1–#{loaded}" loaded into '
+        f'<div class="alert alert-success">{len(generated)} HTMLs as "{escape(prefix)}" loaded into '
         f'<a href="/templates" style="color:var(--accent)">HTML Editor</a>.</div>'
     )
 
