@@ -58,6 +58,11 @@
                             <option value="0">—</option>
                             {% for ll in lead_lists %}<option value="{{ ll.id }}" {{ 'selected' if ll.id == c.lead_list_id }}>{{ ll.name }} ({{ "{:,}".format(ll.count) }})</option>{% endfor %}
                         </select>
+                        <label>Template</label>
+                        <select name="template_id">
+                            <option value="0">All Templates</option>
+                            {% for tpl in templates %}<option value="{{ tpl.id }}" {{ 'selected' if tpl.id == c.template_id }}>{{ tpl.name }}</option>{% endfor %}
+                        </select>
                     </div>
                     <div>
                         <label>Schedule (HH:MM)</label>

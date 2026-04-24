@@ -55,10 +55,11 @@ async def campaigns_page(request: Request):
     smtp_lists = [dict(sl, count=db.get_smtp_count(sl["id"])) for sl in db.get_smtp_lists(uid)]
     lead_lists = [dict(ll, count=db.get_lead_count(ll["id"])) for ll in db.get_lead_lists(uid)]
     pools = [dict(p, stats=db.pool_stats(p["id"])) for p in db.get_pools(uid)]
+    templates = [dict(t) for t in db.get_templates(uid)]
     return request.app.state.templates.TemplateResponse(request, "campaigns.html", {
         "active": "campaigns", "campaigns": campaigns,
         "smtp_lists": smtp_lists, "lead_lists": lead_lists,
-        "pools": pools, "db": db,
+        "pools": pools, "templates": templates, "db": db,
     })
 
 
@@ -119,9 +120,10 @@ async def save_campaign(request: Request, cid: int,
                         name: str = Form(""),
                         smtp_list_id: int = Form(0),
                         lead_list_id: int = Form(0),
+                        template_id: int = Form(0),
                         schedule_time: str = Form("")):
     db = request.app.state.db
-    updates = {"name": name.strip(), "schedule_time": schedule_time.strip()}
+    updates = {"name": name.strip(), "schedule_time": schedule_time.strip(), "template_id": template_id}
     if smtp_list_id:
         updates["smtp_list_id"] = smtp_list_id
     if lead_list_id:
@@ -750,7 +752,8 @@ def _run_campaign(db, cid: int):
         else:
             afp = None
 
-        html_bodies = db.get_all_template_htmls(uid)
+        campaign_template_id = camp.get("template_id", 0) or 0
+        html_bodies = db.get_all_template_htmls(uid, template_id=campaign_template_id)
 
         macros = {}
         for m in db.get_macros(uid):

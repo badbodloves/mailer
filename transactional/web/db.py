@@ -234,6 +234,7 @@ class TransDB:
             ("trans_campaigns", "started_at", "NULL"),
             ("trans_campaigns", "finished_at", "NULL"),
             ("trans_campaigns", "schedule_time", "''"),
+            ("trans_campaigns", "template_id", "0"),
         ]:
             if tbl in tables:
                 cols = {r[1] for r in c.execute(f"PRAGMA table_info({tbl})").fetchall()}
@@ -642,10 +643,15 @@ class TransDB:
         c.execute("DELETE FROM trans_template_files WHERE id=?", (fid,))
         c.commit()
 
-    def get_all_template_htmls(self, user_id: int = 0) -> list:
-        """Get all HTML bodies: from template_files first, fall back to template.html_content."""
+    def get_all_template_htmls(self, user_id: int = 0, template_id: int = 0) -> list:
+        """Get HTML bodies. If template_id given, only from that template."""
         bodies = []
-        for t in self.get_templates(user_id):
+        if template_id:
+            templates = [self.get_template(template_id)]
+            templates = [t for t in templates if t]
+        else:
+            templates = self.get_templates(user_id)
+        for t in templates:
             t = dict(t)
             files = self.get_template_files(t["id"])
             if files:
