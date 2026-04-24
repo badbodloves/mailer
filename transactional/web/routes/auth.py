@@ -155,7 +155,7 @@ async def login_submit(request: Request, username: str = Form(""), password: str
             error += f" {remaining} attempt(s) remaining."
         return request.app.state.templates.TemplateResponse(
             request, "login.html", {"error": error, "app_cfg": db.get_app_config()})
-    if not user.get("is_active", 1):
+    if not dict(user).get("is_active", 1):
         _record_failed(ip)
         return request.app.state.templates.TemplateResponse(
             request, "login.html", {"error": "Account disabled.", "app_cfg": db.get_app_config()})
