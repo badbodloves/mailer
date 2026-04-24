@@ -921,7 +921,8 @@ def _run_campaign(db, cid: int):
                     db._conn().commit()
                     _log_bounce(lead_id, email, result.error, 0, account.host, account.user)
                     logger.warning("Campaign %d transient for %s: %s", campaign_id, email, result.error[:200])
-                db.update_campaign(campaign_id, sent=sent, failed=failed)
+                if (sent + failed) % 20 == 0:
+                    db.update_campaign(campaign_id, sent=sent, failed=failed)
 
             if result.is_success:
                 if test_interval > 0 and interval_recips and sent % test_interval == 0:
