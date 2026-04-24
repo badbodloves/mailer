@@ -86,13 +86,22 @@
             <form method="post" action="/htmlgen/export" style="display:inline">
                 <button class="btn btn-primary btn-sm">Export ZIP</button>
             </form>
-            <button class="btn btn-success btn-sm"
-                    hx-post="/htmlgen/load-to-mailer"
-                    hx-target="#load-result"
-                    hx-swap="innerHTML">Load into Mailer</button>
             <form method="post" action="/htmlgen/clear" onsubmit="return confirm('Delete all generated templates?')" style="display:inline">
                 <button class="btn btn-danger btn-sm">Clear All</button>
             </form>
+        </div>
+
+        <div style="background:#f8f9fa;padding:14px;border-radius:4px;margin-bottom:16px">
+            <label style="margin:0 0 6px">Template Name</label>
+            <div style="display:flex;gap:8px;align-items:center">
+                <input id="load-name" name="load_name" value="HtmlGen" placeholder="z.B. April Campaign" style="flex:1">
+                <button class="btn btn-success btn-sm"
+                        hx-post="/htmlgen/load-to-mailer"
+                        hx-target="#load-result"
+                        hx-swap="innerHTML"
+                        hx-include="#load-name">Load into Mailer</button>
+            </div>
+            <div class="form-help" style="margin-top:4px">Templates werden als "Name #1", "Name #2", etc. im HTML Editor gespeichert.</div>
         </div>
         <div id="load-result" style="margin-bottom:12px"></div>
 

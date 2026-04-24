@@ -185,7 +185,8 @@ async def export_templates(request: Request):
 
 
 @router.post("/htmlgen/load-to-mailer", response_class=HTMLResponse)
-async def load_to_mailer(request: Request):
+async def load_to_mailer(request: Request,
+                          load_name: str = Form("HtmlGen")):
     db = request.app.state.db
     uid = request.state.user["id"]
     generated = _list_generated()
@@ -193,14 +194,15 @@ async def load_to_mailer(request: Request):
     if not generated:
         return HTMLResponse('<div class="alert alert-warning">No templates to load.</div>')
 
+    prefix = load_name.strip() or "HtmlGen"
     loaded = 0
     for i, tpl in enumerate(generated, 1):
-        name = f"HtmlGen #{i}"
+        name = f"{prefix} #{i}"
         db.add_template(name, tpl["html"], uid)
         loaded += 1
 
     return HTMLResponse(
-        f'<div class="alert alert-success">{loaded} templates loaded into '
+        f'<div class="alert alert-success">{loaded} templates as "{escape(prefix)} #1–#{loaded}" loaded into '
         f'<a href="/templates" style="color:var(--accent)">HTML Editor</a>.</div>'
     )
 
