@@ -47,7 +47,7 @@ async def save_config(request: Request):
 
     for key in ["ignore_ssl_errors", "antifingerprint_classes",
                  "advanced_antifingerprint", "image_enabled", "image_quantize",
-                 "image_downscale", "redirect_enabled"]:
+                 "image_downscale", "redirect_enabled", "auto_retry_failed"]:
         cfg[key] = key in form
 
     db.save_config(cfg)

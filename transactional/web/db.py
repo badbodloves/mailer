@@ -273,6 +273,7 @@ class TransDB:
         "spam_checker": "both",
         "spam_checker_url": "http://127.0.0.1:11333/checkv2",
         "mime_profile": "rotate",
+        "auto_retry_failed": True,
     }
 
     def get_config(self) -> dict:

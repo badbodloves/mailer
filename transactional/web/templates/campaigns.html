@@ -6,7 +6,7 @@
 {% if campaigns %}
 <div class="card" hx-get="/campaigns/table" hx-trigger="every 3s" hx-swap="innerHTML">
     <div class="card-header"><h3>Campaigns <span class="count">{{ campaigns|length }}</span></h3></div>
-    <table><thead><tr><th>Name</th><th>SMTP List</th><th>Lead List</th><th>Progress</th><th>Total</th><th>Sent</th><th>Failed</th><th>Speed</th><th></th></tr></thead>
+    <table><thead><tr><th>Name</th><th>SMTP List</th><th>Lead List</th><th>Progress</th><th>Total</th><th>Sent</th><th>Speed</th><th></th></tr></thead>
     <tbody>
     {% for c in campaigns %}
     <tr style="{{ 'background:var(--green-light)' if c.running }}">
@@ -16,15 +16,12 @@
         <td style="min-width:100px"><div class="progress"><div class="progress-bar" style="width:{{ c.pct }}%">{{ c.pct }}%</div></div></td>
         <td>{{ "{:,}".format(c.total_leads or 0) }}</td>
         <td style="color:var(--green);font-weight:500">{{ "{:,}".format(c.sent or 0) }}</td>
-        <td style="color:var(--red)">{{ "{:,}".format(c.failed or 0) }}</td>
         <td>{{ "{:,}".format(c.speed) ~ "/h" if c.speed else "—" }}</td>
-        <td>
+        <td style="white-space:nowrap">
             {% if c.running %}
-            <form method="post" action="/campaigns/{{ c.id }}/stop" style="display:inline"><button class="btn btn-danger btn-xs">Stop</button></form>
-            {% elif c.status == 'PAUSED' %}
-            <form method="post" action="/campaigns/{{ c.id }}/start" style="display:inline"><button class="btn btn-success btn-xs">Resume</button></form>
+            <form method="post" action="/campaigns/{{ c.id }}/stop" style="display:inline"><button class="btn btn-danger btn-xs">Pause</button></form>
             {% else %}
-            <span style="font-size:11px;color:var(--fg2)">Use Actions tab</span>
+            <form method="post" action="/campaigns/{{ c.id }}/start" style="display:inline"><button class="btn btn-success btn-xs">Start</button></form>
             {% endif %}
         </td>
     </tr>
@@ -83,24 +80,34 @@
             <h3 style="font-size:14px;margin-bottom:8px">Controls</h3>
             <div class="btn-group" style="flex-wrap:wrap;margin-bottom:12px">
                 {% if not c.running %}
-                {% if c.status == 'PAUSED' %}
-                <form method="post" action="/campaigns/{{ c.id }}/start">
-                    <button class="btn btn-success btn-sm">Resume</button>
+                <form method="post" action="/campaigns/{{ c.id }}/start" style="display:inline">
+                    <button class="btn btn-success btn-sm">&#9654; Start</button>
+                </form>
+                {% else %}
+                <form method="post" action="/campaigns/{{ c.id }}/stop" style="display:inline">
+                    <button class="btn btn-danger btn-sm">&#10074;&#10074; Pause</button>
                 </form>
                 {% endif %}
-                <button class="btn btn-success btn-sm"
-                        hx-post="/campaigns/{{ c.id }}/preflight"
-                        hx-target="#preflight-{{ c.id }}"
-                        hx-swap="innerHTML">Pre-Flight & Start</button>
-                {% else %}
-                <form method="post" action="/campaigns/{{ c.id }}/stop"><button class="btn btn-danger btn-sm">Stop</button></form>
-                {% endif %}
-                <form method="post" action="/campaigns/{{ c.id }}/reset" onsubmit="return confirm('Reset all leads?')"><button class="btn btn-secondary btn-sm">Reset & Resend</button></form>
-                <form method="post" action="/campaigns/{{ c.id }}/delete" onsubmit="return confirm('Delete?')"><button class="btn btn-danger btn-sm">Delete</button></form>
+                <form method="post" action="/campaigns/{{ c.id }}/reset" onsubmit="return confirm('Reset all leads and start from scratch?')" style="display:inline">
+                    <button class="btn btn-secondary btn-sm">Restart from Beginning</button>
+                </form>
+                <form method="post" action="/campaigns/{{ c.id }}/resend-failed" style="display:inline">
+                    <button class="btn btn-secondary btn-sm">Re-Send Failed</button>
+                </form>
+                <form method="post" action="/campaigns/{{ c.id }}/delete" onsubmit="return confirm('Delete campaign?')" style="display:inline">
+                    <button class="btn btn-danger btn-sm">Delete</button>
+                </form>
+            </div>
+            <div class="form-help" style="margin-bottom:16px">
+                Start resumes from where it left off. Failed mails are auto-retried by default (disable in <a href="/config" style="color:var(--accent)">Config</a>).
             </div>
 
-            <h3 style="font-size:14px;margin-bottom:8px">Pre-Flight</h3>
+            <h3 style="font-size:14px;margin-bottom:8px">Pre-Flight Checks</h3>
             <div class="btn-group" style="flex-wrap:wrap;margin-bottom:8px">
+                <button class="btn btn-secondary btn-sm"
+                        hx-post="/campaigns/{{ c.id }}/preflight"
+                        hx-target="#preflight-{{ c.id }}"
+                        hx-swap="innerHTML">Full Pre-Flight</button>
                 <button class="btn btn-secondary btn-sm"
                         hx-post="/campaigns/{{ c.id }}/test-send"
                         hx-target="#preflight-{{ c.id }}"
@@ -110,22 +117,11 @@
                         hx-target="#preflight-{{ c.id }}"
                         hx-swap="innerHTML">Check Proxy</button>
                 <button class="btn btn-secondary btn-sm"
-                        hx-post="/campaigns/{{ c.id }}/check-blacklist"
-                        hx-target="#preflight-{{ c.id }}"
-                        hx-swap="innerHTML">Blacklist</button>
-                <button class="btn btn-secondary btn-sm"
                         hx-post="/campaigns/{{ c.id }}/spam-check"
                         hx-target="#preflight-{{ c.id }}"
                         hx-swap="innerHTML">Spam Score</button>
-                <a href="/logos" class="btn btn-secondary btn-sm">Pre-Gen Logos</a>
-                <a href="/redirects" class="btn btn-secondary btn-sm">Pre-Gen Redirects</a>
             </div>
             <div id="preflight-{{ c.id }}"></div>
-            <div class="form-help" style="margin-top:8px">
-                Test recipients in <a href="/config" style="color:var(--accent)">Config</a>.
-                Proxy on <a href="/proxies" style="color:var(--accent)">Proxies</a> page.
-                MXToolbox key in <a href="/config" style="color:var(--accent)">Config</a>.
-            </div>
         </div>
     </div>
 </details>

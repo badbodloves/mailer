@@ -281,6 +281,42 @@ async def stop_campaign(request: Request, cid: int):
     return RedirectResponse("/campaigns", status_code=303)
 
 
+@router.post("/campaigns/{cid}/resend-failed")
+async def resend_failed(request: Request, cid: int):
+    """Reset failed leads to PENDING, then start campaign."""
+    db = request.app.state.db
+    camp = db.get_campaign(cid)
+    if not camp:
+        return RedirectResponse("/campaigns", status_code=303)
+    camp = dict(camp)
+    lead_list_id = camp.get("lead_list_id", 0)
+    if lead_list_id:
+        count = db._conn().execute(
+            "SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='FAILED'",
+            (lead_list_id,)).fetchone()[0]
+        if count > 0:
+            db._conn().execute(
+                "UPDATE trans_leads SET state='PENDING' WHERE list_id=? AND state='FAILED'",
+                (lead_list_id,))
+            db._conn().commit()
+            logger.info("Campaign %d: reset %d failed leads to PENDING", cid, count)
+    if cid not in _runners:
+        _speed[cid] = 0
+        def run():
+            try:
+                _run_campaign(db, cid)
+            except Exception as e:
+                logger.error("Campaign %d CRASHED: %s", cid, e, exc_info=True)
+                db.update_campaign(cid, status="FAILED")
+            finally:
+                _runners.pop(cid, None)
+                _speed.pop(cid, None)
+        t = threading.Thread(target=run, daemon=True)
+        _runners[cid] = t
+        t.start()
+    return RedirectResponse("/campaigns", status_code=303)
+
+
 @router.post("/campaigns/{cid}/test-send", response_class=HTMLResponse)
 async def test_send(request: Request, cid: int):
     """Send test email using real templates + macros + antifingerprint."""
@@ -544,26 +580,23 @@ async def campaigns_table(request: Request):
     uid = request.state.user['id']
     campaigns = [_enrich(db, dict(c)) for c in db.get_campaigns(uid)]
     html = f'<div class="card-header"><h3>Campaigns <span class="count">{len(campaigns)}</span></h3></div>'
-    html += '<table><thead><tr><th>Name</th><th>SMTP</th><th>Leads</th><th>Progress</th><th>Total</th><th>Sent</th><th>Failed</th><th>Speed</th><th></th></tr></thead><tbody>'
+    html += '<table><thead><tr><th>Name</th><th>SMTP</th><th>Leads</th><th>Progress</th><th>Total</th><th>Sent</th><th>Speed</th><th></th></tr></thead><tbody>'
     for c in campaigns:
         bg = ' style="background:var(--green-light)"' if c["running"] else ""
         speed = f'{c["speed"]:,}/h' if c["speed"] else "—"
         if c["running"]:
             btn = (f'<form method="post" action="/campaigns/{c["id"]}/stop" style="display:inline">'
-                   f'<button class="btn btn-danger btn-xs">Stop</button></form>')
-        elif c.get("status") == "PAUSED":
-            btn = (f'<form method="post" action="/campaigns/{c["id"]}/start" style="display:inline">'
-                   f'<button class="btn btn-success btn-xs">Resume</button></form>')
+                   f'<button class="btn btn-danger btn-xs">Pause</button></form>')
         else:
-            btn = '<span style="font-size:11px;color:var(--fg2)">Actions tab</span>'
+            btn = (f'<form method="post" action="/campaigns/{c["id"]}/start" style="display:inline">'
+                   f'<button class="btn btn-success btn-xs">Start</button></form>')
         html += (f'<tr{bg}><td style="font-weight:500">{c["name"]}</td>'
                  f'<td style="font-size:12px">{c["smtp_list_name"]}</td>'
                  f'<td style="font-size:12px">{c["lead_list_name"]}</td>'
                  f'<td style="min-width:100px"><div class="progress"><div class="progress-bar" style="width:{c["pct"]}%">{c["pct"]}%</div></div></td>'
                  f'<td>{c.get("total_leads",0) or 0:,}</td>'
                  f'<td style="color:var(--green)">{c.get("sent",0) or 0:,}</td>'
-                 f'<td style="color:var(--red)">{c.get("failed",0) or 0:,}</td>'
-                 f'<td>{speed}</td><td>{btn}</td></tr>')
+                 f'<td>{speed}</td><td style="white-space:nowrap">{btn}</td></tr>')
     html += '</tbody></table>'
     return HTMLResponse(html)
 
@@ -647,7 +680,10 @@ def _run_campaign(db, cid: int):
     db.reset_in_progress(lead_list_id)
     states = db.get_lead_states(lead_list_id)
     pending = states.get("PENDING", 0)
-    is_resume = camp.get("status") == "PAUSED"
+    failed_leads = states.get("FAILED", 0)
+    prev_status = camp.get("status", "DRAFT")
+    is_resume = prev_status in ("PAUSED", "FINISHED", "RUNNING")
+
     if pending == 0 and not is_resume:
         total = sum(states.values())
         if total > 0:
@@ -655,9 +691,17 @@ def _run_campaign(db, cid: int):
             db.reset_leads(lead_list_id)
             pending = total
     elif pending == 0 and is_resume:
-        logger.info("Campaign %d: resumed but 0 pending — all leads already processed", cid)
-        db.update_campaign(cid, status="FINISHED")
-        return
+        if failed_leads > 0 and cfg.get("auto_retry_failed", True):
+            logger.info("Campaign %d: resumed, retrying %d failed leads", cid, failed_leads)
+            db._conn().execute(
+                "UPDATE trans_leads SET state='PENDING' WHERE list_id=? AND state='FAILED'",
+                (lead_list_id,))
+            db._conn().commit()
+            pending = failed_leads
+        else:
+            logger.info("Campaign %d: resumed but 0 pending — all leads already processed", cid)
+            db.update_campaign(cid, status="FINISHED")
+            return
 
     smtps = [dict(s) for s in db.get_smtps(smtp_list_id)]
     if not smtps:
@@ -977,8 +1021,8 @@ def _run_campaign(db, cid: int):
                             db.mark_failed(lid, str(e)[:500])
                             failed += 1
 
-            # Retry failed leads once
-            if cid in _runners and not pool.all_dead:
+            # Retry failed leads once (if enabled)
+            if cid in _runners and not pool.all_dead and cfg.get("auto_retry_failed", True):
                 failed_count = db._conn().execute(
                     "SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='FAILED'",
                     (lead_list_id,)).fetchone()[0]

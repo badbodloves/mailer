@@ -39,6 +39,10 @@
                 <input type="checkbox" name="ignore_ssl_errors" {{ 'checked' if cfg.ignore_ssl_errors }} style="width:auto">
                 <span>Ignore SSL Errors</span>
             </label>
+            <label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer">
+                <input type="checkbox" name="auto_retry_failed" {{ 'checked' if cfg.get('auto_retry_failed', True) }} style="width:auto">
+                <span>Auto-Retry Failed Mails</span>
+            </label>
         </div>
         <div class="card">
             <h3>Test</h3>
