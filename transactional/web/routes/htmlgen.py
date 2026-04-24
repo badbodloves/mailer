@@ -328,8 +328,10 @@ async def builder_preview(request: Request,
         layout_html = layouts[0]["html"] if layouts else "<p>No layout</p>"
 
     generic_wrappers = _load_generic_wrappers()
+    import re as _re
 
-    resolved_blocks = []
+    assembled = {}
+    custom_blocks_html = []
     for entry in block_list:
         name = entry["name"]
         variant_id = entry.get("variant", "random")
@@ -344,8 +346,7 @@ async def builder_preview(request: Request,
                     break
             if not wrapper_html:
                 wrapper_html = '<p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#333;">{CONTENT}</p>'
-            block_html = wrapper_html.replace("{CONTENT}", "{" + ph_name + "}")
-            resolved_blocks.append({"name": "_custom", "html": block_html})
+            custom_blocks_html.append(wrapper_html.replace("{CONTENT}", "{" + ph_name + "}"))
             continue
 
         variants = block_variants.get(name, [])
@@ -361,26 +362,28 @@ async def builder_preview(request: Request,
         first_line = block_html.split("\n", 1)[0]
         if first_line.strip().startswith("<!--") and "tags:" in first_line.lower():
             block_html = block_html.split("\n", 1)[1] if "\n" in block_html else ""
-        resolved_blocks.append({"name": name, "html": block_html})
-
-    all_rows_html = ""
-    for rb in resolved_blocks:
-        all_rows_html += f'<tr><td style="padding:8px 40px 10px;">{rb["html"]}</td></tr>\n'
+        assembled[name] = block_html
 
     block_names_all = ["logo", "referenz", "satz", "hinweis", "frist", "link", "gruss", "footer"]
     result_html = layout_html
+
+    custom_insert = ""
+    if custom_blocks_html:
+        for ch in custom_blocks_html:
+            custom_insert += f'<tr><td style="padding:4px 40px 10px;">{ch}</td></tr>\n'
+
     for bname in block_names_all:
         placeholder = "{BLOCK_" + bname.upper() + "}"
-        result_html = result_html.replace(placeholder, "")
-
-    last_table = result_html.rfind("</table>")
-    if last_table > 0:
-        second_last = result_html.rfind("</table>", 0, last_table)
-        if second_last > 0:
-            insert_pos = second_last
+        content = assembled.get(bname, "")
+        if bname == "gruss" and custom_insert:
+            content = custom_insert + content
+        if content:
+            result_html = result_html.replace(placeholder, content)
         else:
-            insert_pos = last_table
-        result_html = result_html[:insert_pos] + all_rows_html + result_html[insert_pos:]
+            result_html = _re.sub(
+                r'<tr>\s*<td[^>]*>\s*' + _re.escape(placeholder) + r'\s*</td>\s*</tr>',
+                '', result_html)
+            result_html = result_html.replace(placeholder, "")
 
     pc = primary_color.strip() or "#005eb8"
     ac = accent_color.strip() or "#c0392b"
