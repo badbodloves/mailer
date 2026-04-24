@@ -22,8 +22,8 @@ def _enrich(db, cd):
     total = cd.get("total_leads", 0) or 0
     sent = cd.get("sent", 0) or 0
     failed = cd.get("failed", 0) or 0
-    cd["pct"] = int((sent + failed) / total * 100) if total > 0 else 0
-    cd["remaining"] = max(0, total - sent - failed)
+    cd["pct"] = int(sent / total * 100) if total > 0 else 0
+    cd["remaining"] = max(0, total - sent)
     try:
         sl = db._conn().execute("SELECT name FROM trans_smtp_lists WHERE id=?",
                                  (cd.get("smtp_list_id", 0),)).fetchone()
@@ -537,8 +537,8 @@ async def campaign_stats(request: Request, cid: int):
     total = cd.get("total_leads", 0) or 0
     sent = cd.get("sent", 0) or 0
     failed = cd.get("failed", 0) or 0
-    remaining = max(0, total - sent - failed)
-    pct = int((sent + failed) / total * 100) if total > 0 else 0
+    remaining = max(0, total - sent)
+    pct = int(sent / total * 100) if total > 0 else 0
     running = cid in _runners
     speed = _speed.get(cid, 0)
     speed_str = f"{speed:,}/h" if speed else "—"
