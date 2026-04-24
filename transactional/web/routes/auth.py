@@ -83,6 +83,47 @@ def check_permission(user: dict, path: str) -> bool:
     return True
 
 
+import time as _time
+import threading
+
+# Rate limiting: track failed attempts per IP
+_login_attempts = {}  # ip -> [timestamps]
+_login_lock = threading.Lock()
+_MAX_ATTEMPTS = 5
+_WINDOW = 300  # 5 minutes
+_LOCKOUT = 900  # 15 minutes
+
+
+def _check_rate_limit(ip: str) -> tuple:
+    """Returns (allowed: bool, wait_seconds: int)."""
+    now = _time.time()
+    with _login_lock:
+        if ip not in _login_attempts:
+            _login_attempts[ip] = []
+        # Clean old entries
+        _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < _LOCKOUT]
+        attempts = _login_attempts[ip]
+        # Count recent failures in window
+        recent = [t for t in attempts if now - t < _WINDOW]
+        if len(recent) >= _MAX_ATTEMPTS:
+            wait = int(_LOCKOUT - (now - attempts[-_MAX_ATTEMPTS]))
+            return False, max(0, wait)
+        return True, 0
+
+
+def _record_failed(ip: str):
+    now = _time.time()
+    with _login_lock:
+        if ip not in _login_attempts:
+            _login_attempts[ip] = []
+        _login_attempts[ip].append(now)
+
+
+def _clear_attempts(ip: str):
+    with _login_lock:
+        _login_attempts.pop(ip, None)
+
+
 @router.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     db = request.app.state.db
@@ -94,11 +135,31 @@ async def login_page(request: Request):
 
 @router.post("/login")
 async def login_submit(request: Request, username: str = Form(""), password: str = Form("")):
+    ip = request.client.host if request.client else "unknown"
+
+    # Rate limit check
+    allowed, wait = _check_rate_limit(ip)
+    if not allowed:
+        return request.app.state.templates.TemplateResponse(
+            request, "login.html", {
+                "error": f"Too many failed attempts. Try again in {wait // 60} min {wait % 60}s.",
+                "app_cfg": request.app.state.db.get_app_config()})
+
     db = request.app.state.db
     user = db.get_user(username.strip())
     if not user or not verify_password(password, user["password_hash"]):
+        _record_failed(ip)
+        remaining = _MAX_ATTEMPTS - len([t for t in _login_attempts.get(ip, []) if _time.time() - t < _WINDOW])
+        error = "Invalid credentials."
+        if remaining <= 2:
+            error += f" {remaining} attempt(s) remaining."
         return request.app.state.templates.TemplateResponse(
-            request, "login.html", {"error": "Invalid credentials."})
+            request, "login.html", {"error": error, "app_cfg": db.get_app_config()})
+    if not user.get("is_active", 1):
+        _record_failed(ip)
+        return request.app.state.templates.TemplateResponse(
+            request, "login.html", {"error": "Account disabled.", "app_cfg": db.get_app_config()})
+    _clear_attempts(ip)
     token = create_session_token(user["id"])
     resp = RedirectResponse("/", status_code=303)
     resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_MAX_AGE, httponly=True, samesite="lax")

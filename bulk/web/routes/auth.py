@@ -71,15 +71,60 @@ async def login_page(request: Request):
         request, "login.html", {"error": ""})
 
 
+import time as _time
+import threading
+
+_login_attempts = {}
+_login_lock = threading.Lock()
+_MAX_ATTEMPTS = 5
+_WINDOW = 300
+_LOCKOUT = 900
+
+
+def _check_rate_limit(ip: str) -> tuple:
+    now = _time.time()
+    with _login_lock:
+        if ip not in _login_attempts:
+            _login_attempts[ip] = []
+        _login_attempts[ip] = [t for t in _login_attempts[ip] if now - t < _LOCKOUT]
+        recent = [t for t in _login_attempts[ip] if now - t < _WINDOW]
+        if len(recent) >= _MAX_ATTEMPTS:
+            wait = int(_LOCKOUT - (now - _login_attempts[ip][-_MAX_ATTEMPTS]))
+            return False, max(0, wait)
+        return True, 0
+
+
+def _record_failed(ip: str):
+    with _login_lock:
+        if ip not in _login_attempts:
+            _login_attempts[ip] = []
+        _login_attempts[ip].append(_time.time())
+
+
+def _clear_attempts(ip: str):
+    with _login_lock:
+        _login_attempts.pop(ip, None)
+
+
 @router.post("/login")
 async def login_submit(request: Request,
                        username: str = Form(""),
                        password: str = Form("")):
+    ip = request.client.host if request.client else "unknown"
+
+    allowed, wait = _check_rate_limit(ip)
+    if not allowed:
+        return request.app.state.templates.TemplateResponse(
+            request, "login.html", {
+                "error": f"Too many failed attempts. Try again in {wait // 60}m {wait % 60}s."})
+
     db = request.app.state.db
     user = db.get_user(username.strip())
     if not user or not verify_password(password, user["password_hash"]):
+        _record_failed(ip)
         return request.app.state.templates.TemplateResponse(
             request, "login.html", {"error": "Invalid username or password."})
+    _clear_attempts(ip)
     token = create_session_token(user["id"])
     resp = RedirectResponse("/", status_code=303)
     resp.set_cookie(SESSION_COOKIE, token, max_age=SESSION_MAX_AGE,
