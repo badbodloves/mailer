@@ -630,6 +630,7 @@ def _run_campaign(db, cid: int):
 
     db.update_campaign(cid, status="RUNNING", started_at=datetime.now().isoformat())
 
+    uid = camp.get("user_id", 0)
     lead_list_id = camp.get("lead_list_id", 0)
     smtp_list_id = camp.get("smtp_list_id", 0)
 
@@ -731,8 +732,6 @@ def _run_campaign(db, cid: int):
         redirect_rotate = cfg.get("redirect_rotate_every", 10) or 10
         mime_profile_mode = cfg.get("mime_profile", "default")
 
-        # Get user_id for bounce logging
-        camp_user_id = camp.get("user_id", 0)
 
         def _classify_error(error_str: str, code: int = 0) -> str:
             e = error_str.lower()
@@ -756,7 +755,7 @@ def _run_campaign(db, cid: int):
             etype = _classify_error(error_str, code)
             profile = mime_profile_mode if mime_profile_mode != "rotate" else "rotated"
             db.log_bounce(campaign_id, lead_id, email, code, etype,
-                          error_str[:500], profile, smtp_host, smtp_user, camp_user_id)
+                          error_str[:500], profile, smtp_host, smtp_user, uid)
 
         thread_count = min(cfg.get("threads", 40), pool.size * 2, 200)
         thread_count = max(thread_count, 1)
