@@ -15,7 +15,7 @@ from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from .db import TransDB
-from .routes import campaigns, smtps, leads, templates, auth, logos, redirects, macros, proxies, pools, config as config_route, settings, ai, admin, testlab, bounces
+from .routes import campaigns, smtps, leads, templates, auth, logos, redirects, macros, proxies, pools, config as config_route, settings, ai, admin, testlab, bounces, htmlgen
 
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 db = TransDB(os.path.join(_project_root, "trans.db"))
@@ -95,6 +95,7 @@ app.include_router(settings.router)
 app.include_router(testlab.router)
 app.include_router(bounces.router)
 app.include_router(admin.router)
+app.include_router(htmlgen.router)
 
 
 @app.get("/")

@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block title %} — HTML Generator{% endblock %}
+{% block content %}
+<div class="page-header"><h1>HTML Content Engine</h1></div>
+
+<div class="card">
+    <div class="card-header"><h3>Generate Templates</h3></div>
+    <div style="padding:16px">
+        <form>
+            <div class="grid-2">
+                <div>
+                    <label>Number of templates</label>
+                    <input name="count" type="number" value="50" min="1" max="5000">
+
+                    <label>Layout</label>
+                    <select name="layout">
+                        <option value="random">Random (all layouts)</option>
+                        {% for l in layout_names %}
+                        <option value="{{ l }}">{{ l }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
+                <div>
+                    <label>Primary Color (leave empty = pool)</label>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <input name="primary_color" type="color" value="#005eb8" style="width:50px;height:34px;padding:2px;cursor:pointer">
+                        <input name="primary_color_hex" value="" placeholder="#005eb8" style="flex:1"
+                               oninput="this.form.primary_color.value=this.value">
+                    </div>
+                    <div class="form-help">Leave hex empty to use color pool from config.</div>
+
+                    <label>Accent Color (warnings/deadlines)</label>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <input name="accent_color" type="color" value="#c0392b" style="width:50px;height:34px;padding:2px;cursor:pointer">
+                        <input name="accent_color_hex" value="" placeholder="#c0392b" style="flex:1"
+                               oninput="this.form.accent_color.value=this.value">
+                    </div>
+                </div>
+            </div>
+
+            <div class="btn-group" style="margin-top:16px;flex-wrap:wrap">
+                <button type="button" class="btn btn-primary btn-sm"
+                        hx-post="/htmlgen/generate"
+                        hx-target="#gen-result"
+                        hx-swap="innerHTML"
+                        hx-include="closest form">Generate</button>
+                <button type="button" class="btn btn-secondary btn-sm"
+                        hx-post="/htmlgen/preview"
+                        hx-target="#preview-result"
+                        hx-swap="innerHTML"
+                        hx-include="closest form">Preview One</button>
+            </div>
+        </form>
+        <div id="gen-result" style="margin-top:12px"></div>
+    </div>
+</div>
+
+<div id="preview-result" style="margin-top:16px"></div>
+
+<details>
+    <summary>Available Blocks <span style="margin-left:8px;color:var(--fg2);font-size:13px">({{ blocks_info|sum(attribute='count') }} variants total)</span></summary>
+    <div class="details-body" style="padding-top:16px">
+        <table>
+            <thead><tr><th>Block</th><th>Variants</th><th>Enabled</th></tr></thead>
+            <tbody>
+            {% for b in blocks_info %}
+            <tr>
+                <td style="font-weight:500">{{ b.name }}</td>
+                <td>{{ b.count }}</td>
+                <td>{% if b.enabled %}<span style="color:var(--green)">Yes</span>{% else %}<span style="color:var(--red)">No</span>{% endif %}</td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        <div class="form-help" style="margin-top:8px">
+            Edit blocks in <code>htmlgen/blocks/</code>. Edit config in <code>htmlgen/config.yaml</code>.
+        </div>
+    </div>
+</details>
+
+{% if generated %}
+<details open>
+    <summary>Generated Templates <span style="margin-left:8px;color:var(--fg2);font-size:13px">({{ generated|length }})</span></summary>
+    <div class="details-body" style="padding-top:16px">
+        <div class="btn-group" style="margin-bottom:16px;flex-wrap:wrap">
+            <form method="post" action="/htmlgen/export" style="display:inline">
+                <button class="btn btn-primary btn-sm">Export ZIP</button>
+            </form>
+            <button class="btn btn-success btn-sm"
+                    hx-post="/htmlgen/load-to-mailer"
+                    hx-target="#load-result"
+                    hx-swap="innerHTML">Load into Mailer</button>
+            <form method="post" action="/htmlgen/clear" onsubmit="return confirm('Delete all generated templates?')" style="display:inline">
+                <button class="btn btn-danger btn-sm">Clear All</button>
+            </form>
+        </div>
+        <div id="load-result" style="margin-bottom:12px"></div>
+
+        <table>
+            <thead><tr><th>#</th><th>Name</th><th>Size</th><th></th></tr></thead>
+            <tbody>
+            {% for t in generated %}
+            <tr>
+                <td>{{ loop.index }}</td>
+                <td style="font-size:13px">{{ t.name }}</td>
+                <td style="font-size:12px;color:var(--fg2)">{{ (t.html|length / 1024)|round(1) }} KB</td>
+                <td>
+                    <button class="btn btn-secondary btn-xs"
+                            onclick="let d=document.getElementById('tpl-preview-{{ loop.index }}');d.style.display=d.style.display==='none'?'block':'none'">
+                        Preview
+                    </button>
+                </td>
+            </tr>
+            <tr id="tpl-preview-{{ loop.index }}" style="display:none">
+                <td colspan="4" style="padding:0">
+                    <iframe srcdoc="{{ t.html|e }}" style="width:100%;height:500px;border:1px solid var(--border);border-radius:4px"></iframe>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </div>
+</details>
+{% endif %}
+{% endblock %}
