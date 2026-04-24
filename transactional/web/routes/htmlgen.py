@@ -310,6 +310,7 @@ async def builder_preview(request: Request,
                            accent_color: str = Form("#c0392b"),
                            blocks: str = Form("[]")):
     import random
+    import re as _re
     from htmlgen.engine import _load_all
     from htmlgen.colors import lighten_color
     from htmlgen.placeholders import resolve_engine_placeholders
@@ -326,10 +327,9 @@ async def builder_preview(request: Request,
         layout_html = layouts[0]["html"] if layouts else "<p>No layout</p>"
 
     generic_wrappers = _load_generic_wrappers()
-    import re as _re
 
-    assembled = {}
-    custom_blocks_html = []
+    # Build all rows in stack order
+    content_rows = ""
     for entry in block_list:
         name = entry["name"]
         variant_id = entry.get("variant", "random")
@@ -344,43 +344,35 @@ async def builder_preview(request: Request,
                     break
             if not wrapper_html:
                 wrapper_html = '<p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#333;">{CONTENT}</p>'
-            custom_blocks_html.append(wrapper_html.replace("{CONTENT}", "{" + ph_name + "}"))
-            continue
-
-        variants = block_variants.get(name, [])
-        if not variants:
-            continue
-
-        if variant_id == "random":
-            chosen = random.choice(variants)
+            block_html = wrapper_html.replace("{CONTENT}", "{" + ph_name + "}")
         else:
-            chosen = next((v for v in variants if v["variant"] == variant_id), random.choice(variants))
+            variants = block_variants.get(name, [])
+            if not variants:
+                continue
+            if variant_id == "random":
+                chosen = random.choice(variants)
+            else:
+                chosen = next((v for v in variants if v["variant"] == variant_id), random.choice(variants))
+            block_html = chosen["html"]
+            first_line = block_html.split("\n", 1)[0]
+            if first_line.strip().startswith("<!--") and "tags:" in first_line.lower():
+                block_html = block_html.split("\n", 1)[1] if "\n" in block_html else ""
 
-        block_html = chosen["html"]
-        first_line = block_html.split("\n", 1)[0]
-        if first_line.strip().startswith("<!--") and "tags:" in first_line.lower():
-            block_html = block_html.split("\n", 1)[1] if "\n" in block_html else ""
-        assembled[name] = block_html
+        content_rows += f'<tr><td style="padding:6px 40px 10px;">{block_html}</td></tr>\n'
 
-    block_names_all = ["logo", "referenz", "satz", "hinweis", "frist", "link", "gruss", "footer"]
-    result_html = layout_html
+    # Strip all {BLOCK_*} rows from layout, insert our rows
+    result_html = _re.sub(
+        r'<tr>\s*<td[^>]*>\s*\{BLOCK_\w+\}\s*</td>\s*</tr>\s*',
+        '', layout_html)
+    # Also clean any remaining {BLOCK_*} (e.g. in nested tables like ref-in-header)
+    result_html = _re.sub(r'\{BLOCK_\w+\}', '', result_html)
 
-    custom_divs = ""
-    for ch in custom_blocks_html:
-        custom_divs += f'<div style="margin-bottom:10px;padding:8px 12px;background:#fffde7;border-left:3px solid #f9a825;border-radius:2px">{ch}</div>'
-
-    for bname in block_names_all:
-        placeholder = "{BLOCK_" + bname.upper() + "}"
-        content = assembled.get(bname, "")
-        if bname == "gruss" and custom_divs:
-            content = custom_divs + content
-        if content:
-            result_html = result_html.replace(placeholder, content)
-        else:
-            result_html = _re.sub(
-                r'<tr>\s*<td[^>]*>\s*' + _re.escape(placeholder) + r'\s*</td>\s*</tr>',
-                '', result_html)
-            result_html = result_html.replace(placeholder, "")
+    # Insert content rows before the inner </table>
+    last_table = result_html.rfind("</table>")
+    if last_table > 0:
+        second_last = result_html.rfind("</table>", 0, last_table)
+        insert_pos = second_last if second_last > 0 else last_table
+        result_html = result_html[:insert_pos] + content_rows + result_html[insert_pos:]
 
     pc = primary_color.strip() or "#005eb8"
     ac = accent_color.strip() or "#c0392b"
