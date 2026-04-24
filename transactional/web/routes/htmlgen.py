@@ -1,5 +1,6 @@
 """HTML Content Engine — generate randomized email templates from modular blocks."""
 import os
+import json
 import threading
 import logging
 from pathlib import Path
@@ -213,3 +214,160 @@ async def clear_templates(request: Request):
     if _OUTPUT_DIR.is_dir():
         shutil.rmtree(_OUTPUT_DIR)
     return RedirectResponse("/htmlgen", status_code=303)
+
+
+# --- Preview placeholder samples ---
+_PREVIEW_PLACEHOLDERS = {
+    "{Logo}": "Muster GmbH",
+    "{Satz1}": "Sehr geehrte Damen und Herren, hiermit informieren wir Sie über eine wichtige Aktualisierung Ihres Kontos.",
+    "{Satz2}": "Bitte überprüfen Sie die nachfolgenden Informationen und bestätigen Sie Ihre Daten.",
+    "{Hinweis}": "Dieser Vorgang ist aus sicherheitstechnischen Gründen erforderlich und muss innerhalb der angegebenen Frist abgeschlossen werden.",
+    "{FristText1}": "Frist: 15. Mai 2026",
+    "{FristText2}": "Nach Ablauf dieser Frist wird Ihr Zugang vorübergehend eingeschränkt.",
+    "{RedirectLink}": "#",
+    "{Link}": "Jetzt bestätigen",
+    "{Ende}": "Max Mustermann\nKundenservice",
+    "{Footer1}": "Muster GmbH · Musterstraße 1 · 10115 Berlin",
+    "{Footer2}": "Diese E-Mail wurde automatisch generiert. Bitte antworten Sie nicht auf diese Nachricht.",
+}
+
+
+# --- Builder ---
+
+@router.get("/htmlgen/builder", response_class=HTMLResponse)
+async def builder_page(request: Request):
+    from htmlgen.engine import _load_all, BLOCK_NAMES
+
+    block_variants, layouts = _load_all(_HTMLGEN_BASE)
+
+    all_blocks = {}
+    for name in BLOCK_NAMES:
+        variants = block_variants.get(name, [])
+        all_blocks[name] = [
+            {"variant": v["variant"], "tags": sorted(v["tags"])}
+            for v in variants
+        ]
+
+    layout_names = [l["name"] for l in layouts]
+
+    return request.app.state.templates.TemplateResponse(request, "htmlgen_builder.html", {
+        "active": "htmlgen",
+        "all_blocks": all_blocks,
+        "all_blocks_json": json.dumps(all_blocks, ensure_ascii=False),
+        "layout_names": layout_names,
+    })
+
+
+@router.post("/htmlgen/builder/preview", response_class=HTMLResponse)
+async def builder_preview(request: Request,
+                           layout: str = Form("card"),
+                           primary_color: str = Form("#005eb8"),
+                           accent_color: str = Form("#c0392b"),
+                           blocks: str = Form("[]")):
+    import random
+    from htmlgen.engine import _load_all
+    from htmlgen.colors import lighten_color
+    from htmlgen.placeholders import resolve_engine_placeholders
+
+    block_list = json.loads(blocks)
+    block_variants, layouts = _load_all(_HTMLGEN_BASE)
+
+    layout_html = None
+    for l in layouts:
+        if l["name"] == layout:
+            layout_html = l["html"]
+            break
+    if not layout_html:
+        layout_html = layouts[0]["html"] if layouts else "<p>No layout</p>"
+
+    assembled = {}
+    for entry in block_list:
+        name = entry["name"]
+        variant_id = entry.get("variant", "random")
+        variants = block_variants.get(name, [])
+        if not variants:
+            continue
+
+        if variant_id == "random":
+            chosen = random.choice(variants)
+        else:
+            chosen = next((v for v in variants if v["variant"] == variant_id), random.choice(variants))
+
+        block_html = chosen["html"]
+        first_line = block_html.split("\n", 1)[0]
+        if first_line.strip().startswith("<!--") and "tags:" in first_line.lower():
+            block_html = block_html.split("\n", 1)[1] if "\n" in block_html else ""
+        assembled[name] = block_html
+
+    block_names_all = ["logo", "referenz", "satz", "hinweis", "frist", "link", "gruss", "footer"]
+    result_html = layout_html
+    for bname in block_names_all:
+        placeholder = "{BLOCK_" + bname.upper() + "}"
+        result_html = result_html.replace(placeholder, assembled.get(bname, ""))
+
+    pc = primary_color.strip() or "#005eb8"
+    ac = accent_color.strip() or "#c0392b"
+    light_bg = lighten_color(pc, 0.85)
+
+    cfg = {
+        "colors": {
+            "primary": [pc], "accent": [ac],
+            "light_accent_bg": [light_bg],
+            "footer_bg": ["#2c3e50"], "footer_text": ["#cccccc"],
+        },
+        "fonts": ["Arial, Helvetica, sans-serif"],
+    }
+    result_html = resolve_engine_placeholders(result_html, cfg)
+
+    for placeholder, sample in _PREVIEW_PLACEHOLDERS.items():
+        result_html = result_html.replace(placeholder, sample)
+
+    import re
+    result_html = re.sub(r"\[RANDSTR:\d+:[a-zA-Z0-9\-]+:\w+\]", "XK7BM2", result_html)
+
+    return HTMLResponse(result_html)
+
+
+@router.post("/htmlgen/builder/save", response_class=HTMLResponse)
+async def builder_save(request: Request):
+    form = await request.form()
+    layout_name = form.get("layout_name", "").strip()
+    layout_base = form.get("layout_base", "card")
+    blocks_json = form.get("blocks", "[]")
+
+    if not layout_name:
+        return HTMLResponse('<div class="alert alert-warning">Enter a layout name.</div>')
+
+    safe_name = "".join(c if c.isalnum() or c in "-_" else "-" for c in layout_name.lower())
+    if not safe_name:
+        return HTMLResponse('<div class="alert alert-warning">Invalid name.</div>')
+
+    from htmlgen.engine import _load_all
+
+    block_list = json.loads(blocks_json)
+    block_variants, layouts = _load_all(_HTMLGEN_BASE)
+
+    base_layout = None
+    for l in layouts:
+        if l["name"] == layout_base:
+            base_layout = l["html"]
+            break
+    if not base_layout:
+        return HTMLResponse('<div class="alert alert-danger">Base layout not found.</div>')
+
+    block_names_all = ["logo", "referenz", "satz", "hinweis", "frist", "link", "gruss", "footer"]
+    chosen_names = [entry["name"] for entry in block_list]
+
+    custom_html = base_layout
+    for bname in block_names_all:
+        placeholder = "{BLOCK_" + bname.upper() + "}"
+        if bname not in chosen_names:
+            custom_html = custom_html.replace(placeholder, "")
+
+    out_path = _HTMLGEN_BASE / "layouts" / f"{safe_name}.html"
+    out_path.write_text(custom_html, encoding="utf-8")
+
+    return HTMLResponse(
+        f'<div class="alert alert-success">Layout saved as <code>{safe_name}.html</code>. '
+        f'Use it in <a href="/htmlgen" style="color:var(--accent)">HTML Engine</a> to generate templates.</div>'
+    )
