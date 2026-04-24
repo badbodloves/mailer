@@ -46,6 +46,7 @@ async def delete_macro(request: Request, mid: int):
 async def import_files(request: Request, files: TList[UploadFile] = File(...)):
     """Import .txt files as macros. Filename (without ext) = macro name."""
     db = request.app.state.db
+    uid = request.state.user['id']
     added = 0
     for f in files:
         if not f.filename:
