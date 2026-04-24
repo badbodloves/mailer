@@ -251,6 +251,7 @@ async def builder_page(request: Request):
     layout_names = [l["name"] for l in layouts]
 
     custom_placeholders = _get_custom_placeholders(request)
+    generic_wrappers = _load_generic_wrappers()
 
     return request.app.state.templates.TemplateResponse(request, "htmlgen_builder.html", {
         "active": "htmlgen",
@@ -259,6 +260,8 @@ async def builder_page(request: Request):
         "layout_names": layout_names,
         "custom_placeholders": custom_placeholders,
         "custom_placeholders_json": json.dumps(custom_placeholders, ensure_ascii=False),
+        "generic_wrappers": generic_wrappers,
+        "generic_wrappers_json": json.dumps(generic_wrappers, ensure_ascii=False),
     })
 
 
@@ -287,6 +290,21 @@ def _get_custom_placeholders(request) -> list[dict]:
     return placeholders
 
 
+def _load_generic_wrappers() -> list[dict]:
+    """Load generic wrapper block templates from blocks/_generic/."""
+    generic_dir = _HTMLGEN_BASE / "blocks" / "_generic"
+    if not generic_dir.is_dir():
+        return []
+    wrappers = []
+    for f in sorted(generic_dir.glob("*.html")):
+        content = f.read_text(encoding="utf-8")
+        first_line = content.split("\n", 1)[0]
+        if first_line.strip().startswith("<!--") and "tags:" in first_line.lower():
+            content = content.split("\n", 1)[1] if "\n" in content else ""
+        wrappers.append({"name": f.stem, "html": content.strip()})
+    return wrappers
+
+
 @router.post("/htmlgen/builder/preview", response_class=HTMLResponse)
 async def builder_preview(request: Request,
                            layout: str = Form("card"),
@@ -309,17 +327,25 @@ async def builder_preview(request: Request,
     if not layout_html:
         layout_html = layouts[0]["html"] if layouts else "<p>No layout</p>"
 
-    assembled = {}
-    custom_blocks_html = []
+    generic_wrappers = _load_generic_wrappers()
+
+    resolved_blocks = []
     for entry in block_list:
         name = entry["name"]
         variant_id = entry.get("variant", "random")
 
-        if variant_id == "custom" or name not in block_variants:
+        if entry.get("custom") or name not in block_variants:
             ph_name = entry.get("placeholder", name)
-            custom_blocks_html.append(
-                f'<p style="margin:0;font-size:14px;color:#333;font-family:Arial,sans-serif;">{{{ph_name}}}</p>'
-            )
+            wrapper_name = entry.get("wrapper", "plain")
+            wrapper_html = None
+            for w in generic_wrappers:
+                if w["name"] == wrapper_name:
+                    wrapper_html = w["html"]
+                    break
+            if not wrapper_html:
+                wrapper_html = '<p style="margin:0;font-family:Arial,sans-serif;font-size:14px;color:#333;">{CONTENT}</p>'
+            block_html = wrapper_html.replace("{CONTENT}", "{" + ph_name + "}")
+            resolved_blocks.append({"name": "_custom", "html": block_html})
             continue
 
         variants = block_variants.get(name, [])
@@ -335,23 +361,26 @@ async def builder_preview(request: Request,
         first_line = block_html.split("\n", 1)[0]
         if first_line.strip().startswith("<!--") and "tags:" in first_line.lower():
             block_html = block_html.split("\n", 1)[1] if "\n" in block_html else ""
-        assembled[name] = block_html
+        resolved_blocks.append({"name": name, "html": block_html})
+
+    all_rows_html = ""
+    for rb in resolved_blocks:
+        all_rows_html += f'<tr><td style="padding:8px 40px 10px;">{rb["html"]}</td></tr>\n'
 
     block_names_all = ["logo", "referenz", "satz", "hinweis", "frist", "link", "gruss", "footer"]
     result_html = layout_html
     for bname in block_names_all:
         placeholder = "{BLOCK_" + bname.upper() + "}"
-        result_html = result_html.replace(placeholder, assembled.get(bname, ""))
+        result_html = result_html.replace(placeholder, "")
 
-    if custom_blocks_html:
-        custom_rows = ""
-        for ch in custom_blocks_html:
-            custom_rows += f'<tr><td style="padding:4px 40px 10px;">{ch}</td></tr>'
-        gruss_content = assembled.get("gruss", "")
-        if gruss_content:
-            result_html = result_html.replace(gruss_content, custom_rows + gruss_content)
+    last_table = result_html.rfind("</table>")
+    if last_table > 0:
+        second_last = result_html.rfind("</table>", 0, last_table)
+        if second_last > 0:
+            insert_pos = second_last
         else:
-            result_html = result_html.replace("</table>", custom_rows + "</table>", 1)
+            insert_pos = last_table
+        result_html = result_html[:insert_pos] + all_rows_html + result_html[insert_pos:]
 
     pc = primary_color.strip() or "#005eb8"
     ac = accent_color.strip() or "#c0392b"
