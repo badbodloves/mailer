@@ -3,64 +3,58 @@
 {% block content %}
 <div class="page-header"><h1>HTML Builder</h1></div>
 
-<div style="display:grid;grid-template-columns:220px 1fr 1fr;gap:16px;align-items:start">
+<div style="display:grid;grid-template-columns:340px 1fr;gap:16px;align-items:start">
 
-    <!-- LEFT: Block palette -->
-    <div class="card" style="position:sticky;top:16px">
-        <div class="card-header"><h3>Blocks</h3></div>
-        <div style="padding:8px">
-            {% for name, variants in all_blocks.items() %}
-            <button class="btn btn-secondary btn-xs" style="width:100%;margin-bottom:4px;text-align:left"
-                    onclick="addBlock('{{ name }}')">
-                + {{ name|capitalize }} <span style="color:var(--fg2);font-size:10px">({{ variants|length }})</span>
-            </button>
-            {% endfor %}
-            {% if custom_placeholders %}
-            <div style="border-top:1px solid var(--border);margin:8px 0 4px;padding-top:6px">
-                <span style="font-size:11px;color:var(--fg2);font-weight:500">Macros</span>
+    <!-- LEFT: Block palette + Stack -->
+    <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="card">
+            <div class="card-header"><h3>Blocks</h3></div>
+            <div style="padding:8px;display:flex;flex-wrap:wrap;gap:4px">
+                {% for name, variants in all_blocks.items() %}
+                <button class="btn btn-secondary btn-xs" style="text-align:left"
+                        onclick="addBlock('{{ name }}')">
+                    + {{ name|capitalize }} <span style="color:var(--fg2);font-size:10px">({{ variants|length }})</span>
+                </button>
+                {% endfor %}
+                {% if custom_placeholders %}
+                {% for cp in custom_placeholders %}
+                <button class="btn btn-xs" style="text-align:left;background:var(--accent);color:#fff;border-color:var(--accent)"
+                        onclick="addCustomBlock('{{ cp.name }}')">
+                    + {{ '{' }}{{ cp.name }}{{ '}' }}
+                </button>
+                {% endfor %}
+                {% endif %}
             </div>
-            {% for cp in custom_placeholders %}
-            <button class="btn btn-xs" style="width:100%;margin-bottom:4px;text-align:left;background:var(--accent);color:#fff;border-color:var(--accent)"
-                    onclick="addCustomBlock('{{ cp.name }}')">
-                + {{ '{' }}{{ cp.name }}{{ '}' }} <span style="opacity:0.7;font-size:10px">{{ cp.source }}</span>
-            </button>
-            {% endfor %}
-            {% endif %}
         </div>
-    </div>
 
-    <!-- MIDDLE: Current layout stack -->
-    <div class="card">
-        <div class="card-header">
-            <h3>Layout Stack</h3>
-        </div>
-        <div style="padding:12px">
-            <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
-                <select id="base-layout" style="flex:1" onchange="updatePreview()">
-                    {% for l in layout_names %}
-                    <option value="{{ l }}" {{ 'selected' if l == 'card' }}>{{ l }}</option>
-                    {% endfor %}
-                </select>
-                <input type="color" id="pc-color" value="#005eb8" style="width:40px;height:34px;padding:2px;cursor:pointer" onchange="updatePreview()">
-                <input type="color" id="ac-color" value="#c0392b" style="width:40px;height:34px;padding:2px;cursor:pointer" onchange="updatePreview()">
-            </div>
-
-            <div id="block-stack" style="min-height:100px">
-                <!-- Default blocks -->
-            </div>
-
-            <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
-                <button class="btn btn-primary btn-sm" onclick="updatePreview()">Refresh Preview</button>
-                <button class="btn btn-secondary btn-sm" onclick="loadDefault()">Reset Default</button>
-            </div>
-
-            <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:12px">
-                <label>Save as Layout</label>
-                <div style="display:flex;gap:8px">
-                    <input id="save-name" placeholder="custom-name" style="flex:1">
-                    <button class="btn btn-success btn-sm" onclick="saveLayout()">Save</button>
+        <div class="card">
+            <div class="card-header"><h3>Layout Stack</h3></div>
+            <div style="padding:12px">
+                <div style="display:flex;gap:8px;margin-bottom:12px;flex-wrap:wrap">
+                    <select id="base-layout" style="flex:1" onchange="updatePreview()">
+                        {% for l in layout_names %}
+                        <option value="{{ l }}" {{ 'selected' if l == 'card' }}>{{ l }}</option>
+                        {% endfor %}
+                    </select>
+                    <input type="color" id="pc-color" value="#005eb8" style="width:40px;height:34px;padding:2px;cursor:pointer" onchange="updatePreview()">
+                    <input type="color" id="ac-color" value="#c0392b" style="width:40px;height:34px;padding:2px;cursor:pointer" onchange="updatePreview()">
                 </div>
-                <div id="save-result" style="margin-top:8px"></div>
+
+                <div id="block-stack" style="min-height:60px"></div>
+
+                <div style="margin-top:12px;display:flex;gap:8px;flex-wrap:wrap">
+                    <button class="btn btn-primary btn-sm" onclick="updatePreview()">Refresh</button>
+                    <button class="btn btn-secondary btn-sm" onclick="loadDefault()">Reset</button>
+                </div>
+
+                <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:12px">
+                    <label>Save as Layout</label>
+                    <div style="display:flex;gap:8px">
+                        <input id="save-name" placeholder="custom-name" style="flex:1">
+                        <button class="btn btn-success btn-sm" onclick="saveLayout()">Save</button>
+                    </div>
+                    <div id="save-result" style="margin-top:8px"></div>
+                </div>
             </div>
         </div>
     </div>
@@ -68,8 +62,8 @@
     <!-- RIGHT: Live preview -->
     <div class="card" style="position:sticky;top:16px">
         <div class="card-header"><h3>Preview</h3></div>
-        <div id="preview-container" style="padding:0">
-            <iframe id="preview-frame" srcdoc="" style="width:100%;height:700px;border:none;border-radius:0 0 4px 4px"></iframe>
+        <div id="preview-container" style="padding:0;resize:vertical;overflow:auto;min-height:400px;height:85vh">
+            <iframe id="preview-frame" srcdoc="" style="width:100%;height:100%;border:none;border-radius:0 0 4px 4px"></iframe>
         </div>
     </div>
 </div>
