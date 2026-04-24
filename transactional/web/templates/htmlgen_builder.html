@@ -128,16 +128,18 @@ function renderStack() {
     }
     let html = '';
     blockStack.forEach((b, i) => {
-        let middle;
+        let label, middle, bg;
         if (b.custom) {
+            label = '{' + b.placeholder + '}';
             let wOpts = '';
             genericWrappers.forEach(w => {
                 const sel = b.wrapper === w.name ? ' selected' : '';
                 wOpts += '<option value="' + w.name + '"' + sel + '>' + w.name + '</option>';
             });
-            middle = '<span style="font-size:12px;color:var(--accent);min-width:60px">{' + b.placeholder + '}</span>'
-                + '<select style="flex:1;font-size:12px" onchange="changeWrapper(' + b.id + ',this.value)">' + wOpts + '</select>';
+            middle = '<select style="flex:1;font-size:12px" onchange="changeWrapper(' + b.id + ',this.value)">' + wOpts + '</select>';
+            bg = '#fffde7';
         } else {
+            label = b.name;
             const variants = allBlocks[b.name] || [];
             let options = '<option value="random"' + (b.variant === 'random' ? ' selected' : '') + '>Random</option>';
             variants.forEach(v => {
@@ -146,10 +148,10 @@ function renderStack() {
                 options += '<option value="' + v.variant + '"' + sel + '>' + v.variant + tags + '</option>';
             });
             middle = '<select style="flex:1;font-size:12px" onchange="changeVariant(' + b.id + ',this.value)">' + options + '</select>';
+            bg = '#f8f9fa';
         }
-        const bg = b.custom ? '#fff3e0' : '#f8f9fa';
-        html += '<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;margin-bottom:4px;background:' + bg + ';border-radius:4px;border:1px solid var(--border)">'
-            + '<span style="font-weight:500;min-width:70px;font-size:13px">' + b.name + '</span>'
+        html += '<div style="display:flex;align-items:center;gap:6px;padding:6px 8px;margin-bottom:4px;background:' + bg + ';border-radius:4px;border:1px solid ' + (b.custom ? '#f9a825' : 'var(--border)') + '">'
+            + '<span style="font-weight:500;min-width:70px;font-size:13px;white-space:nowrap">' + label + '</span>'
             + middle
             + '<button class="btn btn-xs" onclick="moveBlock(' + b.id + ',-1)" style="padding:2px 6px">&uarr;</button>'
             + '<button class="btn btn-xs" onclick="moveBlock(' + b.id + ',1)" style="padding:2px 6px">&darr;</button>'

@@ -367,9 +367,15 @@ async def builder_preview(request: Request,
     block_names_all = ["logo", "referenz", "satz", "hinweis", "frist", "link", "gruss", "footer"]
     result_html = layout_html
 
+    custom_divs = ""
+    for ch in custom_blocks_html:
+        custom_divs += f'<div style="margin-bottom:10px;padding:8px 12px;background:#fffde7;border-left:3px solid #f9a825;border-radius:2px">{ch}</div>'
+
     for bname in block_names_all:
         placeholder = "{BLOCK_" + bname.upper() + "}"
         content = assembled.get(bname, "")
+        if bname == "gruss" and custom_divs:
+            content = custom_divs + content
         if content:
             result_html = result_html.replace(placeholder, content)
         else:
@@ -377,31 +383,6 @@ async def builder_preview(request: Request,
                 r'<tr>\s*<td[^>]*>\s*' + _re.escape(placeholder) + r'\s*</td>\s*</tr>',
                 '', result_html)
             result_html = result_html.replace(placeholder, "")
-
-    if custom_blocks_html:
-        custom_rows = ""
-        for ch in custom_blocks_html:
-            custom_rows += f'<tr><td style="padding:4px 40px 10px;">{ch}</td></tr>\n'
-        gruss_content = assembled.get("gruss", "")
-        footer_content = assembled.get("footer", "")
-        if gruss_content and gruss_content in result_html:
-            idx = result_html.index(gruss_content)
-            tr_start = result_html.rfind("<tr", 0, idx)
-            if tr_start >= 0:
-                result_html = result_html[:tr_start] + custom_rows + result_html[tr_start:]
-            else:
-                result_html = result_html[:idx] + custom_rows + result_html[idx:]
-        elif footer_content and footer_content in result_html:
-            idx = result_html.index(footer_content)
-            tr_start = result_html.rfind("<tr", 0, idx)
-            if tr_start >= 0:
-                result_html = result_html[:tr_start] + custom_rows + result_html[tr_start:]
-            else:
-                result_html = result_html[:idx] + custom_rows + result_html[idx:]
-        else:
-            last_table = result_html.rfind("</table>")
-            if last_table > 0:
-                result_html = result_html[:last_table] + custom_rows + result_html[last_table:]
 
     pc = primary_color.strip() or "#005eb8"
     ac = accent_color.strip() or "#c0392b"
