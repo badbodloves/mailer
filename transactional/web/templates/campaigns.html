@@ -20,7 +20,7 @@
         <td>{{ "{:,}".format(c.speed) ~ "/h" if c.speed else "—" }}</td>
         <td>
             {% if not c.running %}
-            <form method="post" action="/campaigns/{{ c.id }}/start" style="display:inline"><button class="btn btn-success btn-xs">Start</button></form>
+            <span style="font-size:11px;color:var(--fg2)">Use Actions tab</span>
             {% else %}
             <form method="post" action="/campaigns/{{ c.id }}/stop" style="display:inline"><button class="btn btn-danger btn-xs">Stop</button></form>
             {% endif %}

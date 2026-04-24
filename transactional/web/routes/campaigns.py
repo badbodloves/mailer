@@ -550,8 +550,7 @@ async def campaigns_table(request: Request):
         speed = f'{c["speed"]:,}/h' if c["speed"] else "—"
         btn = (f'<form method="post" action="/campaigns/{c["id"]}/stop" style="display:inline">'
                f'<button class="btn btn-danger btn-xs">Stop</button></form>') if c["running"] else \
-              (f'<form method="post" action="/campaigns/{c["id"]}/start" style="display:inline">'
-               f'<button class="btn btn-success btn-xs">Start</button></form>')
+              '<span style="font-size:11px;color:var(--fg2)">Actions tab</span>'
         html += (f'<tr{bg}><td style="font-weight:500">{c["name"]}</td>'
                  f'<td style="font-size:12px">{c["smtp_list_name"]}</td>'
                  f'<td style="font-size:12px">{c["lead_list_name"]}</td>'
