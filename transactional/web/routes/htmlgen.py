@@ -250,12 +250,41 @@ async def builder_page(request: Request):
 
     layout_names = [l["name"] for l in layouts]
 
+    custom_placeholders = _get_custom_placeholders(request)
+
     return request.app.state.templates.TemplateResponse(request, "htmlgen_builder.html", {
         "active": "htmlgen",
         "all_blocks": all_blocks,
         "all_blocks_json": json.dumps(all_blocks, ensure_ascii=False),
         "layout_names": layout_names,
+        "custom_placeholders": custom_placeholders,
+        "custom_placeholders_json": json.dumps(custom_placeholders, ensure_ascii=False),
     })
+
+
+def _get_custom_placeholders(request) -> list[dict]:
+    """Collect custom placeholders from DB macros + spintaxes/ folder."""
+    placeholders = []
+
+    try:
+        db = request.app.state.db
+        uid = request.state.user["id"]
+        for m in db.get_macros(uid):
+            md = dict(m)
+            name = md.get("name", "")
+            if name:
+                placeholders.append({"name": name, "source": "db"})
+    except Exception:
+        pass
+
+    spintax_dir = _HTMLGEN_BASE.parent / "spintaxes"
+    if spintax_dir.is_dir():
+        for f in sorted(spintax_dir.glob("*.txt")):
+            name = f.stem
+            if name and name != ".gitkeep" and not any(p["name"] == name for p in placeholders):
+                placeholders.append({"name": name, "source": "file"})
+
+    return placeholders
 
 
 @router.post("/htmlgen/builder/preview", response_class=HTMLResponse)
@@ -281,9 +310,18 @@ async def builder_preview(request: Request,
         layout_html = layouts[0]["html"] if layouts else "<p>No layout</p>"
 
     assembled = {}
+    custom_blocks_html = []
     for entry in block_list:
         name = entry["name"]
         variant_id = entry.get("variant", "random")
+
+        if variant_id == "custom" or name not in block_variants:
+            ph_name = entry.get("placeholder", name)
+            custom_blocks_html.append(
+                f'<p style="margin:0;font-size:14px;color:#333;font-family:Arial,sans-serif;">{{{ph_name}}}</p>'
+            )
+            continue
+
         variants = block_variants.get(name, [])
         if not variants:
             continue
@@ -304,6 +342,16 @@ async def builder_preview(request: Request,
     for bname in block_names_all:
         placeholder = "{BLOCK_" + bname.upper() + "}"
         result_html = result_html.replace(placeholder, assembled.get(bname, ""))
+
+    if custom_blocks_html:
+        custom_rows = ""
+        for ch in custom_blocks_html:
+            custom_rows += f'<tr><td style="padding:4px 40px 10px;">{ch}</td></tr>'
+        gruss_content = assembled.get("gruss", "")
+        if gruss_content:
+            result_html = result_html.replace(gruss_content, custom_rows + gruss_content)
+        else:
+            result_html = result_html.replace("</table>", custom_rows + "</table>", 1)
 
     pc = primary_color.strip() or "#005eb8"
     ac = accent_color.strip() or "#c0392b"

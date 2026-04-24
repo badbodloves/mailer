@@ -18,11 +18,8 @@
         <td style="color:var(--green);font-weight:500">{{ "{:,}".format(c.sent or 0) }}</td>
         <td>{{ "{:,}".format(c.speed) ~ "/h" if c.speed else "—" }}</td>
         <td style="white-space:nowrap">
-            {% if c.running %}
-            <form method="post" action="/campaigns/{{ c.id }}/stop" style="display:inline"><button class="btn btn-danger btn-xs">Pause</button></form>
-            {% else %}
-            <form method="post" action="/campaigns/{{ c.id }}/start" style="display:inline"><button class="btn btn-success btn-xs">Start</button></form>
-            {% endif %}
+            <form method="post" action="/campaigns/{{ c.id }}/start" style="display:inline"><button class="btn btn-success btn-xs" {{ 'disabled' if c.running }}>Start</button></form>
+            <form method="post" action="/campaigns/{{ c.id }}/stop" style="display:inline"><button class="btn btn-danger btn-xs" {{ 'disabled' if not c.running }}>Pause</button></form>
         </td>
     </tr>
     {% endfor %}
