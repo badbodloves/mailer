@@ -68,7 +68,7 @@ class TransDB:
                 );
                 CREATE INDEX IF NOT EXISTS idx_tlead_state ON trans_leads(state);
                 CREATE INDEX IF NOT EXISTS idx_tlead_list ON trans_leads(list_id);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_tlead_pool_email ON trans_leads(list_id, email);
+                CREATE INDEX IF NOT EXISTS idx_tlead_email ON trans_leads(list_id, email);
                 CREATE TABLE IF NOT EXISTS trans_macros (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
@@ -198,7 +198,7 @@ class TransDB:
         if "is_pool" not in ll_cols and "trans_lead_lists" in tables:
             c.execute("ALTER TABLE trans_lead_lists ADD COLUMN is_pool INTEGER DEFAULT 0")
         try:
-            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tlead_pool_email ON trans_leads(list_id, email)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_tlead_email ON trans_leads(list_id, email)")
         except Exception:
             pass
         if "trans_bounce_log" not in tables:
@@ -485,16 +485,23 @@ class TransDB:
         c = self._conn()
         added = 0
         dupes = 0
+        existing = set()
+        rows = c.execute("SELECT email FROM trans_leads WHERE list_id=?", (pool_id,)).fetchall()
+        for r in rows:
+            existing.add(r[0].lower())
+        batch = []
         for email in emails:
             email = email.strip().lower()
             if not email or "@" not in email:
                 continue
-            try:
-                c.execute("INSERT INTO trans_leads (list_id,email,state) VALUES (?,?,'PENDING')",
-                          (pool_id, email))
-                added += 1
-            except Exception:
+            if email in existing:
                 dupes += 1
+                continue
+            existing.add(email)
+            batch.append((pool_id, email))
+            added += 1
+        if batch:
+            c.executemany("INSERT INTO trans_leads (list_id,email,state) VALUES (?,?,'PENDING')", batch)
         c.commit()
 
         # Shuffle: assign random sort positions to PENDING leads
