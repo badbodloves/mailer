@@ -141,11 +141,22 @@
                     </select>
                 </div>
                 <div>
-                    <label>Lead List</label>
+                    <label>Lead List (regular)</label>
                     <select name="lead_list_id">
-                        <option value="0">—</option>
+                        <option value="0">— Or use Pool below —</option>
                         {% for ll in lead_lists %}<option value="{{ ll.id }}">{{ ll.name }} ({{ "{:,}".format(ll.count) }})</option>{% endfor %}
                     </select>
+
+                    <div class="divider" style="margin:10px 0"></div>
+
+                    <label>Lead Pool (takes N from pool)</label>
+                    <select name="pool_id">
+                        <option value="0">— No pool —</option>
+                        {% for p in pools %}<option value="{{ p.id }}">{{ p.name }} ({{ "{:,}".format(p.stats.pending) }} available / {{ "{:,}".format(p.stats.total) }} total)</option>{% endfor %}
+                    </select>
+                    <label>How many leads from pool?</label>
+                    <input name="pool_count" type="number" value="10000" min="1">
+                    <div class="form-help">Leads are reserved from pool and never deleted. Use Lead List OR Pool, not both.</div>
                 </div>
             </div>
             <div style="margin-top:16px"><button class="btn btn-primary">Create Campaign</button></div>

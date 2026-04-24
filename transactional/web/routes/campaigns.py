@@ -54,9 +54,11 @@ async def campaigns_page(request: Request):
     campaigns = [_enrich(db, dict(c)) for c in db.get_campaigns(uid)]
     smtp_lists = [dict(sl, count=db.get_smtp_count(sl["id"])) for sl in db.get_smtp_lists(uid)]
     lead_lists = [dict(ll, count=db.get_lead_count(ll["id"])) for ll in db.get_lead_lists(uid)]
+    pools = [dict(p, stats=db.pool_stats(p["id"])) for p in db.get_pools(uid)]
     return request.app.state.templates.TemplateResponse(request, "campaigns.html", {
         "active": "campaigns", "campaigns": campaigns,
-        "smtp_lists": smtp_lists, "lead_lists": lead_lists, "db": db,
+        "smtp_lists": smtp_lists, "lead_lists": lead_lists,
+        "pools": pools, "db": db,
     })
 
 
@@ -64,12 +66,47 @@ async def campaigns_page(request: Request):
 async def add_campaign(request: Request,
                        name: str = Form(""),
                        smtp_list_id: int = Form(0),
-                       lead_list_id: int = Form(0)):
+                       lead_list_id: int = Form(0),
+                       pool_id: int = Form(0),
+                       pool_count: int = Form(0)):
     db = request.app.state.db
-    if not smtp_list_id or not lead_list_id:
-        return RedirectResponse("/campaigns", status_code=303)
-    total = db.get_lead_count(lead_list_id)
     uid = request.state.user['id']
+
+    if not smtp_list_id:
+        return RedirectResponse("/campaigns", status_code=303)
+
+    # Pool mode: reserve N leads from pool into a temp lead list
+    if pool_id and pool_count > 0:
+        stats = db.pool_stats(pool_id)
+        available = stats["pending"]
+        take = min(pool_count, available)
+        if take == 0:
+            return RedirectResponse("/campaigns", status_code=303)
+        # Create a temp lead list from pool leads
+        pool_row = db._conn().execute("SELECT name FROM trans_lead_lists WHERE id=?", (pool_id,)).fetchone()
+        pool_name = pool_row["name"] if pool_row else "Pool"
+        temp_list_id = db.create_lead_list(
+            f"{pool_name} ({take:,} leads)", "", uid)
+        # Copy next N pending leads from pool to temp list
+        c = db._conn()
+        pending = c.execute(
+            "SELECT id, email FROM trans_leads WHERE list_id=? AND state='PENDING' ORDER BY id LIMIT ?",
+            (pool_id, take)).fetchall()
+        batch = [(temp_list_id, r["email"]) for r in pending]
+        c.executemany("INSERT INTO trans_leads (list_id,email,state) VALUES (?,?,'PENDING')", batch)
+        # Mark pool leads as USED
+        ids = [r["id"] for r in pending]
+        ph = ",".join("?" for _ in ids)
+        c.execute(f"UPDATE trans_leads SET state='USED' WHERE id IN ({ph})", ids)
+        c.execute("UPDATE trans_lead_lists SET lead_count=? WHERE id=?", (take, temp_list_id))
+        c.commit()
+        lead_list_id = temp_list_id
+        total = take
+    elif lead_list_id:
+        total = db.get_lead_count(lead_list_id)
+    else:
+        return RedirectResponse("/campaigns", status_code=303)
+
     db.create_campaign(
         name=name.strip() or f"Campaign {time.strftime('%Y-%m-%d %H:%M')}",
         smtp_list_id=smtp_list_id, lead_list_id=lead_list_id,

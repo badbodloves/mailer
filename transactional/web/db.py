@@ -54,6 +54,8 @@ class TransDB:
                     name TEXT NOT NULL,
                     file_origin TEXT DEFAULT '',
                     lead_count INTEGER DEFAULT 0,
+                    is_pool INTEGER DEFAULT 0,
+                    user_id INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS trans_leads (
@@ -66,6 +68,7 @@ class TransDB:
                 );
                 CREATE INDEX IF NOT EXISTS idx_tlead_state ON trans_leads(state);
                 CREATE INDEX IF NOT EXISTS idx_tlead_list ON trans_leads(list_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_tlead_pool_email ON trans_leads(list_id, email);
                 CREATE TABLE IF NOT EXISTS trans_macros (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
@@ -191,6 +194,13 @@ class TransDB:
                 id INTEGER PRIMARY KEY AUTOINCREMENT, filename TEXT NOT NULL,
                 file_path TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        ll_cols = {r[1] for r in c.execute("PRAGMA table_info(trans_lead_lists)").fetchall()} if "trans_lead_lists" in tables else set()
+        if "is_pool" not in ll_cols and "trans_lead_lists" in tables:
+            c.execute("ALTER TABLE trans_lead_lists ADD COLUMN is_pool INTEGER DEFAULT 0")
+        try:
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_tlead_pool_email ON trans_leads(list_id, email)")
+        except Exception:
+            pass
         if "trans_bounce_log" not in tables:
             c.execute("""CREATE TABLE IF NOT EXISTS trans_bounce_log (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, campaign_id INTEGER DEFAULT 0,
@@ -445,6 +455,106 @@ class TransDB:
     def get_lead_preview(self, list_id: int, limit: int = 10) -> list:
         return self._conn().execute("SELECT email FROM trans_leads WHERE list_id=? LIMIT ?",
                                      (list_id, limit)).fetchall()
+
+    # ── Lead Pools ─────────────────────────────────────────
+    def create_pool(self, name: str, user_id: int = 0) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO trans_lead_lists (name,is_pool,user_id) VALUES (?,1,?)",
+                  (name, user_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_pools(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute(
+                "SELECT * FROM trans_lead_lists WHERE is_pool=1 AND user_id=? ORDER BY name",
+                (user_id,)).fetchall()
+        return self._conn().execute(
+            "SELECT * FROM trans_lead_lists WHERE is_pool=1 ORDER BY name").fetchall()
+
+    def pool_stats(self, pool_id: int) -> dict:
+        c = self._conn()
+        total = c.execute("SELECT COUNT(*) FROM trans_leads WHERE list_id=?", (pool_id,)).fetchone()[0]
+        pending = c.execute("SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='PENDING'", (pool_id,)).fetchone()[0]
+        used = c.execute("SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='USED'", (pool_id,)).fetchone()[0]
+        sent = c.execute("SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='SENT'", (pool_id,)).fetchone()[0]
+        return {"total": total, "pending": pending, "used": used, "sent": sent}
+
+    def import_pool_leads(self, pool_id: int, emails: list) -> dict:
+        """Import leads into pool with dedup. New leads shuffled between pending ones."""
+        c = self._conn()
+        added = 0
+        dupes = 0
+        for email in emails:
+            email = email.strip().lower()
+            if not email or "@" not in email:
+                continue
+            try:
+                c.execute("INSERT INTO trans_leads (list_id,email,state) VALUES (?,?,'PENDING')",
+                          (pool_id, email))
+                added += 1
+            except Exception:
+                dupes += 1
+        c.commit()
+
+        # Shuffle: assign random sort positions to PENDING leads
+        # by updating rowids is not possible, but we can use a random-order trick
+        # SQLite doesn't support UPDATE with ORDER BY RANDOM, so we re-insert
+        # Actually simpler: the fetch_pending already uses ORDER BY id
+        # For true shuffle, we assign a random number column
+        # But since the user said they pre-shuffle the big list, and new leads
+        # just need to be mixed into the PENDING pool, we randomize their position
+        # by giving them IDs that interleave with existing pending leads
+        if added > 0:
+            self._shuffle_pending(pool_id)
+
+        c.execute("UPDATE trans_lead_lists SET lead_count=(SELECT COUNT(*) FROM trans_leads WHERE list_id=?) WHERE id=?",
+                  (pool_id, pool_id))
+        c.commit()
+        return {"added": added, "dupes": dupes}
+
+    def _shuffle_pending(self, pool_id: int):
+        """Shuffle pending leads by reassigning them with random order.
+        Creates a temp table, copies pending in random order, deletes originals, re-inserts."""
+        c = self._conn()
+        # Get all pending emails
+        rows = c.execute(
+            "SELECT email FROM trans_leads WHERE list_id=? AND state='PENDING' ORDER BY RANDOM()",
+            (pool_id,)).fetchall()
+        if not rows:
+            return
+        # Delete all pending
+        c.execute("DELETE FROM trans_leads WHERE list_id=? AND state='PENDING'", (pool_id,))
+        # Re-insert in shuffled order
+        batch = [(pool_id, r[0]) for r in rows]
+        c.executemany("INSERT OR IGNORE INTO trans_leads (list_id,email,state) VALUES (?,?,'PENDING')", batch)
+        c.commit()
+
+    def reserve_pool_leads(self, pool_id: int, count: int) -> int:
+        """Mark next N pending leads as USED (reserved for a campaign)."""
+        c = self._conn()
+        leads = c.execute(
+            "SELECT id FROM trans_leads WHERE list_id=? AND state='PENDING' ORDER BY id LIMIT ?",
+            (pool_id, count)).fetchall()
+        if not leads:
+            return 0
+        ids = [r[0] for r in leads]
+        ph = ",".join("?" for _ in ids)
+        c.execute(f"UPDATE trans_leads SET state='USED' WHERE id IN ({ph})", ids)
+        c.commit()
+        return len(ids)
+
+    def reset_pool(self, pool_id: int):
+        """Reset all USED leads back to PENDING."""
+        c = self._conn()
+        c.execute("UPDATE trans_leads SET state='PENDING' WHERE list_id=? AND state='USED'", (pool_id,))
+        c.commit()
+
+    def reset_pool_all(self, pool_id: int):
+        """Reset ALL leads (including SENT/FAILED) back to PENDING."""
+        c = self._conn()
+        c.execute("UPDATE trans_leads SET state='PENDING', error_msg='' WHERE list_id=?", (pool_id,))
+        c.commit()
 
     # ── Macros ────────────────────────────────────────────
     def add_macro(self, name: str, values_text: str = "", rotate_every: int = 0, user_id: int = 0) -> int:
