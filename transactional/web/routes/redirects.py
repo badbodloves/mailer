@@ -49,21 +49,29 @@ async def generate_redirects(request: Request,
     def worker():
         try:
             from mailer.redirect_manager import RedirectManager
+            from concurrent.futures import ThreadPoolExecutor, as_completed
 
             generated = 0
-            for i in range(count):
-                url = RedirectManager._generate_one(target)
-                if url:
+            done = 0
+
+            def gen_one(_):
+                return RedirectManager._generate_one(target)
+
+            with ThreadPoolExecutor(max_workers=gen_threads) as executor:
+                futures = [executor.submit(gen_one, i) for i in range(count)]
+                for f in as_completed(futures):
+                    done += 1
+                    _gen_progress["done"] = done
                     try:
-                        db.add_redirect(url, target, gen_uid)
-                        generated += 1
+                        url = f.result(timeout=15)
+                        if url:
+                            db.add_redirect(url, target, gen_uid)
+                            generated += 1
+                            _gen_progress["ok"] = generated
+                        else:
+                            _gen_progress["errors"] += 1
                     except Exception:
-                        pass
-                    _gen_progress["ok"] = generated
-                else:
-                    _gen_progress["errors"] += 1
-                _gen_progress["done"] = i + 1
-                time.sleep(0.3)
+                        _gen_progress["errors"] += 1
 
             _gen_progress["done"] = count
             _gen_progress["ok"] = generated
