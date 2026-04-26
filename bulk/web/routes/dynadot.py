@@ -1,6 +1,7 @@
 """Dynadot — Domain search, purchase, auto CF zone + NS setup."""
 import time
 import json
+import threading
 from html import escape
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -8,6 +9,8 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 router = APIRouter()
 
 DYNADOT_BASE = "https://api.dynadot.com/api3.json"
+
+_buy_progress = {"running": False, "log": [], "domain": "", "done": False}
 
 
 def _dynadot_call(api_key: str, command: str, params: dict = None) -> dict:
@@ -130,9 +133,24 @@ async def search_domains(request: Request, query: str = Form("")):
             f'</tr>'
         )
 
+    available_domains = [r["domain"] for r in results if r["available"]]
+    buy_all_btn = ""
+    if len(available_domains) > 1:
+        domains_json = json.dumps(available_domains)
+        buy_all_btn = (
+            f'<div style="margin-top:10px">'
+            f'<button class="btn btn-primary btn-sm" '
+            f'hx-post="/domains/buy-bulk" '
+            f'hx-vals=\'{{"domains": {json.dumps(json.dumps(available_domains))}, '
+            f'"cf_account_id": "0"}}\' '
+            f'hx-target="#buy-result" hx-swap="innerHTML" '
+            f'hx-confirm="Buy all {len(available_domains)} available domains?">Buy All Available ({len(available_domains)})</button>'
+            f'</div>'
+        )
+
     return HTMLResponse(
         f'<table><thead><tr><th>Domain</th><th>Status</th><th>Price</th><th></th></tr></thead>'
-        f'<tbody>{rows}</tbody></table>'
+        f'<tbody>{rows}</tbody></table>{buy_all_btn}'
     )
 
 
@@ -170,10 +188,41 @@ async def buy_domain(request: Request, domain: str = Form(""), cf_account_id: in
     if not config.get("api_key") or not domain.strip():
         return HTMLResponse('<div class="alert alert-danger">Missing API key or domain.</div>')
 
-    domain = domain.strip().lower()
-    log = []
+    if _buy_progress["running"]:
+        return HTMLResponse('<div class="alert alert-warning">Purchase already in progress. Wait for it to finish.</div>')
 
-    # Step 0: Check availability first
+    domain = domain.strip().lower()
+    _buy_progress.update(running=True, log=[], domain=domain, done=False)
+
+    def worker():
+        log = _buy_progress["log"]
+        try:
+            _do_buy(db, config, domain, cf_account_id, log)
+        except Exception as e:
+            log.append(f"Fatal error: {e}")
+        finally:
+            _buy_progress["done"] = True
+            _buy_progress["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    return HTMLResponse(
+        f'<div class="alert alert-info">Purchasing {escape(domain)}...</div>'
+        f'<div id="buy-live" hx-get="/domains/buy-progress" hx-trigger="every 2s" hx-swap="innerHTML"></div>'
+    )
+
+
+@router.get("/domains/buy-progress", response_class=HTMLResponse)
+async def buy_progress(request: Request):
+    log = _buy_progress["log"]
+    done = _buy_progress["done"]
+    html = _fmt_log(log)
+    if not done:
+        html += '<div hx-get="/domains/buy-progress" hx-trigger="every 2s" hx-swap="outerHTML"></div>'
+    return HTMLResponse(html)
+
+
+def _do_buy(db, config, domain, cf_account_id, log):
+    """Run the full buy+CF+NS flow in a background thread."""
     log.append(f"Checking availability of {domain}...")
     try:
         check = _dynadot_call(config["api_key"], "search", {
@@ -187,15 +236,14 @@ async def buy_domain(request: Request, domain: str = Form(""), cf_account_id: in
             status_val = str(items[0].get("Available", "")).lower()
             if status_val not in ("yes", "true", "available"):
                 log.append(f"Domain {domain} is NOT available ({status_val}).")
-                return HTMLResponse(_fmt_log(log))
+                return
             price = items[0].get("Price", "?")
             log.append(f"Available! Price: {price}")
         else:
-            log.append("Could not verify availability, proceeding anyway...")
+            log.append("Could not verify availability, proceeding...")
     except Exception as e:
         log.append(f"Availability check error: {e}, proceeding...")
 
-    # Step 1: Register
     log.append(f"Registering {domain}...")
     try:
         data = _dynadot_call(config["api_key"], "register", {
@@ -203,17 +251,15 @@ async def buy_domain(request: Request, domain: str = Form(""), cf_account_id: in
         })
         reg_resp = data.get("RegisterResponse", data)
         resp_code = str(reg_resp.get("ResponseCode", "-1"))
-        log.append(f"[DEBUG] Raw register response: {json.dumps(data)[:500]}")
         if resp_code != "0":
             error_msg = reg_resp.get("Error", reg_resp.get("Status", str(reg_resp)))
             log.append(f"Registration failed: {error_msg}")
-            return HTMLResponse(_fmt_log(log))
+            return
         log.append("Registration successful!")
     except Exception as e:
         log.append(f"Registration error: {e}")
-        return HTMLResponse(_fmt_log(log))
+        return
 
-    # Step 2: Create CF Zone
     cf_headers, account_id = _cf_headers_for(db, cf_account_id)
     zone_id = ""
     ns1 = ""
@@ -245,11 +291,9 @@ async def buy_domain(request: Request, domain: str = Form(""), cf_account_id: in
     else:
         log.append("No Cloudflare account — skipping zone setup.")
 
-    # Step 3: Save to DB
     db.add_purchased_domain(domain, zone_id, ns1, ns2)
     log.append("Domain saved to database.")
 
-    # Step 4: Set nameservers (with retry for .de)
     if ns1 and ns2:
         log.append("Setting nameservers...")
         is_de = domain.endswith(".de")
@@ -266,7 +310,6 @@ async def buy_domain(request: Request, domain: str = Form(""), cf_account_id: in
                 })
                 ns_resp = data.get("SetNsResponse", data)
                 resp_code = str(ns_resp.get("ResponseCode", "-1"))
-                log.append(f"[DEBUG] NS response: {json.dumps(data)[:300]}")
                 ns_str = str(ns_resp).lower()
                 if "dns queries" in ns_str or "must respond" in ns_str:
                     log.append("NS not ready yet (DNS queries check).")
@@ -281,12 +324,52 @@ async def buy_domain(request: Request, domain: str = Form(""), cf_account_id: in
             except Exception as e:
                 log.append(f"NS error: {e}")
         else:
-            log.append("NS setting failed after retries.")
+            log.append("NS setting failed after retries. Retry later via button.")
     else:
         log.append("No nameservers to set — skipping.")
 
     log.append(f"Done! {domain} is ready.")
-    return HTMLResponse(_fmt_log(log))
+
+
+@router.post("/domains/buy-bulk", response_class=HTMLResponse)
+async def buy_bulk(request: Request, domains: str = Form("[]"), cf_account_id: int = Form(0)):
+    """Buy multiple domains sequentially with live progress."""
+    db = request.app.state.db
+    config = db.get_dynadot_config()
+    if not config.get("api_key"):
+        return HTMLResponse('<div class="alert alert-danger">No API key.</div>')
+
+    try:
+        domain_list = json.loads(domains)
+    except (json.JSONDecodeError, TypeError):
+        return HTMLResponse('<div class="alert alert-danger">Invalid domain list.</div>')
+
+    if not domain_list:
+        return HTMLResponse('<div class="alert alert-warning">No domains to buy.</div>')
+
+    if _buy_progress["running"]:
+        return HTMLResponse('<div class="alert alert-warning">Purchase already in progress.</div>')
+
+    _buy_progress.update(running=True, log=[], domain=f"{len(domain_list)} domains", done=False)
+
+    def worker():
+        log = _buy_progress["log"]
+        for i, d in enumerate(domain_list):
+            log.append(f"── [{i+1}/{len(domain_list)}] {d} ──")
+            try:
+                _do_buy(db, config, d.strip().lower(), cf_account_id, log)
+            except Exception as e:
+                log.append(f"Error: {e}")
+            log.append("")
+        log.append(f"Bulk purchase complete: {len(domain_list)} domains processed.")
+        _buy_progress["done"] = True
+        _buy_progress["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    return HTMLResponse(
+        f'<div class="alert alert-info">Buying {len(domain_list)} domains...</div>'
+        f'<div id="buy-live" hx-get="/domains/buy-progress" hx-trigger="every 2s" hx-swap="innerHTML"></div>'
+    )
 
 
 @router.post("/domains/{did}/set-ns", response_class=HTMLResponse)
