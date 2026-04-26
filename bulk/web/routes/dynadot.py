@@ -81,27 +81,26 @@ async def search_domains(request: Request, query: str = Form("")):
     if not domains_raw:
         return HTMLResponse('<div class="alert alert-warning">Enter at least one domain.</div>')
 
-    params = {"show_price": "1", "currency": "EUR"}
-    for i, d in enumerate(domains_raw[:50]):
-        params[f"domain{i}"] = d
-
-    try:
-        data = _dynadot_call(config["api_key"], "search", params)
-    except Exception as e:
-        return HTMLResponse(f'<div class="alert alert-danger">API error: {escape(str(e))}</div>')
-
     results = []
-    search_resp = data.get("SearchResponse", {})
-    items = search_resp.get("SearchResults", [])
-    if not isinstance(items, list):
-        items = [items] if items else []
-
-    for item in items:
-        name = item.get("DomainName", "")
-        status_val = str(item.get("Available", "")).lower()
-        available = status_val in ("yes", "true", "available")
-        price = item.get("Price", "")
-        results.append({"domain": name, "available": available, "price": price})
+    for d in domains_raw[:50]:
+        try:
+            data = _dynadot_call(config["api_key"], "search", {
+                "domain0": d, "show_price": "1", "currency": "EUR"
+            })
+            search_resp = data.get("SearchResponse", {})
+            items = search_resp.get("SearchResults", [])
+            if not isinstance(items, list):
+                items = [items] if items else []
+            for item in items:
+                name = item.get("DomainName", d)
+                status_val = str(item.get("Available", "")).lower()
+                available = status_val in ("yes", "true", "available")
+                price = item.get("Price", "")
+                results.append({"domain": name, "available": available, "price": price})
+            if not items:
+                results.append({"domain": d, "available": False, "price": ""})
+        except Exception as e:
+            results.append({"domain": d, "available": False, "price": f"Error: {e}"})
 
     if not results:
         return HTMLResponse(
