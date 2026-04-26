@@ -48,6 +48,16 @@ def _cf_headers_for(db, cf_account_id: int = 0) -> tuple:
     return headers, account_id
 
 
+def _get_api_key(db, dynadot_account_id: int = 0) -> str:
+    """Get API key from specific account or legacy config."""
+    if dynadot_account_id:
+        acct = db.get_dynadot_account(dynadot_account_id)
+        if acct:
+            return dict(acct).get("api_key", "")
+    config = db.get_dynadot_config()
+    return config.get("api_key", "")
+
+
 @router.get("/domains", response_class=HTMLResponse)
 async def domains_page(request: Request):
     db = request.app.state.db
@@ -55,13 +65,30 @@ async def domains_page(request: Request):
     config = db.get_dynadot_config()
     purchased = [dict(d) for d in db.get_purchased_domains()]
     cf_accounts = [dict(a) for a in db.get_cf_accounts()]
+    dynadot_accounts = [dict(a) for a in db.get_dynadot_accounts()]
     return tpl.TemplateResponse(request, "domains.html", {
         "active": "domains",
         "config": config,
         "purchased": purchased,
         "cf_accounts": cf_accounts,
+        "dynadot_accounts": dynadot_accounts,
         "db": db,
     })
+
+
+@router.post("/domains/add-dynadot-account")
+async def add_dynadot_account(request: Request,
+                               name: str = Form(""),
+                               api_key: str = Form("")):
+    if name.strip() and api_key.strip():
+        request.app.state.db.add_dynadot_account(name.strip(), api_key.strip())
+    return RedirectResponse("/domains", status_code=303)
+
+
+@router.post("/domains/dynadot/{aid}/delete")
+async def delete_dynadot_account(request: Request, aid: int):
+    request.app.state.db.delete_dynadot_account(aid)
+    return RedirectResponse("/domains", status_code=303)
 
 
 @router.post("/domains/config")
@@ -71,11 +98,12 @@ async def save_config(request: Request, api_key: str = Form(""), secret: str = F
 
 
 @router.post("/domains/search", response_class=HTMLResponse)
-async def search_domains(request: Request, query: str = Form("")):
+async def search_domains(request: Request, query: str = Form(""),
+                         dynadot_account_id: int = Form(0)):
     db = request.app.state.db
-    config = db.get_dynadot_config()
-    if not config.get("api_key"):
-        return HTMLResponse('<div class="alert alert-danger">Dynadot API key not configured.</div>')
+    api_key = _get_api_key(db, dynadot_account_id)
+    if not api_key:
+        return HTMLResponse('<div class="alert alert-danger">No Dynadot API key. Add an account first.</div>')
 
     domains_raw = [d.strip() for d in query.replace(",", "\n").splitlines() if d.strip()]
     if not domains_raw:
@@ -84,7 +112,7 @@ async def search_domains(request: Request, query: str = Form("")):
     results = []
     for d in domains_raw[:50]:
         try:
-            data = _dynadot_call(config["api_key"], "search", {
+            data = _dynadot_call(api_key, "search", {
                 "domain0": d, "show_price": "1", "currency": "EUR"
             })
             search_resp = data.get("SearchResponse", {})
@@ -154,13 +182,13 @@ async def search_domains(request: Request, query: str = Form("")):
 
 
 @router.post("/domains/balance", response_class=HTMLResponse)
-async def check_balance(request: Request):
+async def check_balance(request: Request, dynadot_account_id: int = Form(0)):
     db = request.app.state.db
-    config = db.get_dynadot_config()
-    if not config.get("api_key"):
+    api_key = _get_api_key(db, dynadot_account_id)
+    if not api_key:
         return HTMLResponse('<span style="color:var(--red)">No API key</span>')
     try:
-        data = _dynadot_call(config["api_key"], "get_account_balance")
+        data = _dynadot_call(api_key, "get_account_balance")
         bal_resp = data.get("GetAccountBalanceResponse", data)
         bal_list = bal_resp.get("BalanceList", [])
         if bal_list and isinstance(bal_list, list):
@@ -181,16 +209,19 @@ async def check_balance(request: Request):
 
 
 @router.post("/domains/buy", response_class=HTMLResponse)
-async def buy_domain(request: Request, domain: str = Form(""), cf_account_id: int = Form(0)):
+async def buy_domain(request: Request, domain: str = Form(""),
+                     cf_account_id: int = Form(0),
+                     dynadot_account_id: int = Form(0)):
     db = request.app.state.db
-    config = db.get_dynadot_config()
-    if not config.get("api_key") or not domain.strip():
+    api_key = _get_api_key(db, dynadot_account_id)
+    if not api_key or not domain.strip():
         return HTMLResponse('<div class="alert alert-danger">Missing API key or domain.</div>')
 
     if _buy_progress["running"]:
         return HTMLResponse('<div class="alert alert-warning">Purchase already in progress. Wait for it to finish.</div>')
 
     domain = domain.strip().lower()
+    config = {"api_key": api_key}
     _buy_progress.update(running=True, log=[], domain=domain, done=False)
 
     def worker():
@@ -331,11 +362,13 @@ def _do_buy(db, config, domain, cf_account_id, log):
 
 
 @router.post("/domains/buy-bulk", response_class=HTMLResponse)
-async def buy_bulk(request: Request, domains: str = Form("[]"), cf_account_id: int = Form(0)):
+async def buy_bulk(request: Request, domains: str = Form("[]"),
+                   cf_account_id: int = Form(0),
+                   dynadot_account_id: int = Form(0)):
     """Buy multiple domains sequentially with live progress."""
     db = request.app.state.db
-    config = db.get_dynadot_config()
-    if not config.get("api_key"):
+    api_key = _get_api_key(db, dynadot_account_id)
+    if not api_key:
         return HTMLResponse('<div class="alert alert-danger">No API key.</div>')
 
     try:
@@ -349,6 +382,7 @@ async def buy_bulk(request: Request, domains: str = Form("[]"), cf_account_id: i
     if _buy_progress["running"]:
         return HTMLResponse('<div class="alert alert-warning">Purchase already in progress.</div>')
 
+    config = {"api_key": api_key}
     _buy_progress.update(running=True, log=[], domain=f"{len(domain_list)} domains", done=False)
 
     def worker():
@@ -405,13 +439,13 @@ async def retry_set_ns(request: Request, did: int):
 
 
 @router.post("/domains/list-remote", response_class=HTMLResponse)
-async def list_remote_domains(request: Request):
+async def list_remote_domains(request: Request, dynadot_account_id: int = Form(0)):
     db = request.app.state.db
-    config = db.get_dynadot_config()
-    if not config.get("api_key"):
+    api_key = _get_api_key(db, dynadot_account_id)
+    if not api_key:
         return HTMLResponse('<div class="alert alert-danger">No API key</div>')
     try:
-        data = _dynadot_call(config["api_key"], "list_domain")
+        data = _dynadot_call(api_key, "list_domain")
         list_resp = data.get("ListDomainInfoResponse", data.get("DomainListResponse", {}))
         items = list_resp.get("MainDomains", list_resp.get("DomainList", {}).get("DomainInfo", []))
         if isinstance(items, dict):

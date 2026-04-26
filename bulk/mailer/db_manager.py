@@ -177,6 +177,12 @@ class BulkDBManager:
                     api_key TEXT DEFAULT '',
                     secret TEXT DEFAULT ''
                 );
+                CREATE TABLE IF NOT EXISTS dynadot_accounts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    api_key TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE TABLE IF NOT EXISTS purchased_domains (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     domain TEXT NOT NULL UNIQUE,
@@ -254,6 +260,14 @@ class BulkDBManager:
             c.execute("ALTER TABLE domains ADD COLUMN unsub_domain TEXT DEFAULT ''")
         if "unsub_worker_deployed" not in existing:
             c.execute("ALTER TABLE domains ADD COLUMN unsub_worker_deployed INTEGER DEFAULT 0")
+        tables = {r[0] for r in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()}
+        if "dynadot_accounts" not in tables:
+            c.execute("""CREATE TABLE IF NOT EXISTS dynadot_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                api_key TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
         c.commit()
 
     # --- Users / Auth ---
@@ -788,6 +802,27 @@ class BulkDBManager:
         c.commit()
 
     # --- Dynadot ---
+    # --- Dynadot Accounts ---
+    def add_dynadot_account(self, name: str, api_key: str) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO dynadot_accounts (name, api_key) VALUES (?,?)",
+                  (name, api_key))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_dynadot_accounts(self) -> list:
+        return self._conn().execute(
+            "SELECT * FROM dynadot_accounts ORDER BY name").fetchall()
+
+    def get_dynadot_account(self, aid: int):
+        return self._conn().execute(
+            "SELECT * FROM dynadot_accounts WHERE id=?", (aid,)).fetchone()
+
+    def delete_dynadot_account(self, aid: int):
+        c = self._conn()
+        c.execute("DELETE FROM dynadot_accounts WHERE id=?", (aid,))
+        c.commit()
+
     def get_dynadot_config(self) -> dict:
         c = self._conn()
         r = c.execute("SELECT * FROM dynadot_config WHERE id=1").fetchone()

@@ -7,7 +7,8 @@
         <button class="btn btn-secondary btn-sm"
                 hx-post="/domains/balance"
                 hx-target="#dynadot-balance"
-                hx-swap="innerHTML">Check Balance</button>
+                hx-swap="innerHTML"
+                hx-include="#dynadot-account-select">Check Balance</button>
         <span id="dynadot-balance" style="margin-left:8px"></span>
     </div>
 </div>
@@ -23,16 +24,17 @@
     <div id="domain-tabs">
         <!-- Search & Buy -->
         <div id="tab-search" class="tab-content active">
-            {% if not config.api_key %}
+            {% if not config.api_key and not dynadot_accounts %}
             <div class="alert alert-warning">
-                Configure your Dynadot API key in the Settings tab first.
+                Add a Dynadot account in the Settings tab first.
             </div>
             {% endif %}
 
             <div class="grid-2" style="align-items:start">
                 <form hx-post="/domains/search"
                       hx-target="#search-results"
-                      hx-swap="innerHTML">
+                      hx-swap="innerHTML"
+                      hx-include="#dynadot-account-select">
                     <label>Search Domains (one per line or comma-separated)</label>
                     <textarea name="query" rows="5" placeholder="beispiel.de&#10;meinshop.com&#10;newsletter-xyz.de" style="font-family:monospace;font-size:13px"></textarea>
                     <div style="margin-top:10px">
@@ -40,17 +42,28 @@
                     </div>
                 </form>
                 <div>
-                    <label>Cloudflare Account for Zone Setup</label>
+                    <label>Dynadot Account</label>
+                    <select id="dynadot-account-select" name="dynadot_account_id">
+                        {% if dynadot_accounts %}
+                        {% for a in dynadot_accounts %}
+                        <option value="{{ a.id }}">{{ a.name }}</option>
+                        {% endfor %}
+                        {% endif %}
+                        {% if config.api_key %}
+                        <option value="0">Legacy (Settings key)</option>
+                        {% endif %}
+                    </select>
+                    <label style="margin-top:8px">Cloudflare Account</label>
                     <select id="cf-account-select">
                         {% if cf_accounts %}
                         {% for a in cf_accounts %}
-                        <option value="{{ a.id }}">{{ a.name }} ({{ a.account_id[:12] if a.account_id else 'no ID' }})</option>
+                        <option value="{{ a.id }}">{{ a.name }}</option>
                         {% endfor %}
                         {% else %}
                         <option value="0">No CF accounts</option>
                         {% endif %}
                     </select>
-                    <div class="form-help">Zone will be created in this account after purchase.</div>
+                    <div class="form-help">CF zone created after purchase. Dynadot account used for search/buy.</div>
                 </div>
             </div>
 
@@ -110,32 +123,64 @@
             <button class="btn btn-primary btn-sm"
                     hx-post="/domains/list-remote"
                     hx-target="#remote-domains"
-                    hx-swap="innerHTML">Load Domain List</button>
+                    hx-swap="innerHTML"
+                    hx-include="#dynadot-account-select">Load Domain List</button>
             <div id="remote-domains" style="margin-top:12px"></div>
         </div>
 
         <!-- Settings -->
         <div id="tab-config" class="tab-content">
-            <form method="post" action="/domains/config" style="max-width:500px">
-                <label>Dynadot API Key</label>
-                <input name="api_key" type="password" value="{{ config.api_key or '' }}" placeholder="Your Dynadot API key">
+            <h3 style="font-size:14px;margin-bottom:12px">Dynadot Accounts</h3>
+            {% if dynadot_accounts %}
+            <table style="margin-bottom:16px">
+                <thead><tr><th>Name</th><th>API Key</th><th></th></tr></thead>
+                <tbody>
+                {% for a in dynadot_accounts %}
+                <tr>
+                    <td style="font-weight:500">{{ a.name }}</td>
+                    <td style="font-family:monospace;font-size:12px">{{ a.api_key[:8] }}...{{ a.api_key[-4:] }}</td>
+                    <td>
+                        <form method="post" action="/domains/dynadot/{{ a.id }}/delete" onsubmit="return confirm('Delete?')" style="display:inline">
+                            <button class="btn btn-danger btn-xs">Delete</button>
+                        </form>
+                    </td>
+                </tr>
+                {% endfor %}
+                </tbody>
+            </table>
+            {% endif %}
 
-                <label>Dynadot Secret (optional)</label>
-                <input name="secret" type="password" value="{{ config.secret or '' }}" placeholder="For signature-based calls">
-
-                <div class="form-help" style="margin-top:8px">
-                    Cloudflare account is pulled from the Cloudflare page settings.
-                    Make sure you have at least one CF account with Account ID configured.
+            <form method="post" action="/domains/add-dynadot-account" style="max-width:500px">
+                <div class="grid-2">
+                    <div>
+                        <label>Account Name</label>
+                        <input name="name" placeholder="Main Account" required>
+                    </div>
+                    <div>
+                        <label>API Key</label>
+                        <input name="api_key" type="password" placeholder="Dynadot API key" required>
+                    </div>
                 </div>
-
-                <div style="margin-top:16px">
-                    <button class="btn btn-primary">Save Credentials</button>
+                <div style="margin-top:10px">
+                    <button class="btn btn-primary btn-sm">Add Account</button>
                 </div>
             </form>
 
+            {% if config.api_key %}
+            <div style="border-top:1px solid var(--border);margin-top:16px;padding-top:12px">
+                <h3 style="font-size:14px;margin-bottom:8px">Legacy Config</h3>
+                <form method="post" action="/domains/config" style="max-width:500px">
+                    <label>API Key</label>
+                    <input name="api_key" type="password" value="{{ config.api_key or '' }}">
+                    <input type="hidden" name="secret" value="{{ config.secret or '' }}">
+                    <div style="margin-top:8px"><button class="btn btn-secondary btn-sm">Update</button></div>
+                </form>
+            </div>
+            {% endif %}
+
             {% if not cf_accounts %}
             <div class="alert alert-warning" style="margin-top:16px">
-                No Cloudflare account configured. Auto zone creation + NS setup won't work.
+                No Cloudflare account configured.
                 <a href="/cloudflare" style="color:var(--accent);font-weight:500">Configure Cloudflare</a>
             </div>
             {% endif %}
