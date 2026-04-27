@@ -1,4 +1,4 @@
-"""Macros — spintax pools, file import, edit."""
+"""Macros — spintax pools, presets, file import, edit."""
 import os
 from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -15,24 +15,56 @@ async def macros_page(request: Request):
     for m in macros:
         lines = [l for l in (m.get("values_text") or "").splitlines() if l.strip()]
         m["line_count"] = len(lines)
+
+    grouped = {}
+    for m in macros:
+        grouped.setdefault(m["name"], []).append(m)
+
     return request.app.state.templates.TemplateResponse(request, "macros.html", {
-        "active": "macros", "macros": macros, "db": db,
+        "active": "macros", "macros": macros, "grouped": grouped, "db": db,
     })
 
 
 @router.post("/macros/add")
 async def add_macro(request: Request, name: str = Form(""),
+                    preset_name: str = Form(""),
                     values_text: str = Form(""), rotate_every: int = Form(0)):
     if name.strip():
         uid = request.state.user['id']
-        request.app.state.db.add_macro(name.strip(), values_text, rotate_every, uid)
+        request.app.state.db.add_macro(name.strip(), values_text, rotate_every, uid,
+                                        preset_name.strip() or "Default")
     return RedirectResponse("/macros", status_code=303)
 
 
 @router.post("/macros/{mid}/save")
 async def save_macro(request: Request, mid: int,
-                     values_text: str = Form(""), rotate_every: int = Form(0)):
-    request.app.state.db.update_macro(mid, values_text, rotate_every)
+                     values_text: str = Form(""), rotate_every: int = Form(0),
+                     preset_name: str = Form("")):
+    db = request.app.state.db
+    db.update_macro(mid, values_text, rotate_every)
+    if preset_name.strip():
+        c = db._conn()
+        c.execute("UPDATE trans_macros SET preset_name=? WHERE id=?", (preset_name.strip(), mid))
+        c.commit()
+    return RedirectResponse("/macros", status_code=303)
+
+
+@router.post("/macros/{mid}/activate")
+async def activate_macro(request: Request, mid: int):
+    request.app.state.db.activate_macro(mid)
+    return RedirectResponse("/macros", status_code=303)
+
+
+@router.post("/macros/{mid}/duplicate")
+async def duplicate_macro(request: Request, mid: int,
+                          new_preset_name: str = Form("")):
+    db = request.app.state.db
+    row = db._conn().execute("SELECT * FROM trans_macros WHERE id=?", (mid,)).fetchone()
+    if row:
+        row = dict(row)
+        preset = new_preset_name.strip() or f"{row.get('preset_name', 'Default')} Copy"
+        db.add_macro(row["name"], row.get("values_text", ""),
+                     row.get("rotate_every", 0), row.get("user_id", 0), preset)
     return RedirectResponse("/macros", status_code=303)
 
 

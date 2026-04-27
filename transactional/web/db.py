@@ -253,6 +253,8 @@ class TransDB:
             ("trans_templates", "logo_group_id", "0"),
             ("trans_logos", "group_id", "0"),
             ("trans_redirect_links", "pool_id", "0"),
+            ("trans_macros", "preset_name", "''"),
+            ("trans_macros", "is_active", "1"),
         ]:
             if tbl in tables:
                 cols = {r[1] for r in c.execute(f"PRAGMA table_info({tbl})").fetchall()}
@@ -594,20 +596,36 @@ class TransDB:
         c.commit()
 
     # ── Macros ────────────────────────────────────────────
-    def add_macro(self, name: str, values_text: str = "", rotate_every: int = 0, user_id: int = 0) -> int:
+    def add_macro(self, name: str, values_text: str = "", rotate_every: int = 0, user_id: int = 0, preset_name: str = "") -> int:
         c = self._conn()
-        c.execute("INSERT OR REPLACE INTO trans_macros (name,values_text,rotate_every,user_id) VALUES (?,?,?,?)",
-                  (name, values_text, rotate_every, user_id))
+        if not preset_name:
+            preset_name = "Default"
+        c.execute("INSERT INTO trans_macros (name,values_text,rotate_every,user_id,preset_name,is_active) VALUES (?,?,?,?,?,1)",
+                  (name, values_text, rotate_every, user_id, preset_name))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def get_macros(self, user_id: int = 0) -> list:
         if user_id:
-            return self._conn().execute("SELECT * FROM trans_macros WHERE user_id=? ORDER BY name", (user_id,)).fetchall()
-        return self._conn().execute("SELECT * FROM trans_macros ORDER BY name").fetchall()
+            return self._conn().execute("SELECT * FROM trans_macros WHERE user_id=? ORDER BY name, preset_name", (user_id,)).fetchall()
+        return self._conn().execute("SELECT * FROM trans_macros ORDER BY name, preset_name").fetchall()
+
+    def get_active_macros(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_macros WHERE user_id=? AND is_active=1 ORDER BY name", (user_id,)).fetchall()
+        return self._conn().execute("SELECT * FROM trans_macros WHERE is_active=1 ORDER BY name").fetchall()
+
+    def activate_macro(self, mid: int):
+        c = self._conn()
+        row = c.execute("SELECT name, user_id FROM trans_macros WHERE id=?", (mid,)).fetchone()
+        if row:
+            c.execute("UPDATE trans_macros SET is_active=0 WHERE name=? AND user_id=?",
+                      (row["name"], row["user_id"]))
+            c.execute("UPDATE trans_macros SET is_active=1 WHERE id=?", (mid,))
+            c.commit()
 
     def get_macro(self, name: str) -> str:
-        r = self._conn().execute("SELECT values_text FROM trans_macros WHERE name=?", (name,)).fetchone()
+        r = self._conn().execute("SELECT values_text FROM trans_macros WHERE name=? AND is_active=1", (name,)).fetchone()
         return r["values_text"] if r else ""
 
     def update_macro(self, mid: int, values_text: str, rotate_every: int = 0):

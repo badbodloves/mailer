@@ -760,7 +760,7 @@ def _run_campaign(db, cid: int):
         html_bodies = db.get_all_template_htmls(uid, template_id=campaign_template_id)
 
         macros = {}
-        for m in db.get_macros(uid):
+        for m in db.get_active_macros(uid):
             md = dict(m)
             lines = [l.strip() for l in (md.get("values_text") or "").splitlines() if l.strip()]
             if lines:
