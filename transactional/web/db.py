@@ -249,8 +249,8 @@ class TransDB:
             ("trans_campaigns", "finished_at", "NULL"),
             ("trans_campaigns", "schedule_time", "''"),
             ("trans_campaigns", "template_id", "0"),
-            ("trans_campaigns", "logo_group_id", "0"),
             ("trans_campaigns", "redirect_pool_id", "0"),
+            ("trans_templates", "logo_group_id", "0"),
             ("trans_logos", "group_id", "0"),
             ("trans_redirect_links", "pool_id", "0"),
         ]:

@@ -14,8 +14,9 @@ async def templates_page(request: Request):
     db = request.app.state.db
     uid = request.state.user["id"]
     templates = [dict(t) for t in db.get_templates(uid)]
+    logo_groups = [dict(g) for g in db.get_logo_groups(uid)]
     return request.app.state.templates.TemplateResponse(request, "trans_templates.html", {
-        "active": "templates", "templates": templates, "db": db,
+        "active": "templates", "templates": templates, "logo_groups": logo_groups, "db": db,
     })
 
 
@@ -53,8 +54,13 @@ async def delete_template_file(request: Request, fid: int):
 
 @router.post("/templates/{tid}/save")
 async def save_template(request: Request, tid: int, name: str = Form(""),
-                        html_content: str = Form("")):
-    request.app.state.db.update_template(tid, name.strip(), html_content)
+                        html_content: str = Form(""),
+                        logo_group_id: int = Form(0)):
+    db = request.app.state.db
+    db.update_template(tid, name.strip(), html_content)
+    c = db._conn()
+    c.execute("UPDATE trans_templates SET logo_group_id=? WHERE id=?", (logo_group_id, tid))
+    c.commit()
     return RedirectResponse("/templates", status_code=303)
 
 

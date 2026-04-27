@@ -56,13 +56,12 @@ async def campaigns_page(request: Request):
     lead_lists = [dict(ll, count=db.get_lead_count(ll["id"])) for ll in db.get_lead_lists(uid)]
     pools = [dict(p, stats=db.pool_stats(p["id"])) for p in db.get_pools(uid)]
     templates = [dict(t) for t in db.get_templates(uid)]
-    logo_groups = [dict(g) for g in db.get_logo_groups(uid)]
     redirect_pools = [dict(p, count=db.get_redirect_pool_count(p["id"])) for p in db.get_redirect_pools(uid)]
     return request.app.state.templates.TemplateResponse(request, "campaigns.html", {
         "active": "campaigns", "campaigns": campaigns,
         "smtp_lists": smtp_lists, "lead_lists": lead_lists,
         "pools": pools, "templates": templates,
-        "logo_groups": logo_groups, "redirect_pools": redirect_pools, "db": db,
+        "redirect_pools": redirect_pools, "db": db,
     })
 
 
@@ -124,13 +123,11 @@ async def save_campaign(request: Request, cid: int,
                         smtp_list_id: int = Form(0),
                         lead_list_id: int = Form(0),
                         template_id: int = Form(0),
-                        logo_group_id: int = Form(0),
                         redirect_pool_id: int = Form(0),
                         schedule_time: str = Form("")):
     db = request.app.state.db
     updates = {"name": name.strip(), "schedule_time": schedule_time.strip(),
-               "template_id": template_id, "logo_group_id": logo_group_id,
-               "redirect_pool_id": redirect_pool_id}
+               "template_id": template_id, "redirect_pool_id": redirect_pool_id}
     if smtp_list_id:
         updates["smtp_list_id"] = smtp_list_id
     if lead_list_id:
@@ -773,14 +770,18 @@ def _run_campaign(db, cid: int):
         from_email_cfg = cfg.get("from_email", "")
         subject_cfg = cfg.get("subject", "") or "Notification"
 
-        # Logo setup
+        # Logo setup — load from template's logo group
         logo_variants = []
         if cfg.get("image_enabled"):
-            logo_group_id = camp.get("logo_group_id", 0) or 0
+            logo_group_id = 0
+            if campaign_template_id:
+                tpl_row = db.get_template(campaign_template_id)
+                if tpl_row:
+                    logo_group_id = dict(tpl_row).get("logo_group_id", 0) or 0
             if logo_group_id:
                 group_logos = db.get_logos_by_group(logo_group_id)
                 logo_variants = [dict(l)["file_path"] for l in group_logos if os.path.isfile(dict(l)["file_path"])]
-                logger.info("Campaign %d: %d logos from group %d", cid, len(logo_variants), logo_group_id)
+                logger.info("Campaign %d: %d logos from template group %d", cid, len(logo_variants), logo_group_id)
             if not logo_variants:
                 import glob
                 from .logos import VARIANT_DIR, UPLOAD_DIR
