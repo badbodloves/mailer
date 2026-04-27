@@ -65,6 +65,16 @@
                         </select>
                     </div>
                     <div>
+                        <label>Logo Group</label>
+                        <select name="logo_group_id">
+                            <option value="0">Global (default)</option>
+                            {% for lg in logo_groups %}<option value="{{ lg.id }}" {{ 'selected' if lg.id == c.logo_group_id }}>{{ lg.name }}</option>{% endfor %}
+                        </select>
+                        <label>Redirect Pool</label>
+                        <select name="redirect_pool_id">
+                            <option value="0">All Redirects</option>
+                            {% for rp in redirect_pools %}<option value="{{ rp.id }}" {{ 'selected' if rp.id == c.redirect_pool_id }}>{{ rp.name }} ({{ rp.count }})</option>{% endfor %}
+                        </select>
                         <label>Schedule (HH:MM)</label>
                         <input name="schedule_time" value="{{ c.schedule_time or '' }}" placeholder="14:30">
                         <div class="form-help">Auto-start at this time. Empty = manual start.</div>

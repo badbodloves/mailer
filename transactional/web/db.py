@@ -94,12 +94,26 @@ class TransDB:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     filename TEXT NOT NULL,
                     file_path TEXT NOT NULL,
+                    group_id INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS trans_logo_groups (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    user_id INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS trans_redirect_links (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     short_url TEXT NOT NULL,
                     target_url TEXT DEFAULT '',
+                    pool_id INTEGER DEFAULT 0,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS trans_redirect_pools (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    user_id INTEGER DEFAULT 0,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS trans_campaigns (
@@ -235,11 +249,25 @@ class TransDB:
             ("trans_campaigns", "finished_at", "NULL"),
             ("trans_campaigns", "schedule_time", "''"),
             ("trans_campaigns", "template_id", "0"),
+            ("trans_campaigns", "logo_group_id", "0"),
+            ("trans_campaigns", "redirect_pool_id", "0"),
+            ("trans_logos", "group_id", "0"),
+            ("trans_redirect_links", "pool_id", "0"),
         ]:
             if tbl in tables:
                 cols = {r[1] for r in c.execute(f"PRAGMA table_info({tbl})").fetchall()}
                 if col not in cols:
                     c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} DEFAULT {default}")
+        for new_tbl, create_sql in [
+            ("trans_logo_groups", """CREATE TABLE IF NOT EXISTS trans_logo_groups (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                user_id INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
+            ("trans_redirect_pools", """CREATE TABLE IF NOT EXISTS trans_redirect_pools (
+                id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
+                user_id INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
+        ]:
+            if new_tbl not in tables:
+                c.execute(create_sql)
         # Assign orphaned data (user_id=0) to first admin
         first_admin = c.execute("SELECT id FROM trans_users WHERE role='admin' ORDER BY id LIMIT 1").fetchone()
         if first_admin:
@@ -661,11 +689,29 @@ class TransDB:
                 bodies.append(t["html_content"])
         return bodies
 
-    # ── Logos ─────────────────────────────────────────────
-    def add_logo(self, filename: str, file_path: str, user_id: int = 0) -> int:
+    # ── Logo Groups ────────────────────────────────────────
+    def add_logo_group(self, name: str, user_id: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_logos (filename,file_path,user_id) VALUES (?,?,?)",
-                  (filename, file_path, user_id))
+        c.execute("INSERT INTO trans_logo_groups (name,user_id) VALUES (?,?)", (name, user_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_logo_groups(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_logo_groups WHERE user_id=? ORDER BY name", (user_id,)).fetchall()
+        return self._conn().execute("SELECT * FROM trans_logo_groups ORDER BY name").fetchall()
+
+    def delete_logo_group(self, gid: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_logos WHERE group_id=?", (gid,))
+        c.execute("DELETE FROM trans_logo_groups WHERE id=?", (gid,))
+        c.commit()
+
+    # ── Logos ─────────────────────────────────────────────
+    def add_logo(self, filename: str, file_path: str, user_id: int = 0, group_id: int = 0) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO trans_logos (filename,file_path,user_id,group_id) VALUES (?,?,?,?)",
+                  (filename, file_path, user_id, group_id))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -674,18 +720,46 @@ class TransDB:
             return self._conn().execute("SELECT * FROM trans_logos WHERE user_id=? ORDER BY filename", (user_id,)).fetchall()
         return self._conn().execute("SELECT * FROM trans_logos ORDER BY filename").fetchall()
 
+    def get_logos_by_group(self, group_id: int) -> list:
+        return self._conn().execute("SELECT * FROM trans_logos WHERE group_id=? ORDER BY filename", (group_id,)).fetchall()
+
     def delete_logo(self, lid: int):
         c = self._conn()
         c.execute("DELETE FROM trans_logos WHERE id=?", (lid,))
         c.commit()
 
-    # ── Redirect Links ────────────────────────────────────
-    def add_redirect(self, short_url: str, target_url: str = "", user_id: int = 0) -> int:
+    # ── Redirect Pools ───────────────────────────────────
+    def add_redirect_pool(self, name: str, user_id: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_redirect_links (short_url,target_url,user_id) VALUES (?,?,?)",
-                  (short_url, target_url, user_id))
+        c.execute("INSERT INTO trans_redirect_pools (name,user_id) VALUES (?,?)", (name, user_id))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_redirect_pools(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_redirect_pools WHERE user_id=? ORDER BY name", (user_id,)).fetchall()
+        return self._conn().execute("SELECT * FROM trans_redirect_pools ORDER BY name").fetchall()
+
+    def delete_redirect_pool(self, pid: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_redirect_links WHERE pool_id=?", (pid,))
+        c.execute("DELETE FROM trans_redirect_pools WHERE id=?", (pid,))
+        c.commit()
+
+    def get_redirect_pool_count(self, pool_id: int) -> int:
+        r = self._conn().execute("SELECT COUNT(*) FROM trans_redirect_links WHERE pool_id=?", (pool_id,)).fetchone()
+        return r[0] if r else 0
+
+    # ── Redirect Links ────────────────────────────────────
+    def add_redirect(self, short_url: str, target_url: str = "", user_id: int = 0, pool_id: int = 0) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO trans_redirect_links (short_url,target_url,user_id,pool_id) VALUES (?,?,?,?)",
+                  (short_url, target_url, user_id, pool_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_redirects_by_pool(self, pool_id: int) -> list:
+        return self._conn().execute("SELECT * FROM trans_redirect_links WHERE pool_id=? ORDER BY created_at DESC", (pool_id,)).fetchall()
 
     def get_redirects(self, user_id: int = 0) -> list:
         if user_id:

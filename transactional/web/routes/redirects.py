@@ -18,17 +18,34 @@ async def redirects_page(request: Request):
     uid = request.state.user["id"]
     redirects = [dict(r) for r in db.get_redirects(uid)]
     count = db.get_redirect_count(uid)
+    redirect_pools = [dict(p, count=db.get_redirect_pool_count(p["id"])) for p in db.get_redirect_pools(uid)]
     return request.app.state.templates.TemplateResponse(request, "redirects.html", {
         "active": "redirects", "redirects": redirects, "db": db,
-        "redirect_count": count, "gen_progress": _gen_progress,
+        "redirect_count": count, "redirect_pools": redirect_pools,
+        "gen_progress": _gen_progress,
     })
+
+
+@router.post("/redirects/add-pool")
+async def add_redirect_pool(request: Request, name: str = Form("")):
+    if name.strip():
+        uid = request.state.user["id"]
+        request.app.state.db.add_redirect_pool(name.strip(), uid)
+    return RedirectResponse("/redirects", status_code=303)
+
+
+@router.post("/redirects/pool/{pid}/delete")
+async def delete_redirect_pool(request: Request, pid: int):
+    request.app.state.db.delete_redirect_pool(pid)
+    return RedirectResponse("/redirects", status_code=303)
 
 
 @router.post("/redirects/generate", response_class=HTMLResponse)
 async def generate_redirects(request: Request,
                               target_url: str = Form(""),
                               count: int = Form(100),
-                              gen_threads: int = Form(3)):
+                              gen_threads: int = Form(3),
+                              pool_id: int = Form(0)):
     target = target_url.strip()
     if not target:
         return HTMLResponse(
@@ -65,7 +82,7 @@ async def generate_redirects(request: Request,
                     try:
                         url = f.result(timeout=15)
                         if url:
-                            db.add_redirect(url, target, gen_uid)
+                            db.add_redirect(url, target, gen_uid, pool_id)
                             generated += 1
                             _gen_progress["ok"] = generated
                         else:
@@ -93,11 +110,12 @@ async def generate_redirects(request: Request,
 
 
 @router.post("/redirects/add")
-async def add_redirect(request: Request, short_url: str = Form("")):
+async def add_redirect(request: Request, short_url: str = Form(""),
+                       pool_id: int = Form(0)):
     url = short_url.strip()
     if url:
         uid = request.state.user['id']
-        request.app.state.db.add_redirect(url, '', uid)
+        request.app.state.db.add_redirect(url, '', uid, pool_id)
     return RedirectResponse("/redirects", status_code=303)
 
 

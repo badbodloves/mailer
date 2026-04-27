@@ -51,18 +51,37 @@ async def logos_page(request: Request):
     db = request.app.state.db
     uid = request.state.user["id"]
     logos = [dict(l) for l in db.get_logos(uid)]
+    logo_groups = [dict(g) for g in db.get_logo_groups(uid)]
     return request.app.state.templates.TemplateResponse(request, "logos.html", {
-        "active": "logos", "logos": logos, "db": db,
+        "active": "logos", "logos": logos, "logo_groups": logo_groups, "db": db,
         "variant_running": _variant_progress["running"],
         "variant_count": get_variant_count(),
     })
 
 
+@router.post("/logos/add-group")
+async def add_logo_group(request: Request, name: str = Form("")):
+    if name.strip():
+        uid = request.state.user["id"]
+        request.app.state.db.add_logo_group(name.strip(), uid)
+    return RedirectResponse("/logos", status_code=303)
+
+
+@router.post("/logos/group/{gid}/delete")
+async def delete_logo_group(request: Request, gid: int):
+    request.app.state.db.delete_logo_group(gid)
+    return RedirectResponse("/logos", status_code=303)
+
+
 @router.post("/logos/upload")
-async def upload_logos(request: Request, files: TList[UploadFile] = File(...)):
+async def upload_logos(request: Request):
+    form = await request.form()
+    files = form.getlist("files")
+    group_id = int(form.get("group_id", 0) or 0)
     db = request.app.state.db
+    uid = request.state.user['id']
     for f in files:
-        if not f.filename:
+        if not hasattr(f, "read") or not f.filename:
             continue
         ext = os.path.splitext(f.filename)[1].lower()
         if ext not in ALLOWED_EXT:
@@ -74,8 +93,7 @@ async def upload_logos(request: Request, files: TList[UploadFile] = File(...)):
         dest = os.path.join(UPLOAD_DIR, safe)
         with open(dest, "wb") as fh:
             fh.write(data)
-        uid = request.state.user['id']
-        db.add_logo(f.filename, f"/static/uploads/logos/{safe}", uid)
+        db.add_logo(f.filename, f"/static/uploads/logos/{safe}", uid, group_id)
     return RedirectResponse("/logos", status_code=303)
 
 
