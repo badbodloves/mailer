@@ -3,6 +3,38 @@
 {% block content %}
 <div class="page-header"><h1>Logos</h1></div>
 
+<!-- Logo Groups -->
+<div class="card">
+    <div class="card-header"><h3>Logo Groups</h3></div>
+    {% if logo_groups %}
+    <table style="margin-bottom:12px">
+        <thead><tr><th>Group</th><th>Logos</th><th></th></tr></thead>
+        <tbody>
+        {% for g in logo_groups %}
+        {% set group_logos = db.get_logos_by_group(g.id) %}
+        <tr>
+            <td style="font-weight:500">{{ g.name }}</td>
+            <td>{{ group_logos|length }}</td>
+            <td>
+                <form method="post" action="/logos/group/{{ g.id }}/delete" onsubmit="return confirm('Delete group + all logos?')" style="display:inline">
+                    <button class="btn btn-danger btn-xs">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+    <form method="post" action="/logos/add-group" style="display:flex;gap:8px;align-items:flex-end">
+        <div style="flex:1">
+            <label>New Group Name</label>
+            <input name="name" placeholder="z.B. FirmaX" required>
+        </div>
+        <button class="btn btn-primary btn-sm">Create Group</button>
+    </form>
+</div>
+
+<!-- Source Logos -->
 <div class="card">
     <div class="card-header"><h3>Source Logos <span class="count">{{ logos|length }}</span></h3></div>
     {% if logos %}
@@ -11,6 +43,11 @@
         <div style="border:1px solid var(--border-light);border-radius:var(--radius);padding:10px;text-align:center">
             <img src="{{ l.file_path }}" alt="{{ l.filename }}" style="max-width:120px;max-height:80px;object-fit:contain;margin-bottom:8px">
             <div style="font-size:11px;color:var(--fg2);overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ l.filename }}</div>
+            {% if l.group_id %}
+            <div style="font-size:10px;color:var(--accent);margin-top:2px">
+                {% for g in logo_groups %}{% if g.id == l.group_id %}{{ g.name }}{% endif %}{% endfor %}
+            </div>
+            {% endif %}
             <form method="post" action="/logos/{{ l.id }}/delete" style="margin-top:6px" onsubmit="return confirm('Delete?')">
                 <button class="btn btn-danger btn-xs">Delete</button>
             </form>
@@ -26,6 +63,13 @@
     <div class="card">
         <h3>Upload Source Logos</h3>
         <form method="post" action="/logos/upload" enctype="multipart/form-data">
+            <label>Group (optional)</label>
+            <select name="group_id">
+                <option value="0">No Group (global)</option>
+                {% for g in logo_groups %}
+                <option value="{{ g.id }}">{{ g.name }}</option>
+                {% endfor %}
+            </select>
             <label>Select Images (PNG, JPG, GIF, WebP — max 5MB)</label>
             <input type="file" name="files" multiple accept=".png,.jpg,.jpeg,.gif,.webp" required>
             <div style="margin-top:10px"><button class="btn btn-primary">Upload</button></div>
@@ -36,7 +80,6 @@
         <h3>Generated Variants <span class="count">{{ variant_count }}</span></h3>
         <p style="font-size:13px;color:var(--fg2);margin-bottom:10px">
             Variants are stored separately in /logo_variants/ and used during mailing.
-            They are automatically cleaned up when you regenerate or clear.
         </p>
         <form hx-post="/logos/generate-variants" hx-target="#variant-result" hx-swap="innerHTML" style="margin-bottom:8px">
             <div class="form-row">

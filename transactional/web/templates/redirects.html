@@ -3,10 +3,47 @@
 {% block content %}
 <div class="page-header"><h1>Redirect Links</h1></div>
 
+<!-- Redirect Pools -->
+<div class="card">
+    <div class="card-header"><h3>Redirect Pools</h3></div>
+    {% if redirect_pools %}
+    <table style="margin-bottom:12px">
+        <thead><tr><th>Pool</th><th>Links</th><th></th></tr></thead>
+        <tbody>
+        {% for p in redirect_pools %}
+        <tr>
+            <td style="font-weight:500">{{ p.name }}</td>
+            <td>{{ p.count }}</td>
+            <td>
+                <form method="post" action="/redirects/pool/{{ p.id }}/delete" onsubmit="return confirm('Delete pool + all links?')" style="display:inline">
+                    <button class="btn btn-danger btn-xs">Delete</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% endif %}
+    <form method="post" action="/redirects/add-pool" style="display:flex;gap:8px;align-items:flex-end">
+        <div style="flex:1">
+            <label>New Pool Name</label>
+            <input name="name" placeholder="z.B. FirmaX" required>
+        </div>
+        <button class="btn btn-primary btn-sm">Create Pool</button>
+    </form>
+</div>
+
 <div class="grid-2" style="align-items:start">
     <div class="card">
         <h3>Generate Redirects (Google Share)</h3>
         <form hx-post="/redirects/generate" hx-target="#gen-result" hx-swap="innerHTML">
+            <label>Pool (optional)</label>
+            <select name="pool_id">
+                <option value="0">No Pool (global)</option>
+                {% for p in redirect_pools %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+                {% endfor %}
+            </select>
             <label>Target URL</label>
             <input name="target_url" placeholder="https://yoursite.com/landing" required>
             <div class="grid-2">
@@ -20,11 +57,20 @@
 
     <div class="card">
         <h3>Add Manually</h3>
-        <form method="post" action="/redirects/add" class="form-row" style="margin-bottom:10px">
-            <div><input name="short_url" placeholder="https://g.co/kgs/abc123" style="margin:0"></div>
-            <div class="shrink"><button class="btn btn-primary btn-sm">Add</button></div>
+        <form method="post" action="/redirects/add">
+            <label>Pool (optional)</label>
+            <select name="pool_id">
+                <option value="0">No Pool (global)</option>
+                {% for p in redirect_pools %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+                {% endfor %}
+            </select>
+            <div class="form-row" style="margin-top:8px">
+                <div><input name="short_url" placeholder="https://g.co/kgs/abc123" style="margin:0"></div>
+                <div class="shrink"><button class="btn btn-primary btn-sm">Add</button></div>
+            </div>
         </form>
-        <form hx-post="/redirects/bulk-add" hx-target="#bulk-result" hx-swap="innerHTML">
+        <form hx-post="/redirects/bulk-add" hx-target="#bulk-result" hx-swap="innerHTML" style="margin-top:12px">
             <label>Bulk Add (one URL per line)</label>
             <textarea name="urls" rows="4" placeholder="https://g.co/kgs/abc123&#10;https://g.co/kgs/def456" style="font-family:monospace;font-size:12px"></textarea>
             <div style="margin-top:8px"><button class="btn btn-secondary btn-sm">Bulk Add</button></div>
@@ -35,11 +81,11 @@
 
 <div class="card">
     <div class="card-header">
-        <h3>Redirect Pool <span class="count">{{ redirect_count }}</span></h3>
+        <h3>All Redirects <span class="count">{{ redirect_count }}</span></h3>
         {% if redirects %}
         <div class="btn-group">
             <a href="/redirects/export" class="btn btn-secondary btn-sm">Export .txt</a>
-            <form method="post" action="/redirects/clear" onsubmit="return confirm('Clear all?')">
+            <form method="post" action="/redirects/clear" onsubmit="return confirm('Clear ALL redirects?')">
                 <button class="btn btn-danger btn-sm">Clear All</button>
             </form>
         </div>
@@ -47,12 +93,14 @@
     </div>
     {% if redirects %}
     <table>
-        <thead><tr><th>Short URL</th><th>Target</th><th>Created</th><th></th></tr></thead>
+        <thead><tr><th>Short URL</th><th>Pool</th><th>Created</th><th></th></tr></thead>
         <tbody>
         {% for r in redirects[:100] %}
         <tr>
             <td style="font-family:monospace;font-size:12px"><a href="{{ r.short_url }}" target="_blank" style="color:var(--accent)">{{ r.short_url }}</a></td>
-            <td style="font-size:12px;color:var(--fg2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{{ r.target_url or '—' }}</td>
+            <td style="font-size:12px;color:var(--fg2)">
+                {% if r.pool_id %}{% for p in redirect_pools %}{% if p.id == r.pool_id %}{{ p.name }}{% endif %}{% endfor %}{% else %}—{% endif %}
+            </td>
             <td style="font-size:11px;color:var(--fg2)">{{ r.created_at }}</td>
             <td><form method="post" action="/redirects/{{ r.id }}/delete"><button class="btn btn-danger btn-xs">Del</button></form></td>
         </tr>
