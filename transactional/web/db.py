@@ -260,6 +260,31 @@ class TransDB:
                 cols = {r[1] for r in c.execute(f"PRAGMA table_info({tbl})").fetchall()}
                 if col not in cols:
                     c.execute(f"ALTER TABLE {tbl} ADD COLUMN {col} DEFAULT {default}")
+        # Remove UNIQUE constraint on trans_macros.name (need multiple presets per name)
+        if "trans_macros" in tables:
+            idx_info = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='trans_macros'").fetchone()
+            if idx_info and "UNIQUE" in (idx_info[0] or ""):
+                c.execute("""CREATE TABLE trans_macros_new (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    values_text TEXT DEFAULT '',
+                    rotate_every INTEGER DEFAULT 0,
+                    user_id INTEGER DEFAULT 0,
+                    preset_name TEXT DEFAULT '',
+                    is_active INTEGER DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+                c.execute("""INSERT INTO trans_macros_new
+                    (id, name, values_text, rotate_every, user_id, preset_name, is_active, created_at)
+                    SELECT id, name, values_text, rotate_every,
+                           COALESCE(user_id, 0),
+                           COALESCE(preset_name, 'Default'),
+                           COALESCE(is_active, 1),
+                           created_at
+                    FROM trans_macros""")
+                c.execute("DROP TABLE trans_macros")
+                c.execute("ALTER TABLE trans_macros_new RENAME TO trans_macros")
+                c.commit()
+
         for new_tbl, create_sql in [
             ("trans_logo_groups", """CREATE TABLE IF NOT EXISTS trans_logo_groups (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
