@@ -68,6 +68,15 @@ async def duplicate_macro(request: Request, mid: int,
     return RedirectResponse("/macros", status_code=303)
 
 
+@router.post("/macros/add-preset")
+async def add_preset(request: Request, macro_name: str = Form(""),
+                     preset_name: str = Form("")):
+    if macro_name.strip() and preset_name.strip():
+        uid = request.state.user['id']
+        request.app.state.db.add_macro(macro_name.strip(), "", 0, uid, preset_name.strip())
+    return RedirectResponse("/macros", status_code=303)
+
+
 @router.post("/macros/{mid}/delete")
 async def delete_macro(request: Request, mid: int):
     request.app.state.db.delete_macro(mid)

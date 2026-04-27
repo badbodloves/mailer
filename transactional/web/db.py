@@ -600,8 +600,11 @@ class TransDB:
         c = self._conn()
         if not preset_name:
             preset_name = "Default"
-        c.execute("INSERT INTO trans_macros (name,values_text,rotate_every,user_id,preset_name,is_active) VALUES (?,?,?,?,?,1)",
-                  (name, values_text, rotate_every, user_id, preset_name))
+        existing = c.execute("SELECT COUNT(*) FROM trans_macros WHERE name=? AND user_id=?",
+                              (name, user_id)).fetchone()[0]
+        is_active = 1 if existing == 0 else 0
+        c.execute("INSERT INTO trans_macros (name,values_text,rotate_every,user_id,preset_name,is_active) VALUES (?,?,?,?,?,?)",
+                  (name, values_text, rotate_every, user_id, preset_name, is_active))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
