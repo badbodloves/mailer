@@ -436,6 +436,8 @@ class TransDB:
 
     def delete_lead_list(self, lid: int):
         c = self._conn()
+        c.execute("DELETE FROM trans_leads WHERE list_id=?", (lid,))
+        c.execute("UPDATE trans_campaigns SET lead_list_id=0 WHERE lead_list_id=?", (lid,))
         c.execute("DELETE FROM trans_lead_lists WHERE id=?", (lid,))
         c.commit()
 
