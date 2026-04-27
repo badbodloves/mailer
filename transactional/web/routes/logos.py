@@ -23,6 +23,15 @@ ALLOWED_EXT = {".png", ".jpg", ".jpeg", ".gif", ".webp"}
 _variant_progress = {"running": False, "done": 0, "total": 0, "count": 0, "error": ""}
 
 
+def _group_variant_dir(group_id: int = 0) -> str:
+    if group_id:
+        d = os.path.join(VARIANT_DIR, f"group_{group_id}")
+    else:
+        d = VARIANT_DIR
+    os.makedirs(d, exist_ok=True)
+    return d
+
+
 def _resolve_path(file_path: str) -> str:
     if file_path.startswith("/static/"):
         return os.path.normpath(os.path.join(
@@ -113,17 +122,25 @@ async def delete_logo(request: Request, lid: int):
 
 
 @router.post("/logos/generate-variants", response_class=HTMLResponse)
-async def generate_variants(request: Request, variant_count: int = Form(25)):
+async def generate_variants(request: Request, variant_count: int = Form(25),
+                             group_id: int = Form(0)):
     if _variant_progress["running"]:
         return HTMLResponse('<div class="alert alert-warning">Already running.</div>')
 
     db = request.app.state.db
     uid = request.state.user['id']
-    logos = [dict(l) for l in db.get_logos(uid)]
+    if group_id:
+        logos = [dict(l) for l in db.get_logos_by_group(group_id)]
+    else:
+        logos = [dict(l) for l in db.get_logos(uid)]
     if not logos:
-        return HTMLResponse('<div class="alert alert-warning">No logos uploaded.</div>')
+        return HTMLResponse('<div class="alert alert-warning">No logos in this group.</div>')
 
-    clear_variants()
+    variant_dir = _group_variant_dir(group_id)
+    if os.path.isdir(variant_dir):
+        shutil.rmtree(variant_dir)
+    os.makedirs(variant_dir, exist_ok=True)
+
     per_logo = max(1, variant_count // len(logos))
     _variant_progress.update(running=True, done=0, total=len(logos) * per_logo, count=0, error="")
 
@@ -163,7 +180,6 @@ async def generate_variants(request: Request, variant_count: int = Form(25)):
                         variant = ImageEnhance.Contrast(variant).enhance(
                             1.0 + random.uniform(-0.03, 0.03))
 
-                        # Random pixel flip (like original image_manager)
                         pixels = variant.load()
                         w, h = variant.size
                         px = random.randint(0, w - 1)
@@ -178,7 +194,6 @@ async def generate_variants(request: Request, variant_count: int = Form(25)):
                             p[random.randint(0, 2)] = min(255, max(0, p[random.randint(0, 2)] + random.choice([-2, -1, 1, 2])))
                             pixels[px, py] = (p[0], p[1], p[2])
 
-                        # Palette quantization for small file size
                         if ext == ".png":
                             try:
                                 from PIL import Image as PILImage
@@ -189,7 +204,7 @@ async def generate_variants(request: Request, variant_count: int = Form(25)):
                                 pass
 
                         vname = f"v_{generated:04d}_{secrets.token_hex(3)}{ext}"
-                        vpath = os.path.join(VARIANT_DIR, vname)
+                        vpath = os.path.join(variant_dir, vname)
                         save_kw = {"optimize": True}
                         if fmt == "PNG":
                             save_kw["compress_level"] = 9
@@ -208,8 +223,9 @@ async def generate_variants(request: Request, variant_count: int = Form(25)):
             _variant_progress["running"] = False
 
     threading.Thread(target=worker, daemon=True).start()
+    group_label = f" (group {group_id})" if group_id else " (global)"
     return HTMLResponse(
-        f'<div class="alert alert-info">Generating {per_logo} variants per logo ({len(logos)} logos)...</div>'
+        f'<div class="alert alert-info">Generating {per_logo} variants per logo ({len(logos)} logos){group_label}...</div>'
         f'<div hx-get="/logos/variant-status" hx-trigger="every 2s" hx-swap="innerHTML"></div>')
 
 

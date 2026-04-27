@@ -770,29 +770,38 @@ def _run_campaign(db, cid: int):
         from_email_cfg = cfg.get("from_email", "")
         subject_cfg = cfg.get("subject", "") or "Notification"
 
-        # Logo setup — load from template's logo group
+        # Logo setup — load from template's logo group variant dir
         logo_variants = []
         if cfg.get("image_enabled"):
+            import glob
+            from .logos import VARIANT_DIR, UPLOAD_DIR, _group_variant_dir, _resolve_path as _resolve_logo
             logo_group_id = 0
             if campaign_template_id:
                 tpl_row = db.get_template(campaign_template_id)
                 if tpl_row:
                     logo_group_id = dict(tpl_row).get("logo_group_id", 0) or 0
+
             if logo_group_id:
-                group_logos = db.get_logos_by_group(logo_group_id)
-                logo_variants = [dict(l)["file_path"] for l in group_logos if os.path.isfile(dict(l)["file_path"])]
-                logger.info("Campaign %d: %d logos from template group %d", cid, len(logo_variants), logo_group_id)
+                gdir = _group_variant_dir(logo_group_id)
+                variant_files = sorted(glob.glob(os.path.join(gdir, "*")))
+                if variant_files:
+                    logo_variants = variant_files
+                    logger.info("Campaign %d: %d variants from group %d", cid, len(logo_variants), logo_group_id)
+                else:
+                    group_logos = db.get_logos_by_group(logo_group_id)
+                    logo_variants = [_resolve_logo(dict(l)["file_path"]) for l in group_logos]
+                    logo_variants = [p for p in logo_variants if os.path.isfile(p)]
+                    logger.info("Campaign %d: %d source logos from group %d (no variants)", cid, len(logo_variants), logo_group_id)
+
             if not logo_variants:
-                import glob
-                from .logos import VARIANT_DIR, UPLOAD_DIR
-                variant_files = sorted(glob.glob(os.path.join(VARIANT_DIR, "*")))
+                variant_files = sorted(glob.glob(os.path.join(VARIANT_DIR, "v_*")))
                 if variant_files:
                     logo_variants = variant_files
                 else:
                     source_files = sorted(glob.glob(os.path.join(UPLOAD_DIR, "*")))
                     if source_files:
                         logo_variants = source_files
-                logger.info("Campaign %d: %d logos (global)", cid, len(logo_variants))
+                logger.info("Campaign %d: %d logos (global fallback)", cid, len(logo_variants))
 
         # Redirect setup
         redirect_links = []
