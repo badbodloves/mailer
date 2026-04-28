@@ -369,6 +369,8 @@ class TransDB:
 
     def delete_smtp_list(self, lid: int):
         c = self._conn()
+        c.execute("DELETE FROM trans_smtps WHERE list_id=?", (lid,))
+        c.execute("UPDATE trans_campaigns SET smtp_list_id=0 WHERE smtp_list_id=?", (lid,))
         c.execute("DELETE FROM trans_smtp_lists WHERE id=?", (lid,))
         c.commit()
 
