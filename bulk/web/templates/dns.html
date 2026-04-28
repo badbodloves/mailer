@@ -33,18 +33,19 @@
                 </div>
                 <div>
                     <label>CF Account</label>
-                    <select id="dns-cf-account">
+                    <select id="dns-cf-account" name="cf_account_id" onchange="
+                        htmx.ajax('POST', '/dns/zones', {target:'#dns-zone-domain', swap:'innerHTML',
+                            values:{cf_account_id: this.value}})">
                         {% for a in cf_accounts %}
                         <option value="{{ a.id }}">{{ a.name }}</option>
                         {% endfor %}
                     </select>
 
                     <label>Target Domain (zone)</label>
-                    <select id="dns-zone-domain"
+                    <select id="dns-zone-domain" name="zone_domain"
                             hx-post="/dns/zones"
                             hx-trigger="click once"
                             hx-include="#dns-cf-account"
-                            hx-vals='{"cf_account_id": "0"}'
                             hx-swap="innerHTML">
                         <option value="">Click to load zones</option>
                     </select>

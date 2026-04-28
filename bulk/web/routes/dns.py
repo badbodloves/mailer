@@ -214,7 +214,7 @@ async def list_zones(request: Request, cf_account_id: int = Form(0)):
         return HTMLResponse('<option value="">No CF account</option>')
     try:
         resp = req_lib.get(f"{CF_API}/zones", headers=headers,
-                           params={"per_page": 50}, timeout=15)
+                           params={"per_page": 100}, timeout=15)
         zones = resp.json().get("result", []) if resp.status_code == 200 else []
         opts = '<option value="">— Select domain —</option>'
         for z in zones:
