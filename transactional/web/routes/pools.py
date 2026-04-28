@@ -32,26 +32,31 @@ async def create_pool(request: Request, name: str = Form("")):
 
 
 @router.post("/pools/{pid}/import-text", response_class=HTMLResponse)
-async def import_text(request: Request, pid: int, leads_text: str = Form("")):
+async def import_text(request: Request, pid: int, leads_text: str = Form(""),
+                      skip_dedup: int = Form(0)):
     db = request.app.state.db
     emails = [e.lower() for e in EMAIL_RE.findall(leads_text)]
-    result = db.import_pool_leads(pid, emails)
+    result = db.import_pool_leads(pid, emails, skip_dedup=bool(skip_dedup))
+    dedup_msg = f', {result["dupes"]} duplicates skipped' if not skip_dedup else ' (dedup skipped)'
     return HTMLResponse(
-        f'<div class="alert alert-success">{result["added"]} added, '
-        f'{result["dupes"]} duplicates skipped. '
+        f'<div class="alert alert-success">{result["added"]} added{dedup_msg}. '
         f'<a href="/pools" style="color:var(--accent)">Reload</a></div>')
 
 
 @router.post("/pools/{pid}/upload")
-async def upload_pool(request: Request, pid: int,
-                      files: TList[UploadFile] = File(...)):
+async def upload_pool(request: Request, pid: int):
+    form = await request.form()
+    files = form.getlist("files")
+    skip_dedup = bool(int(form.get("skip_dedup", 0) or 0))
     db = request.app.state.db
     total_added = 0
     total_dupes = 0
     for f in files:
+        if not hasattr(f, "read"):
+            continue
         content = (await f.read()).decode("utf-8", errors="replace")
         emails = [e.lower() for e in EMAIL_RE.findall(content)]
-        result = db.import_pool_leads(pid, emails)
+        result = db.import_pool_leads(pid, emails, skip_dedup=skip_dedup)
         total_added += result["added"]
         total_dupes += result["dupes"]
     return RedirectResponse("/pools", status_code=303)

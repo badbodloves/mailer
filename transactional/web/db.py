@@ -539,29 +539,47 @@ class TransDB:
         sent = c.execute("SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='SENT'", (pool_id,)).fetchone()[0]
         return {"total": total, "pending": pending, "used": used, "sent": sent}
 
-    def import_pool_leads(self, pool_id: int, emails: list) -> dict:
-        """Import leads into pool with dedup. New leads shuffled between pending ones."""
+    def import_pool_leads(self, pool_id: int, emails: list, skip_dedup: bool = False) -> dict:
+        """Import leads into pool. Dedup optional for large imports."""
         c = self._conn()
         added = 0
         dupes = 0
-        existing = set()
-        rows = c.execute("SELECT email FROM trans_leads WHERE list_id=?", (pool_id,)).fetchall()
-        for r in rows:
-            existing.add(r[0].lower())
-        batch = []
-        for email in emails:
-            email = email.strip().lower()
-            if not email or "@" not in email:
-                continue
-            if email in existing:
-                dupes += 1
-                continue
-            existing.add(email)
-            batch.append((pool_id, email))
-            added += 1
-        if batch:
-            c.executemany("INSERT INTO trans_leads (list_id,email,state) VALUES (?,?,'PENDING')", batch)
-        c.commit()
+
+        if skip_dedup:
+            batch = []
+            for email in emails:
+                email = email.strip().lower()
+                if not email or "@" not in email:
+                    continue
+                batch.append((pool_id, email))
+                added += 1
+                if len(batch) >= 5000:
+                    c.executemany("INSERT INTO trans_leads (list_id,email,state) VALUES (?,?,'PENDING')", batch)
+                    batch.clear()
+            if batch:
+                c.executemany("INSERT INTO trans_leads (list_id,email,state) VALUES (?,?,'PENDING')", batch)
+            c.commit()
+        else:
+            existing = set()
+            for row in c.execute("SELECT email FROM trans_leads WHERE list_id=?", (pool_id,)):
+                existing.add(row[0].lower())
+            batch = []
+            for email in emails:
+                email = email.strip().lower()
+                if not email or "@" not in email:
+                    continue
+                if email in existing:
+                    dupes += 1
+                    continue
+                existing.add(email)
+                batch.append((pool_id, email))
+                added += 1
+                if len(batch) >= 5000:
+                    c.executemany("INSERT INTO trans_leads (list_id,email,state) VALUES (?,?,'PENDING')", batch)
+                    batch.clear()
+            if batch:
+                c.executemany("INSERT INTO trans_leads (list_id,email,state) VALUES (?,?,'PENDING')", batch)
+            c.commit()
 
         # Shuffle: assign random sort positions to PENDING leads
         # by updating rowids is not possible, but we can use a random-order trick

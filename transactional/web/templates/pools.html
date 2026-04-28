@@ -28,17 +28,25 @@
             <div class="grid-2" style="align-items:start">
                 <div>
                     <form hx-post="/pools/{{ p.id }}/import-text" hx-target="#pool-result-{{ p.id }}" hx-swap="innerHTML">
-                        <label>Add Leads (dedup + shuffle into pending)</label>
+                        <label>Add Leads</label>
                         <textarea name="leads_text" rows="5" placeholder="user1@example.com&#10;user2@example.com" style="font-family:monospace;font-size:12px"></textarea>
-                        <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Import & Shuffle</button></div>
+                        <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;font-size:13px">
+                            <input type="checkbox" name="skip_dedup" value="1" style="width:auto">
+                            <span>Skip duplicate check (faster for large imports)</span>
+                        </label>
+                        <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Import</button></div>
                     </form>
                     <div id="pool-result-{{ p.id }}" style="margin-top:8px"></div>
                 </div>
                 <div>
                     <form method="post" action="/pools/{{ p.id }}/upload" enctype="multipart/form-data">
-                        <label>Upload Lead Files (dedup + shuffle)</label>
+                        <label>Upload Lead Files</label>
                         <input type="file" name="files" multiple accept=".txt,.csv" required>
-                        <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Upload & Shuffle</button></div>
+                        <label style="display:flex;align-items:center;gap:6px;margin-top:6px;cursor:pointer;font-size:13px">
+                            <input type="checkbox" name="skip_dedup" value="1" style="width:auto">
+                            <span>Skip duplicate check</span>
+                        </label>
+                        <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Upload</button></div>
                     </form>
                     <div class="divider"></div>
                     <div class="btn-group" style="flex-wrap:wrap">
