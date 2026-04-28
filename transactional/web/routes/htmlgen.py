@@ -57,15 +57,16 @@ async def htmlgen_page(request: Request):
 
 
 @router.post("/htmlgen/generate", response_class=HTMLResponse)
-async def generate_templates(request: Request,
-                              count: int = Form(50),
-                              layout: str = Form(""),
-                              primary_color: str = Form(""),
-                              accent_color: str = Form("")):
+async def generate_templates(request: Request):
+    form = await request.form()
+    count = max(1, min(int(form.get("count", 50)), 5000))
+    selected_layouts = form.getlist("layouts")
+    primary_color = form.get("primary_color", "")
+    accent_color = form.get("accent_color", "")
+
     if _gen_progress["running"]:
         return HTMLResponse('<div class="alert alert-warning">Generation already running.</div>')
 
-    count = max(1, min(count, 5000))
     _gen_progress.update(running=True, total=count, done=0)
 
     def worker():
@@ -76,8 +77,6 @@ async def generate_templates(request: Request,
             cfg_path = _HTMLGEN_BASE / "config.yaml"
             cfg = load_config(cfg_path)
 
-            if layout and layout != "random":
-                cfg["layout"] = layout
             if primary_color.strip():
                 cfg.setdefault("colors", {})["primary"] = [primary_color.strip()]
                 from htmlgen.colors import lighten_color
@@ -86,7 +85,12 @@ async def generate_templates(request: Request,
                 cfg.setdefault("colors", {})["accent"] = [accent_color.strip()]
 
             _OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
-            cache = _load_all(_HTMLGEN_BASE)
+            block_variants, all_layouts = _load_all(_HTMLGEN_BASE)
+            if selected_layouts:
+                filtered = [l for l in all_layouts if l["name"] in selected_layouts]
+                if filtered:
+                    all_layouts = filtered
+            cache = (block_variants, all_layouts)
 
             for i in range(1, count + 1):
                 html = generate_one(cfg, _HTMLGEN_BASE, _cache=cache)
