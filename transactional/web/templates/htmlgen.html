@@ -78,9 +78,9 @@
     </div>
 </details>
 
-{% if generated %}
+{% if gen_count %}
 <details open>
-    <summary>Generated Templates <span style="margin-left:8px;color:var(--fg2);font-size:13px">({{ generated|length }})</span></summary>
+    <summary>Generated Templates <span style="margin-left:8px;color:var(--fg2);font-size:13px">({{ gen_count }})</span></summary>
     <div class="details-body" style="padding-top:16px">
         <div class="btn-group" style="margin-bottom:16px;flex-wrap:wrap">
             <form method="post" action="/htmlgen/export" style="display:inline">
@@ -92,42 +92,37 @@
         </div>
 
         <div style="background:#f8f9fa;padding:14px;border-radius:4px;margin-bottom:16px">
-            <label style="margin:0 0 6px">Template Name</label>
-            <div style="display:flex;gap:8px;align-items:center">
-                <input id="load-name" name="load_name" value="HtmlGen" placeholder="z.B. April Campaign" style="flex:1">
-                <button class="btn btn-success btn-sm"
-                        hx-post="/htmlgen/load-to-mailer"
-                        hx-target="#load-result"
-                        hx-swap="innerHTML"
-                        hx-include="#load-name">Load into Mailer</button>
+            <div class="grid-2" style="margin-bottom:8px">
+                <div>
+                    <label style="margin:0 0 4px">New Template</label>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <input id="load-name" name="load_name" value="HtmlGen" style="flex:1">
+                        <button class="btn btn-success btn-sm"
+                                hx-post="/htmlgen/load-to-mailer"
+                                hx-target="#load-result"
+                                hx-swap="innerHTML"
+                                hx-include="#load-name">Create & Load</button>
+                    </div>
+                </div>
+                <div>
+                    <label style="margin:0 0 4px">Or add to existing</label>
+                    <div style="display:flex;gap:8px;align-items:center">
+                        <select id="existing-tpl" name="existing_template_id" style="flex:1">
+                            <option value="0">— Select —</option>
+                            {% for t in templates %}<option value="{{ t.id }}">{{ t.name }}</option>{% endfor %}
+                        </select>
+                        <button class="btn btn-success btn-sm"
+                                hx-post="/htmlgen/load-to-mailer"
+                                hx-target="#load-result"
+                                hx-swap="innerHTML"
+                                hx-include="#existing-tpl, #load-name">Add to Template</button>
+                    </div>
+                </div>
             </div>
-            <div class="form-help" style="margin-top:4px">Templates werden als "Name #1", "Name #2", etc. im HTML Editor gespeichert.</div>
         </div>
         <div id="load-result" style="margin-bottom:12px"></div>
 
-        <table>
-            <thead><tr><th>#</th><th>Name</th><th>Size</th><th></th></tr></thead>
-            <tbody>
-            {% for t in generated %}
-            <tr>
-                <td>{{ loop.index }}</td>
-                <td style="font-size:13px">{{ t.name }}</td>
-                <td style="font-size:12px;color:var(--fg2)">{{ (t.html|length / 1024)|round(1) }} KB</td>
-                <td>
-                    <button class="btn btn-secondary btn-xs"
-                            onclick="let d=document.getElementById('tpl-preview-{{ loop.index }}');d.style.display=d.style.display==='none'?'block':'none'">
-                        Preview
-                    </button>
-                </td>
-            </tr>
-            <tr id="tpl-preview-{{ loop.index }}" style="display:none">
-                <td colspan="4" style="padding:0">
-                    <iframe srcdoc="{{ t.html|e }}" style="width:100%;height:500px;border:1px solid var(--border);border-radius:4px"></iframe>
-                </td>
-            </tr>
-            {% endfor %}
-            </tbody>
-        </table>
+        <p style="color:var(--fg2);font-size:13px;margin-bottom:12px">{{ gen_count }} templates generated. Use Export or Load to use them.</p>
     </div>
 </details>
 {% endif %}

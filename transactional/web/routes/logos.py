@@ -41,8 +41,10 @@ def _resolve_path(file_path: str) -> str:
 
 def get_variant_count() -> int:
     try:
-        return len([f for f in os.listdir(VARIANT_DIR)
-                     if os.path.isfile(os.path.join(VARIANT_DIR, f))])
+        count = 0
+        for root, dirs, files in os.walk(VARIANT_DIR):
+            count += sum(1 for f in files if not f.startswith("."))
+        return count
     except OSError:
         return 0
 

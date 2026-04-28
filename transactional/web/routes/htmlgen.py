@@ -19,10 +19,14 @@ _gen_progress = {"running": False, "total": 0, "done": 0}
 def _list_generated() -> list[dict]:
     if not _OUTPUT_DIR.is_dir():
         return []
-    results = []
-    for f in sorted(_OUTPUT_DIR.glob("*.html")):
-        results.append({"name": f.stem, "html": f.read_text(encoding="utf-8")})
-    return results
+    return [{"name": f.stem, "html": f.read_text(encoding="utf-8")}
+            for f in sorted(_OUTPUT_DIR.glob("*.html"))]
+
+
+def _count_generated() -> int:
+    if not _OUTPUT_DIR.is_dir():
+        return 0
+    return len(list(_OUTPUT_DIR.glob("*.html")))
 
 
 @router.get("/htmlgen", response_class=HTMLResponse)
@@ -44,15 +48,19 @@ async def htmlgen_page(request: Request):
         })
 
     layout_names = [l["name"] for l in layouts]
-    generated = _list_generated()
+    gen_count = _count_generated()
+    uid = request.state.user["id"]
+    templates = [dict(t) for t in db.get_templates(uid)]
 
     return request.app.state.templates.TemplateResponse(request, "htmlgen.html", {
         "active": "htmlgen",
         "blocks_info": blocks_info,
         "layout_names": layout_names,
         "cfg": cfg,
-        "generated": generated,
+        "generated": [None] * gen_count,
+        "gen_count": gen_count,
         "gen_progress": _gen_progress,
+        "templates": templates,
     })
 
 
@@ -191,7 +199,8 @@ async def export_templates(request: Request):
 
 @router.post("/htmlgen/load-to-mailer", response_class=HTMLResponse)
 async def load_to_mailer(request: Request,
-                          load_name: str = Form("HtmlGen")):
+                          load_name: str = Form("HtmlGen"),
+                          existing_template_id: int = Form(0)):
     db = request.app.state.db
     uid = request.state.user["id"]
     generated = _list_generated()
@@ -200,12 +209,17 @@ async def load_to_mailer(request: Request,
         return HTMLResponse('<div class="alert alert-warning">No templates to load.</div>')
 
     prefix = load_name.strip() or "HtmlGen"
-    template_id = db.add_template(f"{prefix} ({len(generated)} HTMLs)", "", uid)
+
+    if existing_template_id:
+        template_id = existing_template_id
+    else:
+        template_id = db.add_template(f"{prefix} ({len(generated)} HTMLs)", "", uid)
+
     for i, tpl in enumerate(generated, 1):
         db.add_template_file(template_id, f"{prefix}_{i:04d}.html", tpl["html"])
 
     return HTMLResponse(
-        f'<div class="alert alert-success">{len(generated)} HTMLs as "{escape(prefix)}" loaded into '
+        f'<div class="alert alert-success">{len(generated)} HTMLs loaded into '
         f'<a href="/templates" style="color:var(--accent)">HTML Editor</a>.</div>'
     )
 
