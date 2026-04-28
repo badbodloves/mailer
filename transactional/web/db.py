@@ -292,6 +292,45 @@ class TransDB:
             ("trans_redirect_pools", """CREATE TABLE IF NOT EXISTS trans_redirect_pools (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
                 user_id INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
+            ("trans_inbox_accounts", """CREATE TABLE IF NOT EXISTS trans_inbox_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT DEFAULT '',
+                email TEXT NOT NULL,
+                imap_host TEXT NOT NULL,
+                imap_port INTEGER DEFAULT 993,
+                username TEXT DEFAULT '',
+                password TEXT DEFAULT '',
+                proxy TEXT DEFAULT '',
+                user_id INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
+            ("trans_inbox_tests", """CREATE TABLE IF NOT EXISTS trans_inbox_tests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT DEFAULT '',
+                smtp_list_id INTEGER DEFAULT 0,
+                template_id INTEGER DEFAULT 0,
+                mime_profile TEXT DEFAULT 'rotate',
+                subject TEXT DEFAULT '',
+                from_name TEXT DEFAULT '',
+                mail_count INTEGER DEFAULT 0,
+                status TEXT DEFAULT 'DRAFT',
+                user_id INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
+            ("trans_inbox_results", """CREATE TABLE IF NOT EXISTS trans_inbox_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                test_id INTEGER DEFAULT 0,
+                account_id INTEGER DEFAULT 0,
+                account_email TEXT DEFAULT '',
+                provider TEXT DEFAULT '',
+                smtp_host TEXT DEFAULT '',
+                smtp_user TEXT DEFAULT '',
+                html_file TEXT DEFAULT '',
+                mime_profile TEXT DEFAULT '',
+                subject_used TEXT DEFAULT '',
+                from_used TEXT DEFAULT '',
+                result TEXT DEFAULT 'PENDING',
+                folder_found TEXT DEFAULT '',
+                error_message TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
         ]:
             if new_tbl not in tables:
                 c.execute(create_sql)
@@ -1064,3 +1103,60 @@ class TransDB:
         if hasattr(self._local, "conn") and self._local.conn:
             self._local.conn.close()
             self._local.conn = None
+
+    # ── Inbox Test ───────────────────────────────────────
+    def add_inbox_account(self, provider, email, imap_host, imap_port, username, password, proxy="", user_id=0):
+        c = self._conn()
+        c.execute("INSERT INTO trans_inbox_accounts (provider,email,imap_host,imap_port,username,password,proxy,user_id) VALUES (?,?,?,?,?,?,?,?)",
+                  (provider, email, imap_host, imap_port, username, password, proxy, user_id))
+        c.commit()
+
+    def get_inbox_accounts(self, user_id=0):
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_inbox_accounts WHERE user_id=? ORDER BY provider", (user_id,)).fetchall()
+        return self._conn().execute("SELECT * FROM trans_inbox_accounts ORDER BY provider").fetchall()
+
+    def delete_inbox_account(self, aid):
+        self._conn().execute("DELETE FROM trans_inbox_accounts WHERE id=?", (aid,))
+        self._conn().commit()
+
+    def create_inbox_test(self, name, smtp_list_id, template_id, mime_profile, subject, from_name, mail_count, user_id=0):
+        c = self._conn()
+        c.execute("INSERT INTO trans_inbox_tests (name,smtp_list_id,template_id,mime_profile,subject,from_name,mail_count,user_id) VALUES (?,?,?,?,?,?,?,?)",
+                  (name, smtp_list_id, template_id, mime_profile, subject, from_name, mail_count, user_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_inbox_tests(self, user_id=0):
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_inbox_tests WHERE user_id=? ORDER BY id DESC", (user_id,)).fetchall()
+        return self._conn().execute("SELECT * FROM trans_inbox_tests ORDER BY id DESC").fetchall()
+
+    def get_inbox_test(self, tid):
+        return self._conn().execute("SELECT * FROM trans_inbox_tests WHERE id=?", (tid,)).fetchone()
+
+    def update_inbox_test(self, tid, **kw):
+        sets = ", ".join(f"{k}=?" for k in kw)
+        self._conn().execute(f"UPDATE trans_inbox_tests SET {sets} WHERE id=?", (*kw.values(), tid))
+        self._conn().commit()
+
+    def delete_inbox_test(self, tid):
+        c = self._conn()
+        c.execute("DELETE FROM trans_inbox_results WHERE test_id=?", (tid,))
+        c.execute("DELETE FROM trans_inbox_tests WHERE id=?", (tid,))
+        c.commit()
+
+    def add_inbox_result(self, test_id, account_id, account_email, provider, smtp_host, smtp_user, html_file, mime_profile, subject_used, from_used):
+        c = self._conn()
+        c.execute("INSERT INTO trans_inbox_results (test_id,account_id,account_email,provider,smtp_host,smtp_user,html_file,mime_profile,subject_used,from_used) VALUES (?,?,?,?,?,?,?,?,?,?)",
+                  (test_id, account_id, account_email, provider, smtp_host, smtp_user, html_file, mime_profile, subject_used, from_used))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def update_inbox_result(self, rid, result, folder_found="", error_message=""):
+        self._conn().execute("UPDATE trans_inbox_results SET result=?, folder_found=?, error_message=? WHERE id=?",
+                              (result, folder_found, error_message, rid))
+        self._conn().commit()
+
+    def get_inbox_results(self, test_id):
+        return self._conn().execute("SELECT * FROM trans_inbox_results WHERE test_id=? ORDER BY id", (test_id,)).fetchall()
