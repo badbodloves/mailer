@@ -867,6 +867,12 @@ def _run_campaign(db, cid: int):
             if "timeout" in e or "timed out" in e:
                 return "timeout"
 
+            # --- SSL errors ---
+            if "ssl" in e and ("legacy" in e or "renegotiation" in e or "handshake" in e or "certificate" in e or "unsafe" in e):
+                return "connection"
+            if "ssl" in e and "error" in e:
+                return "connection"
+
             # --- Connection ---
             if "connect" in e and ("refused" in e or "error" in e or "reset" in e):
                 return "connection"
@@ -955,6 +961,9 @@ def _run_campaign(db, cid: int):
             nonlocal sent, failed
             logger.info("Campaign %d: _send_one for lead %d (%s)", campaign_id, lead_id, email)
             if campaign_id not in _runners:
+                with _lock:
+                    db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lead_id,))
+                    db._conn().commit()
                 return
             account = pool.acquire()
             if account is None:
@@ -969,6 +978,9 @@ def _run_campaign(db, cid: int):
                 time.sleep(3)
                 account = pool.acquire()
                 if account is None:
+                    with _lock:
+                        db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lead_id,))
+                        db._conn().commit()
                     return
 
             cur_from_email = from_email_cfg or account.user
