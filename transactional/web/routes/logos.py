@@ -49,6 +49,14 @@ def get_variant_count() -> int:
         return 0
 
 
+def get_group_variant_count(group_id: int) -> int:
+    d = _group_variant_dir(group_id)
+    try:
+        return sum(1 for f in os.listdir(d) if os.path.isfile(os.path.join(d, f)))
+    except OSError:
+        return 0
+
+
 def clear_variants():
     try:
         shutil.rmtree(VARIANT_DIR)
@@ -63,6 +71,8 @@ async def logos_page(request: Request):
     uid = request.state.user["id"]
     logos = [dict(l) for l in db.get_logos(uid)]
     logo_groups = [dict(g) for g in db.get_logo_groups(uid)]
+    for g in logo_groups:
+        g["variant_count"] = get_group_variant_count(g["id"])
     return request.app.state.templates.TemplateResponse(request, "logos.html", {
         "active": "logos", "logos": logos, "logo_groups": logo_groups, "db": db,
         "variant_running": _variant_progress["running"],
@@ -249,6 +259,12 @@ async def variant_status(request: Request):
 
 
 @router.post("/logos/clear-variants", response_class=HTMLResponse)
-async def clear_variant_files(request: Request):
+async def clear_variant_files(request: Request, group_id: int = Form(0)):
+    if group_id:
+        d = _group_variant_dir(group_id)
+        if os.path.isdir(d):
+            shutil.rmtree(d)
+            os.makedirs(d, exist_ok=True)
+        return HTMLResponse(f'<div class="alert alert-success">Variants for group {group_id} cleared.</div>')
     clear_variants()
-    return HTMLResponse('<div class="alert alert-success">Variants cleared.</div>')
+    return HTMLResponse('<div class="alert alert-success">All variants cleared.</div>')

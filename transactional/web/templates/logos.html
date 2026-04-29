@@ -8,13 +8,23 @@
     <div class="card-header"><h3>Logo Groups</h3></div>
     {% if logo_groups %}
     <table style="margin-bottom:12px">
-        <thead><tr><th>Group</th><th>Logos</th><th></th></tr></thead>
+        <thead><tr><th>Group</th><th>Logos</th><th>Variants</th><th></th></tr></thead>
         <tbody>
         {% for g in logo_groups %}
         {% set group_logos = db.get_logos_by_group(g.id) %}
         <tr>
             <td style="font-weight:500">{{ g.name }}</td>
             <td>{{ group_logos|length }}</td>
+            <td>
+                {{ g.variant_count }}
+                {% if g.variant_count > 0 %}
+                <form hx-post="/logos/clear-variants" hx-target="closest td" hx-swap="innerHTML"
+                      hx-confirm="Clear {{ g.variant_count }} variants?" style="display:inline;margin-left:4px">
+                    <input type="hidden" name="group_id" value="{{ g.id }}">
+                    <button class="btn btn-danger btn-xs btn-icon">&#10005;</button>
+                </form>
+                {% endif %}
+            </td>
             <td>
                 <form method="post" action="/logos/group/{{ g.id }}/delete" onsubmit="return confirm('Delete group + all logos?')" style="display:inline">
                     <button class="btn btn-danger btn-xs">Delete</button>
