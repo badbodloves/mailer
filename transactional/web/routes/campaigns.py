@@ -1056,11 +1056,10 @@ def _run_campaign(db, cid: int):
                 logger.error("Campaign %d send exception for %s: %s", campaign_id, email, send_exc, exc_info=True)
                 err_type = _classify_error(str(send_exc))
                 pool.suspend(account, str(send_exc)[:100])
-                retry_key = lead_id
-                _retry_counts[retry_key] = _retry_counts.get(retry_key, 0) + 1
+                _retry_counts[lead_id] = _retry_counts.get(lead_id, 0) + 1
                 with _lock:
-                    if err_type == "mailbox_not_found" or _retry_counts[retry_key] > 10:
-                        _log_bounce(lead_id, email, str(send_exc), 0, account.host, account.user)
+                    _log_bounce(lead_id, email, str(send_exc), 0, account.host, account.user)
+                    if err_type == "mailbox_not_found" or _retry_counts[lead_id] > 10:
                         db.mark_failed(lead_id, str(send_exc)[:500])
                         failed += 1
                         db.update_campaign(campaign_id, sent=sent, failed=failed)
@@ -1080,13 +1079,12 @@ def _run_campaign(db, cid: int):
                     _retry_counts.pop(lead_id, None)
                 elif result.is_fatal:
                     err_type = _classify_error(result.error, result.smtp_code if hasattr(result, 'smtp_code') else 0)
+                    _log_bounce(lead_id, email, result.error,
+                                result.smtp_code if hasattr(result, 'smtp_code') else 0,
+                                account.host, account.user)
                     pool.suspend(account, result.error[:100])
-                    retry_key = lead_id
-                    _retry_counts[retry_key] = _retry_counts.get(retry_key, 0) + 1
-                    if err_type == "mailbox_not_found" or _retry_counts[retry_key] > 10:
-                        _log_bounce(lead_id, email, result.error,
-                                    result.smtp_code if hasattr(result, 'smtp_code') else 0,
-                                    account.host, account.user)
+                    _retry_counts[lead_id] = _retry_counts.get(lead_id, 0) + 1
+                    if err_type == "mailbox_not_found" or _retry_counts[lead_id] > 10:
                         db.mark_failed(lead_id, result.error[:500])
                         failed += 1
                     else:
@@ -1096,8 +1094,9 @@ def _run_campaign(db, cid: int):
                         except Exception:
                             pass
                     logger.warning("Campaign %d FATAL for %s: %s (%s) retry#%d",
-                                    campaign_id, email, result.error[:200], err_type, _retry_counts.get(retry_key, 0))
+                                    campaign_id, email, result.error[:200], err_type, _retry_counts.get(lead_id, 0))
                 else:
+                    _log_bounce(lead_id, email, result.error, 0, account.host, account.user)
                     try:
                         db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lead_id,))
                         db._conn().commit()

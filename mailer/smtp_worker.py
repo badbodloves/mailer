@@ -34,7 +34,7 @@ STRICT_PROVIDERS = frozenset({
 
 FATAL_RECIPIENT_CODES = frozenset({550, 551, 552, 553, 554, 555})
 
-BACKOFF_BASE = 30
+BACKOFF_BASE = 10
 
 
 @dataclass
