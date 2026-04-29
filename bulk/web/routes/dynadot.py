@@ -405,6 +405,81 @@ async def buy_bulk(request: Request, domains: str = Form("[]"),
     )
 
 
+@router.post("/domains/{did}/transfer-cf", response_class=HTMLResponse)
+async def transfer_cf(request: Request, did: int, cf_account_id: int = Form(0)):
+    """Delete zone from old CF account, create in new one, update NS at Dynadot."""
+    import requests as req_lib
+    db = request.app.state.db
+    row = db._conn().execute("SELECT * FROM purchased_domains WHERE id=?", (did,)).fetchone()
+    if not row:
+        return HTMLResponse('<span style="color:var(--red)">Not found</span>')
+    row = dict(row)
+    domain = row["domain"]
+
+    cf_headers, account_id = _cf_headers_for(db, cf_account_id)
+    if not cf_headers:
+        return HTMLResponse('<span style="color:var(--red)">No CF account selected</span>')
+
+    log = []
+
+    # Delete old zone if exists
+    old_zone_id = row.get("cf_zone_id", "")
+    if old_zone_id:
+        try:
+            resp = req_lib.delete(
+                f"https://api.cloudflare.com/client/v4/zones/{old_zone_id}",
+                headers=cf_headers, timeout=15)
+            if resp.status_code == 200:
+                log.append(f"Old zone deleted")
+            else:
+                log.append(f"Old zone delete: {resp.status_code}")
+        except Exception as e:
+            log.append(f"Old zone delete failed: {e}")
+
+    # Create new zone
+    try:
+        resp = req_lib.post(
+            "https://api.cloudflare.com/client/v4/zones",
+            headers=cf_headers,
+            json={"name": domain, "account": {"id": account_id}, "jump_start": False},
+            timeout=15)
+        zdata = resp.json()
+        if zdata.get("success"):
+            result = zdata["result"]
+            zone_id = result.get("id", "")
+            ns_list = result.get("name_servers", [])
+            ns1 = ns_list[0] if len(ns_list) > 0 else ""
+            ns2 = ns_list[1] if len(ns_list) > 1 else ""
+            log.append(f"New zone: {zone_id[:12]}... NS: {ns1}, {ns2}")
+
+            c = db._conn()
+            c.execute("UPDATE purchased_domains SET cf_zone_id=?, cf_ns1=?, cf_ns2=?, ns_set=0 WHERE id=?",
+                      (zone_id, ns1, ns2, did))
+            c.commit()
+
+            # Set NS at Dynadot
+            api_key = _get_api_key(db)
+            if api_key and ns1 and ns2:
+                try:
+                    data = _dynadot_call(api_key, "set_ns", {"domain": domain, "ns1": ns1, "ns2": ns2})
+                    ns_resp = data.get("SetNsResponse", data)
+                    if str(ns_resp.get("ResponseCode", "-1")) == "0":
+                        db.update_purchased_domain(domain, ns_set=1)
+                        log.append("NS updated at Dynadot!")
+                    else:
+                        log.append(f"NS pending: {ns_resp.get('Error', 'retry later')}")
+                except Exception as e:
+                    log.append(f"NS error: {e}")
+        else:
+            errs = zdata.get("errors", [])
+            log.append(f"Zone create failed: {errs}")
+    except Exception as e:
+        log.append(f"Zone error: {e}")
+
+    html = '<div style="font-size:12px">' + '<br>'.join(f"{'✓' if 'delete' in l.lower() or 'updated' in l.lower() or 'new zone' in l.lower() else '⚠'} {escape(l)}" for l in log) + '</div>'
+    return HTMLResponse(html)
+
+
 @router.post("/domains/{did}/set-ns", response_class=HTMLResponse)
 async def retry_set_ns(request: Request, did: int):
     db = request.app.state.db

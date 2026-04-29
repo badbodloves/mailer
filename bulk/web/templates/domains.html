@@ -102,6 +102,13 @@
                                 hx-target="closest td"
                                 hx-swap="innerHTML">Retry NS</button>
                         {% endif %}
+                        <button class="btn btn-secondary btn-xs"
+                                hx-post="/domains/{{ d.id }}/transfer-cf"
+                                hx-target="#transfer-result-{{ d.id }}"
+                                hx-swap="innerHTML"
+                                hx-include="#cf-account-select"
+                                hx-confirm="Transfer {{ d.domain }} to selected CF account?">Transfer CF</button>
+                        <div id="transfer-result-{{ d.id }}" style="margin-top:4px"></div>
                     </td>
                 </tr>
                 {% endfor %}
