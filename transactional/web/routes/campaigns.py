@@ -805,15 +805,15 @@ def _run_campaign(db, cid: int):
 
         # Redirect setup
         redirect_links = []
-        if cfg.get("redirect_enabled"):
-            redirect_pool_id = camp.get("redirect_pool_id", 0) or 0
-            if redirect_pool_id:
-                redirects = db.get_redirects_by_pool(redirect_pool_id)
-            else:
-                redirects = db.get_redirects(uid)
+        redirect_pool_id = camp.get("redirect_pool_id", 0) or 0
+        if redirect_pool_id:
+            redirects = db.get_redirects_by_pool(redirect_pool_id)
             redirect_links = [dict(r)["short_url"] for r in redirects]
+        elif cfg.get("redirect_enabled"):
+            redirects = db.get_redirects(uid)
+            redirect_links = [dict(r)["short_url"] for r in redirects]
+        if redirect_links:
             logger.info("Campaign %d: %d redirect links loaded", cid, len(redirect_links))
-        redirect_rotate = cfg.get("redirect_rotate_every", 10) or 10
         mime_profile_mode = cfg.get("mime_profile", "default")
 
 
@@ -994,8 +994,7 @@ def _run_campaign(db, cid: int):
 
                 # Resolve {RedirectLink}
                 if redirect_links and "{RedirectLink}" in html:
-                    group = send_idx // redirect_rotate
-                    link = redirect_links[group % len(redirect_links)] if redirect_links else ""
+                    link = random.choice(redirect_links)
                     html = html.replace("{RedirectLink}", link)
                     cur_subject = cur_subject.replace("{RedirectLink}", link)
 

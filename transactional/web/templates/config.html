@@ -116,16 +116,10 @@
         </div>
         <div class="card">
             <h3>Redirect Links</h3>
-            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                <input type="checkbox" name="redirect_enabled" {{ 'checked' if cfg.redirect_enabled }} style="width:auto">
-                <span>Enable Redirect Link Rotation</span>
-            </label>
-            <label>Target URL</label>
-            <input name="redirect_target_url" value="{{ cfg.redirect_target_url or '' }}">
-            <label>Rotate Every</label>
-            <input name="redirect_rotate_every" type="number" value="{{ cfg.redirect_rotate_every }}">
-            <label>Gen Threads</label>
-            <input name="redirect_gen_threads" type="number" value="{{ cfg.redirect_gen_threads }}">
+            <div class="form-help">
+                Manage redirect pools on the <a href="/redirects" style="color:var(--accent)">Redirects</a> page.
+                Select a pool per campaign in Campaign Edit. Random link per mail.
+            </div>
         </div>
         <div class="card">
             <h3>Cloudinary</h3>
