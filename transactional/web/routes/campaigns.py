@@ -1133,83 +1133,83 @@ def _run_campaign(db, cid: int):
         _retry_counts = {}
 
         try:
-         with ThreadPoolExecutor(max_workers=thread_count) as executor:
-            db.reset_in_progress(lead_list_id)
-            while cid in _runners:
-                if pool.all_dead:
-                    break
-                if pool.available_count() == 0:
-                    wait = pool.next_available_in()
-                    if wait > 0:
-                        logger.info("Campaign %d: all SMTPs suspended, waiting %.0fs", cid, wait)
-                        time.sleep(min(wait + 1, 60))
-                        continue
-                batch = db.fetch_pending(lead_list_id, 200)
-                if not batch:
-                    break
-                db.mark_in_progress([r["id"] for r in batch])
-                futures = {executor.submit(_send_one, r["id"], r["email"]): r["id"] for r in batch}
-                for f in as_completed(futures):
-                    try:
-                        f.result()
-                    except Exception as e:
-                        lid = futures[f]
-                        logger.error("Campaign %d EXECUTOR error for lead %d: %s", cid, lid, e, exc_info=True)
-                        try:
-                            db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lid,))
-                            db._conn().commit()
-                        except Exception:
-                            pass
-
-            # Retry loop — up to 3 passes for failed/pending leads
-            max_retries = 3 if cfg.get("auto_retry_failed", True) else 0
-            for retry_pass in range(max_retries):
-                if cid not in _runners or pool.all_dead:
-                    break
-
+            with ThreadPoolExecutor(max_workers=thread_count) as executor:
                 db.reset_in_progress(lead_list_id)
-
-                db._conn().execute(
-                    "UPDATE trans_leads SET state='PENDING' WHERE list_id=? AND state='FAILED' "
-                    "AND id NOT IN (SELECT lead_id FROM trans_bounce_log WHERE error_type='mailbox_not_found' AND campaign_id=?)",
-                    (lead_list_id, cid))
-                db._conn().commit()
-
-                pending = db._conn().execute(
-                    "SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='PENDING'",
-                    (lead_list_id,)).fetchone()[0]
-                if pending == 0:
-                    break
-
-                logger.info("Campaign %d: retry pass %d — %d leads pending", cid, retry_pass + 1, pending)
-                time.sleep(30)
-
                 while cid in _runners:
                     if pool.all_dead:
                         break
                     if pool.available_count() == 0:
                         wait = pool.next_available_in()
                         if wait > 0:
+                            logger.info("Campaign %d: all SMTPs suspended, waiting %.0fs", cid, wait)
                             time.sleep(min(wait + 1, 60))
                             continue
                     batch = db.fetch_pending(lead_list_id, 200)
                     if not batch:
                         break
                     db.mark_in_progress([r["id"] for r in batch])
-                    futs = {executor.submit(_send_one, r["id"], r["email"]): r["id"] for r in batch}
-                    for f in as_completed(futs):
+                    futures = {executor.submit(_send_one, r["id"], r["email"]): r["id"] for r in batch}
+                    for f in as_completed(futures):
                         try:
                             f.result()
                         except Exception as e:
-                            lid = futs[f]
-                            logger.error("Campaign %d RETRY error for %d: %s", cid, lid, e)
+                            lid = futures[f]
+                            logger.error("Campaign %d EXECUTOR error for lead %d: %s", cid, lid, e, exc_info=True)
                             try:
                                 db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lid,))
                                 db._conn().commit()
                             except Exception:
                                 pass
 
-                db.reset_in_progress(lead_list_id)
+                # Retry loop — up to 3 passes for failed/pending leads
+                max_retries = 3 if cfg.get("auto_retry_failed", True) else 0
+                for retry_pass in range(max_retries):
+                    if cid not in _runners or pool.all_dead:
+                        break
+
+                    db.reset_in_progress(lead_list_id)
+
+                    db._conn().execute(
+                        "UPDATE trans_leads SET state='PENDING' WHERE list_id=? AND state='FAILED' "
+                        "AND id NOT IN (SELECT lead_id FROM trans_bounce_log WHERE error_type='mailbox_not_found' AND campaign_id=?)",
+                        (lead_list_id, cid))
+                    db._conn().commit()
+
+                    pending = db._conn().execute(
+                        "SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='PENDING'",
+                        (lead_list_id,)).fetchone()[0]
+                    if pending == 0:
+                        break
+
+                    logger.info("Campaign %d: retry pass %d — %d leads pending", cid, retry_pass + 1, pending)
+                    time.sleep(30)
+
+                    while cid in _runners:
+                        if pool.all_dead:
+                            break
+                        if pool.available_count() == 0:
+                            wait = pool.next_available_in()
+                            if wait > 0:
+                                time.sleep(min(wait + 1, 60))
+                                continue
+                        batch = db.fetch_pending(lead_list_id, 200)
+                        if not batch:
+                            break
+                        db.mark_in_progress([r["id"] for r in batch])
+                        futs = {executor.submit(_send_one, r["id"], r["email"]): r["id"] for r in batch}
+                        for f in as_completed(futs):
+                            try:
+                                f.result()
+                            except Exception as e:
+                                lid = futs[f]
+                                logger.error("Campaign %d RETRY error for %d: %s", cid, lid, e)
+                                try:
+                                    db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lid,))
+                                    db._conn().commit()
+                                except Exception:
+                                    pass
+
+                    db.reset_in_progress(lead_list_id)
         finally:
             db.reset_in_progress(lead_list_id)
 
