@@ -1138,7 +1138,7 @@ def _run_campaign(db, cid: int):
                 while cid in _runners:
                     if pool.all_dead:
                         break
-                    if pool.available_count() == 0:
+                    if pool.available_count == 0:
                         wait = pool.next_available_in()
                         if wait > 0:
                             logger.info("Campaign %d: all SMTPs suspended, waiting %.0fs", cid, wait)
@@ -1187,7 +1187,7 @@ def _run_campaign(db, cid: int):
                     while cid in _runners:
                         if pool.all_dead:
                             break
-                        if pool.available_count() == 0:
+                        if pool.available_count == 0:
                             wait = pool.next_available_in()
                             if wait > 0:
                                 time.sleep(min(wait + 1, 60))
