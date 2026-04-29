@@ -819,20 +819,44 @@ def _run_campaign(db, cid: int):
 
         def _classify_error(error_str: str, code: int = 0) -> str:
             e = error_str.lower()
-            if code >= 550 or "spam" in e or "rejected" in e or "policy" in e or "content" in e:
-                if "spam" in e or "content" in e or "policy" in e or "dnsbl" in e or "blacklist" in e:
-                    return "spam_reject"
-                if "mailbox" in e or "user" in e or "recipient" in e or "exist" in e:
-                    return "mailbox_not_found"
-                return "permanent_reject"
-            if code >= 400 or "rate" in e or "throttl" in e or "too many" in e:
-                return "rate_limit"
-            if "auth" in e:
+            if "auth" in e or "incorrect authentication" in e or "login" in e:
                 return "auth_fail"
+            if "suspended" in e or "disabled" in e or "blocked" in e or "deactivated" in e:
+                return "smtp_suspended"
+            if "outgoing mail" in e and ("suspended" in e or "blocked" in e or "limit" in e):
+                return "smtp_suspended"
+            if "recipients refused" in e:
+                if "suspended" in e or "outgoing" in e or "blocked" in e:
+                    return "smtp_suspended"
+                inner = e.split("(", 1)
+                if len(inner) > 1:
+                    inner_msg = inner[1]
+                    inner_code = 0
+                    import re as _re2
+                    cm = _re2.search(r"(\d{3})", inner_msg)
+                    if cm:
+                        inner_code = int(cm.group(1))
+                    if inner_code == 535 or "auth" in inner_msg:
+                        return "auth_fail"
+                    if inner_code == 550:
+                        if "suspend" in inner_msg or "outgoing" in inner_msg or "blocked" in inner_msg:
+                            return "smtp_suspended"
+                        if "mailbox" in inner_msg or "user" in inner_msg or "exist" in inner_msg:
+                            return "mailbox_not_found"
+                        return "smtp_rejected"
+                return "smtp_rejected"
             if "timeout" in e or "timed out" in e:
                 return "timeout"
             if "connect" in e or "refused" in e:
                 return "connection"
+            if code >= 550 or "spam" in e or "rejected" in e or "policy" in e or "content" in e:
+                if "spam" in e or "content" in e or "policy" in e or "dnsbl" in e or "blacklist" in e:
+                    return "spam_reject"
+                if "mailbox" in e or "user" in e or "exist" in e:
+                    return "mailbox_not_found"
+                return "permanent_reject"
+            if code >= 400 or "rate" in e or "throttl" in e or "too many" in e:
+                return "rate_limit"
             return "other"
 
         def _log_bounce(lead_id, email, error_str, code=0, smtp_host="", smtp_user=""):
@@ -984,11 +1008,17 @@ def _run_campaign(db, cid: int):
                 result = worker.send(cur_from_email, email, raw_msg, account=account)
             except Exception as send_exc:
                 logger.error("Campaign %d send exception for %s: %s", campaign_id, email, send_exc, exc_info=True)
+                err_type = _classify_error(str(send_exc))
                 with _lock:
-                    db.mark_failed(lead_id, str(send_exc)[:500])
                     _log_bounce(lead_id, email, str(send_exc), 0, account.host, account.user)
-                    failed += 1
-                    db.update_campaign(campaign_id, sent=sent, failed=failed)
+                    if err_type in ("smtp_suspended", "smtp_rejected", "auth_fail"):
+                        db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lead_id,))
+                        db._conn().commit()
+                        logger.warning("Campaign %d: SMTP issue (%s) for %s, lead back to PENDING", campaign_id, err_type, account.user)
+                    else:
+                        db.mark_failed(lead_id, str(send_exc)[:500])
+                        failed += 1
+                        db.update_campaign(campaign_id, sent=sent, failed=failed)
                 return
 
             with _lock:
@@ -996,10 +1026,16 @@ def _run_campaign(db, cid: int):
                     db.mark_sent(lead_id)
                     sent += 1
                 elif result.is_fatal:
-                    db.mark_failed(lead_id, result.error[:500])
+                    err_type = _classify_error(result.error, result.smtp_code if hasattr(result, 'smtp_code') else 0)
                     _log_bounce(lead_id, email, result.error, result.smtp_code if hasattr(result, 'smtp_code') else 0, account.host, account.user)
-                    failed += 1
-                    logger.warning("Campaign %d FATAL for %s: %s", campaign_id, email, result.error[:200])
+                    if err_type in ("smtp_suspended", "smtp_rejected", "auth_fail"):
+                        db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lead_id,))
+                        db._conn().commit()
+                        logger.warning("Campaign %d: SMTP issue (%s) for %s, lead back to PENDING", campaign_id, err_type, account.user)
+                    else:
+                        db.mark_failed(lead_id, result.error[:500])
+                        failed += 1
+                    logger.warning("Campaign %d FATAL for %s: %s (%s)", campaign_id, email, result.error[:200], err_type)
                 else:
                     db._conn().execute("UPDATE trans_leads SET state='PENDING' WHERE id=?", (lead_id,))
                     db._conn().commit()
