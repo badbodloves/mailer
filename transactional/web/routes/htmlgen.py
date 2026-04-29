@@ -50,6 +50,7 @@ async def htmlgen_page(request: Request):
     layout_names = [l["name"] for l in layouts]
     gen_count = _count_generated()
     uid = request.state.user["id"]
+    db = request.app.state.db
     templates = [dict(t) for t in db.get_templates(uid)]
 
     return request.app.state.templates.TemplateResponse(request, "htmlgen.html", {
