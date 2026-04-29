@@ -1055,6 +1055,7 @@ def _run_campaign(db, cid: int):
             except Exception as send_exc:
                 logger.error("Campaign %d send exception for %s: %s", campaign_id, email, send_exc, exc_info=True)
                 err_type = _classify_error(str(send_exc))
+                pool.suspend(account, str(send_exc)[:100])
                 with _lock:
                     _log_bounce(lead_id, email, str(send_exc), 0, account.host, account.user)
                     if err_type == "mailbox_not_found":
@@ -1070,10 +1071,14 @@ def _run_campaign(db, cid: int):
                 if result.is_success:
                     db.mark_sent(lead_id)
                     sent += 1
+                    account.fail_count = 0
                 elif result.is_fatal:
                     err_type = _classify_error(result.error, result.smtp_code if hasattr(result, 'smtp_code') else 0)
                     smtp_code = result.smtp_code if hasattr(result, 'smtp_code') else 0
                     _log_bounce(lead_id, email, result.error, smtp_code, account.host, account.user)
+                    pool.suspend(account, result.error[:100])
+                    if err_type == "auth_fail":
+                        pool.mark_dead(account, result.error[:100])
                     if err_type == "mailbox_not_found":
                         db.mark_failed(lead_id, result.error[:500])
                         failed += 1
