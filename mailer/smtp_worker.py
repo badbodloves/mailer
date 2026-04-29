@@ -238,6 +238,10 @@ class SMTPPool:
             account.dead = True
         logger.error("SMTP permanently dead: %s - %s", account.key, reason)
 
+    def record_success(self, account: SMTPAccount) -> None:
+        with self._lock:
+            account.fail_count = 0
+
     def record_send(self, account: SMTPAccount) -> None:
         with self._lock:
             account.send_count += 1
