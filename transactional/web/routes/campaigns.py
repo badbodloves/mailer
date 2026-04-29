@@ -819,44 +819,78 @@ def _run_campaign(db, cid: int):
 
         def _classify_error(error_str: str, code: int = 0) -> str:
             e = error_str.lower()
-            if "auth" in e or "incorrect authentication" in e or "login" in e:
+
+            # --- Rate limiting (check FIRST — "too many" can appear in many forms) ---
+            if "too many" in e or "rate" in e and "limit" in e or "throttl" in e:
+                return "rate_limit"
+            if "has sent too many" in e or "sending rate" in e or "message rate" in e:
+                return "rate_limit"
+            if "try again later" in e or "too many connections" in e:
+                return "rate_limit"
+
+            # --- Auth failures ---
+            if "incorrect authentication" in e or "authentication failed" in e:
                 return "auth_fail"
-            if "suspended" in e or "disabled" in e or "blocked" in e or "deactivated" in e:
+            if "535" in e and ("auth" in e or "login" in e):
+                return "auth_fail"
+
+            # --- SMTP account problems ---
+            if "suspended" in e or "deactivated" in e:
                 return "smtp_suspended"
-            if "outgoing mail" in e and ("suspended" in e or "blocked" in e or "limit" in e):
+            if "outgoing" in e and ("blocked" in e or "suspended" in e or "disabled" in e):
                 return "smtp_suspended"
+
+            # --- Recipients refused — parse inner error ---
             if "recipients refused" in e:
-                if "suspended" in e or "outgoing" in e or "blocked" in e:
-                    return "smtp_suspended"
                 inner = e.split("(", 1)
                 if len(inner) > 1:
                     inner_msg = inner[1]
-                    inner_code = 0
-                    import re as _re2
-                    cm = _re2.search(r"(\d{3})", inner_msg)
-                    if cm:
-                        inner_code = int(cm.group(1))
-                    if inner_code == 535 or "auth" in inner_msg:
+                    if "too many" in inner_msg or "rate" in inner_msg or "limit" in inner_msg:
+                        return "rate_limit"
+                    if "auth" in inner_msg or "535" in inner_msg or "login" in inner_msg:
                         return "auth_fail"
-                    if inner_code == 550:
-                        if "suspend" in inner_msg or "outgoing" in inner_msg or "blocked" in inner_msg:
-                            return "smtp_suspended"
-                        if "mailbox" in inner_msg or "user" in inner_msg or "exist" in inner_msg:
-                            return "mailbox_not_found"
+                    if "suspend" in inner_msg or "deactivat" in inner_msg or "disabled" in inner_msg:
+                        return "smtp_suspended"
+                    if "spam" in inner_msg or "blacklist" in inner_msg or "dnsbl" in inner_msg:
+                        return "spam_reject"
+                    if "blocked" in inner_msg or "rejected" in inner_msg:
                         return "smtp_rejected"
+                    # Only true mailbox errors with specific phrases
+                    if "no such user" in inner_msg or "mailbox not found" in inner_msg or \
+                       "does not exist" in inner_msg or "unknown user" in inner_msg or \
+                       "user unknown" in inner_msg or "invalid recipient" in inner_msg or \
+                       "recipient rejected" in inner_msg or "addressee unknown" in inner_msg:
+                        return "mailbox_not_found"
                 return "smtp_rejected"
+
+            # --- Timeouts ---
             if "timeout" in e or "timed out" in e:
                 return "timeout"
-            if "connect" in e or "refused" in e:
+
+            # --- Connection ---
+            if "connect" in e and ("refused" in e or "error" in e or "reset" in e):
                 return "connection"
-            if code >= 550 or "spam" in e or "rejected" in e or "policy" in e or "content" in e:
-                if "spam" in e or "content" in e or "policy" in e or "dnsbl" in e or "blacklist" in e:
-                    return "spam_reject"
-                if "mailbox" in e or "user" in e or "exist" in e:
+            if "eof" in e or "broken pipe" in e or "connection reset" in e:
+                return "connection"
+
+            # --- Spam rejection ---
+            if "spam" in e or "dnsbl" in e or "blacklist" in e or "blocked" in e:
+                return "spam_reject"
+            if "policy" in e or "content" in e and "reject" in e:
+                return "spam_reject"
+
+            # --- Permanent recipient errors (only very specific phrases) ---
+            if code >= 550:
+                if "no such user" in e or "mailbox not found" in e or \
+                   "does not exist" in e or "unknown user" in e or \
+                   "user unknown" in e or "invalid recipient" in e or \
+                   "addressee unknown" in e or "recipient rejected" in e:
                     return "mailbox_not_found"
                 return "permanent_reject"
-            if code >= 400 or "rate" in e or "throttl" in e or "too many" in e:
+
+            if code >= 400:
                 return "rate_limit"
+
             return "other"
 
         def _log_bounce(lead_id, email, error_str, code=0, smtp_host="", smtp_user=""):
