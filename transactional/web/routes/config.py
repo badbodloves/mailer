@@ -25,7 +25,8 @@ async def save_config(request: Request):
                  "proxy_mode", "image_mode", "redirect_target_url",
                  "cloudinary_cloud_name", "cloudinary_api_key",
                  "cloudinary_api_secret", "mxtoolbox_api_key",
-                 "spam_checker", "spam_checker_url", "mime_profile"]:
+                 "spam_checker", "spam_checker_url", "mime_profile",
+                 "logo_base_url"]:
         if key in form:
             cfg[key] = str(form[key]).strip()
 

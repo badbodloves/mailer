@@ -987,21 +987,33 @@ def _run_campaign(db, cid: int):
                 inline_images = None
                 if logo_variants and "{Logo}" in html:
                     logo_path = random.choice(logo_variants)
-                    try:
-                        import mimetypes as mt
-                        mime_type = mt.guess_type(logo_path)[0] or "image/png"
-                        with open(logo_path, "rb") as lf:
-                            logo_bytes = lf.read()
-                        import secrets as _sec
-                        cid_local = _sec.token_hex(8)
-                        domain_part = (cur_from_email.split("@")[1] if "@" in cur_from_email else "mail")
-                        cid = f"{cid_local}@{domain_part}"
-                        html = html.replace("{Logo}",
-                            f'<img src="cid:{cid}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
-                        inline_images = [(logo_bytes, cid, mime_type)]
-                    except Exception as le:
-                        logger.warning("Logo embed error: %s", le)
-                        html = html.replace("{Logo}", "")
+                    image_mode = cfg.get("image_mode", "cid")
+
+                    if image_mode == "url":
+                        logo_base_url = cfg.get("logo_base_url", "").rstrip("/")
+                        logo_filename = os.path.basename(logo_path)
+                        logo_url = f"{logo_base_url}/{logo_filename}" if logo_base_url else ""
+                        if logo_url:
+                            html = html.replace("{Logo}",
+                                f'<img src="{logo_url}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
+                        else:
+                            html = html.replace("{Logo}", "")
+                    else:
+                        try:
+                            import mimetypes as mt
+                            mime_type = mt.guess_type(logo_path)[0] or "image/png"
+                            with open(logo_path, "rb") as lf:
+                                logo_bytes = lf.read()
+                            import secrets as _sec
+                            cid_local = _sec.token_hex(8)
+                            domain_part = (cur_from_email.split("@")[1] if "@" in cur_from_email else "mail")
+                            cid = f"{cid_local}@{domain_part}"
+                            html = html.replace("{Logo}",
+                                f'<img src="cid:{cid}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
+                            inline_images = [(logo_bytes, cid, mime_type)]
+                        except Exception as le:
+                            logger.warning("Logo embed error: %s", le)
+                            html = html.replace("{Logo}", "")
                 elif "{Logo}" in html:
                     html = html.replace("{Logo}", "")
 

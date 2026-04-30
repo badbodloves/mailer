@@ -91,7 +91,7 @@
             <div class="form-help">HTML rotation is configured on the <a href="/templates" style="color:var(--accent)">HTML Editor</a> page.</div>
         </div>
         <div class="card">
-            <h3>Image / Logo (CID)</h3>
+            <h3>Image / Logo</h3>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
                 <input type="checkbox" name="image_enabled" {{ 'checked' if cfg.image_enabled }} style="width:auto">
                 <span>Enable Logo Embedding</span>
@@ -99,8 +99,14 @@
             <label>Mode</label>
             <select name="image_mode">
                 <option value="cid" {{ 'selected' if cfg.image_mode == 'cid' }}>CID Inline (embedded in email)</option>
+                <option value="url" {{ 'selected' if cfg.image_mode == 'url' }}>URL (pre-uploaded to domain)</option>
                 <option value="cloudinary" {{ 'selected' if cfg.image_mode == 'cloudinary' }}>Cloudinary CDN</option>
             </select>
+            <div id="url-logo-config" style="margin-top:8px;{{ '' if cfg.image_mode == 'url' else 'display:none' }}">
+                <label>Logo Base URL</label>
+                <input name="logo_base_url" value="{{ cfg.get('logo_base_url', '') }}" placeholder="https://logos.domain.de">
+                <div class="form-help">Variants are served as {base_url}/{filename}. Upload variants to this location first (e.g. via R2).</div>
+            </div>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px">
                 <input type="checkbox" name="image_quantize" {{ 'checked' if cfg.image_quantize }} style="width:auto">
                 <span>Palette Quantization (smaller file size)</span>

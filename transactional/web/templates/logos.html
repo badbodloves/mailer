@@ -15,11 +15,12 @@
         <tr>
             <td style="font-weight:500">{{ g.name }}</td>
             <td>{{ group_logos|length }}</td>
-            <td>
+            <td style="white-space:nowrap">
                 {{ g.variant_count }}
                 {% if g.variant_count > 0 %}
+                <a href="/logos/export-variants?group_id={{ g.id }}" class="btn btn-secondary btn-xs btn-icon" title="Export ZIP" style="margin-left:2px">&#8615;</a>
                 <form hx-post="/logos/clear-variants" hx-target="closest td" hx-swap="innerHTML"
-                      hx-confirm="Clear {{ g.variant_count }} variants?" style="display:inline;margin-left:4px">
+                      hx-confirm="Clear {{ g.variant_count }} variants?" style="display:inline">
                     <input type="hidden" name="group_id" value="{{ g.id }}">
                     <button class="btn btn-danger btn-xs btn-icon">&#10005;</button>
                 </form>

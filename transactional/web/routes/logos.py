@@ -258,6 +258,28 @@ async def variant_status(request: Request):
         f'<a href="/logos" style="color:var(--accent)">Reload</a></div>')
 
 
+@router.get("/logos/export-variants")
+async def export_variants(request: Request, group_id: int = 0):
+    """Export logo variants as ZIP for uploading to CDN/domain."""
+    import io
+    import zipfile
+    d = _group_variant_dir(group_id)
+    if not os.path.isdir(d):
+        return RedirectResponse("/logos", status_code=303)
+    files = [f for f in os.listdir(d) if os.path.isfile(os.path.join(d, f))]
+    if not files:
+        return RedirectResponse("/logos", status_code=303)
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for f in sorted(files):
+            zf.write(os.path.join(d, f), f)
+    buf.seek(0)
+    from fastapi.responses import Response
+    label = f"group_{group_id}" if group_id else "global"
+    return Response(content=buf.read(), media_type="application/zip",
+                    headers={"Content-Disposition": f"attachment; filename=logo_variants_{label}.zip"})
+
+
 @router.post("/logos/clear-variants", response_class=HTMLResponse)
 async def clear_variant_files(request: Request, group_id: int = Form(0)):
     if group_id:
