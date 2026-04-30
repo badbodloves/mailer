@@ -772,6 +772,7 @@ def _run_campaign(db, cid: int):
 
         # Logo setup — load from template's logo group variant dir
         logo_variants = []
+        logo_cdn_urls = []
         if cfg.get("image_enabled"):
             import glob
             from .logos import VARIANT_DIR, UPLOAD_DIR, _group_variant_dir, _resolve_path as _resolve_logo
@@ -802,6 +803,15 @@ def _run_campaign(db, cid: int):
                     if source_files:
                         logo_variants = source_files
                 logger.info("Campaign %d: %d logos (global fallback)", cid, len(logo_variants))
+
+            # Load Cloudinary CDN URLs if mode is cloudinary
+            if cfg.get("image_mode") == "cloudinary":
+                if logo_group_id:
+                    cdn_logos = db.get_logos_by_group(logo_group_id)
+                else:
+                    cdn_logos = db.get_logos(uid)
+                logo_cdn_urls = [dict(l)["cdn_url"] for l in cdn_logos if dict(l).get("cdn_url")]
+                logger.info("Campaign %d: %d Cloudinary URLs loaded", cid, len(logo_cdn_urls))
 
         # Redirect setup
         redirect_links = []
@@ -985,20 +995,23 @@ def _run_campaign(db, cid: int):
                     cur_subject = cur_subject.replace("{RedirectLink}", link)
 
                 inline_images = None
-                if logo_variants and "{Logo}" in html:
-                    logo_path = random.choice(logo_variants)
+                if "{Logo}" in html:
                     image_mode = cfg.get("image_mode", "cid")
 
-                    if image_mode == "url":
+                    if image_mode == "cloudinary" and logo_cdn_urls:
+                        logo_url = random.choice(logo_cdn_urls)
+                        html = html.replace("{Logo}",
+                            f'<img src="{logo_url}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
+                    elif image_mode == "url" and logo_variants:
                         logo_base_url = cfg.get("logo_base_url", "").rstrip("/")
-                        logo_filename = os.path.basename(logo_path)
-                        logo_url = f"{logo_base_url}/{logo_filename}" if logo_base_url else ""
-                        if logo_url:
+                        logo_filename = os.path.basename(random.choice(logo_variants))
+                        if logo_base_url:
                             html = html.replace("{Logo}",
-                                f'<img src="{logo_url}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
+                                f'<img src="{logo_base_url}/{logo_filename}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
                         else:
                             html = html.replace("{Logo}", "")
-                    else:
+                    elif logo_variants:
+                        logo_path = random.choice(logo_variants)
                         try:
                             import mimetypes as mt
                             mime_type = mt.guess_type(logo_path)[0] or "image/png"
@@ -1007,15 +1020,15 @@ def _run_campaign(db, cid: int):
                             import secrets as _sec
                             cid_local = _sec.token_hex(8)
                             domain_part = (cur_from_email.split("@")[1] if "@" in cur_from_email else "mail")
-                            cid = f"{cid_local}@{domain_part}"
+                            cid_val = f"{cid_local}@{domain_part}"
                             html = html.replace("{Logo}",
-                                f'<img src="cid:{cid}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
-                            inline_images = [(logo_bytes, cid, mime_type)]
+                                f'<img src="cid:{cid_val}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
+                            inline_images = [(logo_bytes, cid_val, mime_type)]
                         except Exception as le:
                             logger.warning("Logo embed error: %s", le)
                             html = html.replace("{Logo}", "")
-                elif "{Logo}" in html:
-                    html = html.replace("{Logo}", "")
+                    else:
+                        html = html.replace("{Logo}", "")
 
                 if afp:
                     html = afp.transform(html)

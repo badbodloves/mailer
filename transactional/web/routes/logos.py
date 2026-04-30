@@ -258,6 +258,71 @@ async def variant_status(request: Request):
         f'<a href="/logos" style="color:var(--accent)">Reload</a></div>')
 
 
+@router.post("/logos/upload-cloudinary", response_class=HTMLResponse)
+async def upload_to_cloudinary(request: Request, group_id: int = Form(0)):
+    """Pre-upload all variants of a group to Cloudinary, save URLs."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    cloud_name = cfg.get("cloudinary_cloud_name", "")
+    api_key = cfg.get("cloudinary_api_key", "")
+    api_secret = cfg.get("cloudinary_api_secret", "")
+    if not cloud_name or not api_key or not api_secret:
+        return HTMLResponse('<div class="alert alert-danger">Cloudinary credentials not configured in Config.</div>')
+
+    d = _group_variant_dir(group_id)
+    files = sorted([f for f in os.listdir(d) if os.path.isfile(os.path.join(d, f))]) if os.path.isdir(d) else []
+    if not files:
+        return HTMLResponse('<div class="alert alert-warning">No variants to upload. Generate first.</div>')
+
+    import requests as req_lib
+    uploaded = 0
+    errors = 0
+    uid = request.state.user["id"]
+
+    for fname in files:
+        fpath = os.path.join(d, fname)
+        try:
+            import hashlib, time as _time
+            timestamp = str(int(_time.time()))
+            params = f"folder=logos&public_id={os.path.splitext(fname)[0]}&timestamp={timestamp}{api_secret}"
+            signature = hashlib.sha1(params.encode()).hexdigest()
+
+            with open(fpath, "rb") as f:
+                resp = req_lib.post(
+                    f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload",
+                    data={
+                        "api_key": api_key,
+                        "timestamp": timestamp,
+                        "signature": signature,
+                        "folder": "logos",
+                        "public_id": os.path.splitext(fname)[0],
+                    },
+                    files={"file": (fname, f)},
+                    timeout=30,
+                )
+
+            if resp.status_code == 200:
+                url = resp.json().get("secure_url", "")
+                if url:
+                    logo_id = db.add_logo(fname, fpath, uid, group_id)
+                    c = db._conn()
+                    c.execute("UPDATE trans_logos SET cdn_url=? WHERE id=?", (url, logo_id))
+                    c.commit()
+                    uploaded += 1
+            else:
+                errors += 1
+                logger.warning("Cloudinary upload failed for %s: %s", fname, resp.text[:200])
+        except Exception as e:
+            errors += 1
+            logger.warning("Cloudinary upload error for %s: %s", fname, e)
+
+    return HTMLResponse(
+        f'<div class="alert alert-{"success" if uploaded else "danger"}">'
+        f'{uploaded} uploaded to Cloudinary, {errors} errors. '
+        f'<a href="/logos" style="color:var(--accent)">Reload</a></div>'
+    )
+
+
 @router.get("/logos/export-variants")
 async def export_variants(request: Request, group_id: int = 0):
     """Export logo variants as ZIP for uploading to CDN/domain."""

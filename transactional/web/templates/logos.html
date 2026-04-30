@@ -8,10 +8,11 @@
     <div class="card-header"><h3>Logo Groups</h3></div>
     {% if logo_groups %}
     <table style="margin-bottom:12px">
-        <thead><tr><th>Group</th><th>Logos</th><th>Variants</th><th></th></tr></thead>
+        <thead><tr><th>Group</th><th>Logos</th><th>Variants</th><th>Cloudinary</th><th></th></tr></thead>
         <tbody>
         {% for g in logo_groups %}
         {% set group_logos = db.get_logos_by_group(g.id) %}
+        {% set cdn_count = group_logos|selectattr('cdn_url')|list|length %}
         <tr>
             <td style="font-weight:500">{{ g.name }}</td>
             <td>{{ group_logos|length }}</td>
@@ -25,6 +26,16 @@
                     <button class="btn btn-danger btn-xs btn-icon">&#10005;</button>
                 </form>
                 {% endif %}
+            </td>
+            <td style="white-space:nowrap">
+                {% if g.variant_count > 0 %}
+                <span style="font-size:12px;color:var(--fg2)">{{ cdn_count }} URLs</span>
+                <form hx-post="/logos/upload-cloudinary" hx-target="#cdn-result-{{ g.id }}" hx-swap="innerHTML" style="display:inline;margin-left:4px">
+                    <input type="hidden" name="group_id" value="{{ g.id }}">
+                    <button class="btn btn-secondary btn-xs">Upload</button>
+                </form>
+                <div id="cdn-result-{{ g.id }}"></div>
+                {% else %}—{% endif %}
             </td>
             <td>
                 <form method="post" action="/logos/group/{{ g.id }}/delete" onsubmit="return confirm('Delete group + all logos?')" style="display:inline">
