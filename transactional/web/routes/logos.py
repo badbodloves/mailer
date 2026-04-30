@@ -258,7 +258,7 @@ async def variant_status(request: Request):
         f'<a href="/logos" style="color:var(--accent)">Reload</a></div>')
 
 
-_cdn_progress = {"running": False, "done": 0, "total": 0, "ok": 0, "errors": 0}
+_cdn_progress = {"running": False, "done": 0, "total": 0, "ok": 0, "errors": 0, "log": []}
 
 
 @router.post("/logos/upload-cloudinary", response_class=HTMLResponse)
@@ -281,7 +281,7 @@ async def upload_to_cloudinary(request: Request, group_id: int = Form(0)):
         return HTMLResponse('<div class="alert alert-warning">No variants to upload. Generate first.</div>')
 
     uid = request.state.user["id"]
-    _cdn_progress.update(running=True, done=0, total=len(files), ok=0, errors=0)
+    _cdn_progress.update(running=True, done=0, total=len(files), ok=0, errors=0, log=[])
 
     def worker():
         import requests as req_lib
@@ -309,10 +309,17 @@ async def upload_to_cloudinary(request: Request, group_id: int = Form(0)):
                         _cdn_progress["ok"] += 1
                     else:
                         _cdn_progress["errors"] += 1
+                        _cdn_progress["log"].append(f"{fname}: no URL in response")
                 else:
                     _cdn_progress["errors"] += 1
-            except Exception:
+                    try:
+                        err_detail = resp.json().get("error", {}).get("message", resp.text[:150])
+                    except Exception:
+                        err_detail = f"HTTP {resp.status_code}"
+                    _cdn_progress["log"].append(f"{fname}: {err_detail}")
+            except Exception as e:
                 _cdn_progress["errors"] += 1
+                _cdn_progress["log"].append(f"{fname}: {str(e)[:100]}")
             _cdn_progress["done"] = i + 1
         _cdn_progress["running"] = False
 
@@ -334,12 +341,15 @@ async def cdn_progress(request: Request):
             f'<p style="font-size:12px;color:var(--fg2)">{p["ok"]} OK, {p["errors"]} errors</p>'
             f'<div hx-get="/logos/cdn-progress" hx-trigger="every 2s" hx-swap="outerHTML"></div>'
         )
+    html = ""
     if p["ok"] > 0:
-        return HTMLResponse(
-            f'<div class="alert alert-success">{p["ok"]} uploaded to Cloudinary. '
-            f'<a href="/logos" style="color:var(--accent)">Reload</a></div>'
-        )
-    return HTMLResponse("")
+        html += f'<div class="alert alert-success">{p["ok"]} uploaded to Cloudinary. <a href="/logos" style="color:var(--accent)">Reload</a></div>'
+    if p["log"]:
+        html += '<div style="font-family:monospace;font-size:11px;max-height:200px;overflow-y:auto;background:#fff5f5;padding:8px;border-radius:4px;margin-top:8px">'
+        for line in p["log"]:
+            html += f'<div style="color:var(--red)">{escape(line)}</div>'
+        html += '</div>'
+    return HTMLResponse(html)
 
 
 @router.get("/logos/export-variants")
