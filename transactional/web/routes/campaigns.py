@@ -1071,9 +1071,11 @@ def _run_campaign(db, cid: int):
         def _worker_thread():
             """Each thread grabs an SMTP, connects, sends many mails."""
             nonlocal sent, failed
-            while campaign_id in _runners:
+            while campaign_id in _runners and not mail_queue.empty():
                 account = pool.acquire()
                 if account is None:
+                    if mail_queue.empty():
+                        break
                     time.sleep(1)
                     continue
 
@@ -1081,6 +1083,8 @@ def _run_campaign(db, cid: int):
                     server_obj = pool.connect(account)
                 except Exception as e:
                     logger.warning("Campaign %d: connect failed %s: %s", campaign_id, account.user, e)
+                    if mail_queue.empty():
+                        break
                     time.sleep(1)
                     continue
 
