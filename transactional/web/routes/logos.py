@@ -258,9 +258,15 @@ async def variant_status(request: Request):
         f'<a href="/logos" style="color:var(--accent)">Reload</a></div>')
 
 
+_cdn_progress = {"running": False, "done": 0, "total": 0, "ok": 0, "errors": 0}
+
+
 @router.post("/logos/upload-cloudinary", response_class=HTMLResponse)
 async def upload_to_cloudinary(request: Request, group_id: int = Form(0)):
     """Pre-upload all variants of a group to Cloudinary, save URLs."""
+    if _cdn_progress["running"]:
+        return HTMLResponse('<div class="alert alert-warning">Upload already running.</div>')
+
     db = request.app.state.db
     cfg = db.get_config()
     cloud_name = cfg.get("cloudinary_cloud_name", "")
@@ -274,53 +280,66 @@ async def upload_to_cloudinary(request: Request, group_id: int = Form(0)):
     if not files:
         return HTMLResponse('<div class="alert alert-warning">No variants to upload. Generate first.</div>')
 
-    import requests as req_lib
-    uploaded = 0
-    errors = 0
     uid = request.state.user["id"]
+    _cdn_progress.update(running=True, done=0, total=len(files), ok=0, errors=0)
 
-    for fname in files:
-        fpath = os.path.join(d, fname)
-        try:
-            import hashlib, time as _time
-            timestamp = str(int(_time.time()))
-            params = f"folder=logos&public_id={os.path.splitext(fname)[0]}&timestamp={timestamp}{api_secret}"
-            signature = hashlib.sha1(params.encode()).hexdigest()
+    def worker():
+        import requests as req_lib
+        import hashlib, time as _time
+        for i, fname in enumerate(files):
+            fpath = os.path.join(d, fname)
+            try:
+                timestamp = str(int(_time.time()))
+                params = f"folder=logos&public_id={os.path.splitext(fname)[0]}&timestamp={timestamp}{api_secret}"
+                signature = hashlib.sha1(params.encode()).hexdigest()
+                with open(fpath, "rb") as f:
+                    resp = req_lib.post(
+                        f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload",
+                        data={"api_key": api_key, "timestamp": timestamp,
+                              "signature": signature, "folder": "logos",
+                              "public_id": os.path.splitext(fname)[0]},
+                        files={"file": (fname, f)}, timeout=30)
+                if resp.status_code == 200:
+                    url = resp.json().get("secure_url", "")
+                    if url:
+                        logo_id = db.add_logo(fname, fpath, uid, group_id)
+                        c = db._conn()
+                        c.execute("UPDATE trans_logos SET cdn_url=? WHERE id=?", (url, logo_id))
+                        c.commit()
+                        _cdn_progress["ok"] += 1
+                    else:
+                        _cdn_progress["errors"] += 1
+                else:
+                    _cdn_progress["errors"] += 1
+            except Exception:
+                _cdn_progress["errors"] += 1
+            _cdn_progress["done"] = i + 1
+        _cdn_progress["running"] = False
 
-            with open(fpath, "rb") as f:
-                resp = req_lib.post(
-                    f"https://api.cloudinary.com/v1_1/{cloud_name}/image/upload",
-                    data={
-                        "api_key": api_key,
-                        "timestamp": timestamp,
-                        "signature": signature,
-                        "folder": "logos",
-                        "public_id": os.path.splitext(fname)[0],
-                    },
-                    files={"file": (fname, f)},
-                    timeout=30,
-                )
-
-            if resp.status_code == 200:
-                url = resp.json().get("secure_url", "")
-                if url:
-                    logo_id = db.add_logo(fname, fpath, uid, group_id)
-                    c = db._conn()
-                    c.execute("UPDATE trans_logos SET cdn_url=? WHERE id=?", (url, logo_id))
-                    c.commit()
-                    uploaded += 1
-            else:
-                errors += 1
-                logger.warning("Cloudinary upload failed for %s: %s", fname, resp.text[:200])
-        except Exception as e:
-            errors += 1
-            logger.warning("Cloudinary upload error for %s: %s", fname, e)
-
+    threading.Thread(target=worker, daemon=True).start()
     return HTMLResponse(
-        f'<div class="alert alert-{"success" if uploaded else "danger"}">'
-        f'{uploaded} uploaded to Cloudinary, {errors} errors. '
-        f'<a href="/logos" style="color:var(--accent)">Reload</a></div>'
+        f'<div class="alert alert-info">Uploading {len(files)} variants to Cloudinary...</div>'
+        f'<div hx-get="/logos/cdn-progress" hx-trigger="every 2s" hx-swap="innerHTML"></div>'
     )
+
+
+@router.get("/logos/cdn-progress", response_class=HTMLResponse)
+async def cdn_progress(request: Request):
+    p = _cdn_progress
+    if p["running"]:
+        pct = int(p["done"] / p["total"] * 100) if p["total"] > 0 else 0
+        return HTMLResponse(
+            f'<div class="progress" style="margin-bottom:8px">'
+            f'<div class="progress-bar" style="width:{pct}%">{p["done"]}/{p["total"]}</div></div>'
+            f'<p style="font-size:12px;color:var(--fg2)">{p["ok"]} OK, {p["errors"]} errors</p>'
+            f'<div hx-get="/logos/cdn-progress" hx-trigger="every 2s" hx-swap="outerHTML"></div>'
+        )
+    if p["ok"] > 0:
+        return HTMLResponse(
+            f'<div class="alert alert-success">{p["ok"]} uploaded to Cloudinary. '
+            f'<a href="/logos" style="color:var(--accent)">Reload</a></div>'
+        )
+    return HTMLResponse("")
 
 
 @router.get("/logos/export-variants")

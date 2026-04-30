@@ -1001,8 +1001,9 @@ def _run_campaign(db, cid: int):
                     if image_mode == "text":
                         logo_text = cfg.get("logo_text", "{Logo}")
                         logo_text = _process(logo_text, email)
+                        logo_color = cfg.get("logo_text_color", "#333333")
                         html = html.replace("{Logo}",
-                            f'<span style="font-weight:bold;font-size:16px;color:#333333;">{logo_text}</span>')
+                            f'<span style="font-weight:bold;font-size:16px;color:{logo_color};">{logo_text}</span>')
                     elif image_mode == "cloudinary" and logo_cdn_urls:
                         logo_url = random.choice(logo_cdn_urls)
                         html = html.replace("{Logo}",

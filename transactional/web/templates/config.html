@@ -111,7 +111,13 @@
             <div id="text-logo-config" style="margin-top:8px;{{ '' if cfg.image_mode == 'text' else 'display:none' }}">
                 <label>Logo Text</label>
                 <input name="logo_text" value="{{ cfg.get('logo_text', '{Logo}') }}" placeholder="{Logo} or {MacroName} or fixed text">
-                <div class="form-help">Use {Logo} macro, {MacroName}, or fixed text. Supports spintax.</div>
+                <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+                    <label style="margin:0">Color</label>
+                    <input type="color" name="logo_text_color" value="{{ cfg.get('logo_text_color', '#333333') }}" style="width:40px;height:30px;padding:2px;cursor:pointer">
+                    <input name="logo_text_color_hex" value="{{ cfg.get('logo_text_color', '#333333') }}" style="width:80px;font-size:12px"
+                           oninput="this.form.logo_text_color.value=this.value">
+                </div>
+                <div class="form-help">Supports macros and spintax.</div>
             </div>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px">
                 <input type="checkbox" name="image_quantize" {{ 'checked' if cfg.image_quantize }} style="width:auto">
