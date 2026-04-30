@@ -101,11 +101,17 @@
                 <option value="cid" {{ 'selected' if cfg.image_mode == 'cid' }}>CID Inline (embedded in email)</option>
                 <option value="url" {{ 'selected' if cfg.image_mode == 'url' }}>URL (pre-uploaded to domain)</option>
                 <option value="cloudinary" {{ 'selected' if cfg.image_mode == 'cloudinary' }}>Cloudinary CDN</option>
+                <option value="text" {{ 'selected' if cfg.image_mode == 'text' }}>Text Logo</option>
             </select>
             <div id="url-logo-config" style="margin-top:8px;{{ '' if cfg.image_mode == 'url' else 'display:none' }}">
                 <label>Logo Base URL</label>
                 <input name="logo_base_url" value="{{ cfg.get('logo_base_url', '') }}" placeholder="https://logos.domain.de">
-                <div class="form-help">Variants are served as {base_url}/{filename}. Upload variants to this location first (e.g. via R2).</div>
+                <div class="form-help">Variants are served as {base_url}/{filename}.</div>
+            </div>
+            <div id="text-logo-config" style="margin-top:8px;{{ '' if cfg.image_mode == 'text' else 'display:none' }}">
+                <label>Logo Text</label>
+                <input name="logo_text" value="{{ cfg.get('logo_text', '{Logo}') }}" placeholder="{Logo} or {MacroName} or fixed text">
+                <div class="form-help">Use {Logo} macro, {MacroName}, or fixed text. Supports spintax.</div>
             </div>
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px">
                 <input type="checkbox" name="image_quantize" {{ 'checked' if cfg.image_quantize }} style="width:auto">
