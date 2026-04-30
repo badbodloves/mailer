@@ -966,26 +966,17 @@ def _run_campaign(db, cid: int):
             return text
 
         campaign_id = cid
+        import queue
+        mail_queue = queue.Queue()
+        image_mode = cfg.get("image_mode", "cid")
 
-        def _send_one(lead_id, email):
+        def _build_and_send(server_obj, account, lead_id, email):
+            """Build email and send over existing connection. Returns True on success."""
             nonlocal sent, failed
-            if campaign_id not in _runners:
-                return
-            account = pool.acquire()
-            if account is None:
-                time.sleep(2)
-                account = pool.acquire()
-                if account is None:
-                    with _lock:
-                        db.mark_failed(lead_id, "No SMTP available")
-                        failed += 1
-                    return
-
             cur_from_email = from_email_cfg or account.user
             try:
                 cur_from_name = _process(from_name_cfg, email)
                 cur_subject = _process(subject_cfg, email)
-
                 html = random.choice(html_bodies) if html_bodies else "<p>Hello {email_user}</p>"
                 html = _process(html, email)
 
@@ -996,26 +987,17 @@ def _run_campaign(db, cid: int):
 
                 inline_images = None
                 if "{Logo}" in html:
-                    image_mode = cfg.get("image_mode", "cid")
-
                     if image_mode == "text":
-                        logo_text = cfg.get("logo_text", "{Logo}")
-                        logo_text = _process(logo_text, email)
-                        logo_color = cfg.get("logo_text_color", "#333333")
+                        logo_text = _process(cfg.get("logo_text", "{Logo}"), email)
                         html = html.replace("{Logo}",
-                            f'<span style="font-weight:bold;font-size:16px;color:{logo_color};">{logo_text}</span>')
+                            f'<span style="font-weight:bold;font-size:16px;color:{cfg.get("logo_text_color", "#333333")};">{logo_text}</span>')
                     elif image_mode == "cloudinary" and logo_cdn_urls:
-                        logo_url = random.choice(logo_cdn_urls)
                         html = html.replace("{Logo}",
-                            f'<img src="{logo_url}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
+                            f'<img src="{random.choice(logo_cdn_urls)}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
                     elif image_mode == "url" and logo_variants:
-                        logo_base_url = cfg.get("logo_base_url", "").rstrip("/")
-                        logo_filename = os.path.basename(random.choice(logo_variants))
-                        if logo_base_url:
-                            html = html.replace("{Logo}",
-                                f'<img src="{logo_base_url}/{logo_filename}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
-                        else:
-                            html = html.replace("{Logo}", "")
+                        base = cfg.get("logo_base_url", "").rstrip("/")
+                        html = html.replace("{Logo}",
+                            f'<img src="{base}/{os.path.basename(random.choice(logo_variants))}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">' if base else "")
                     elif logo_variants:
                         logo_path = random.choice(logo_variants)
                         try:
@@ -1024,14 +1006,11 @@ def _run_campaign(db, cid: int):
                             with open(logo_path, "rb") as lf:
                                 logo_bytes = lf.read()
                             import secrets as _sec
-                            cid_local = _sec.token_hex(8)
-                            domain_part = (cur_from_email.split("@")[1] if "@" in cur_from_email else "mail")
-                            cid_val = f"{cid_local}@{domain_part}"
+                            cid_val = f"{_sec.token_hex(8)}@{cur_from_email.split('@')[1] if '@' in cur_from_email else 'mail'}"
                             html = html.replace("{Logo}",
                                 f'<img src="cid:{cid_val}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
                             inline_images = [(logo_bytes, cid_val, mime_type)]
-                        except Exception as le:
-                            logger.warning("Logo embed error: %s", le)
+                        except Exception:
                             html = html.replace("{Logo}", "")
                     else:
                         html = html.replace("{Logo}", "")
@@ -1049,116 +1028,132 @@ def _run_campaign(db, cid: int):
 
                 if mime_profile_mode == "rotate":
                     from mailer.mime_profiles import get_random_profile, apply_profile
-                    profile = get_random_profile()
-                    raw_msg = apply_profile(raw_msg, profile, cur_from_email)
+                    raw_msg = apply_profile(raw_msg, get_random_profile(), cur_from_email)
                 elif mime_profile_mode != "default":
                     from mailer.mime_profiles import apply_profile
                     raw_msg = apply_profile(raw_msg, mime_profile_mode, cur_from_email)
 
             except Exception as build_exc:
-                logger.error("Campaign %d BUILD error: %s", campaign_id, build_exc)
                 with _lock:
                     db.mark_failed(lead_id, f"BUILD: {str(build_exc)[:400]}")
                     failed += 1
-                return
+                return True
 
             try:
-                result = worker.send(cur_from_email, email, raw_msg, account=account)
+                server_obj.sendmail(cur_from_email, email, raw_msg)
             except Exception as send_exc:
                 with _lock:
                     _log_bounce(lead_id, email, str(send_exc), 0, account.host, account.user)
                     db.mark_failed(lead_id, str(send_exc)[:500])
                     failed += 1
-                return
+                err_str = str(send_exc).lower()
+                if re.search(r'suspicio|suspended|too many|limit|spam|blocked|unexpectedly closed', err_str):
+                    raise Exception(send_exc)
+                return False
 
             with _lock:
-                if result.is_success:
-                    db.mark_sent(lead_id)
-                    sent += 1
-                else:
-                    _log_bounce(lead_id, email, result.error,
-                                result.smtp_code if hasattr(result, 'smtp_code') else 0,
-                                account.host, account.user)
-                    db.mark_failed(lead_id, result.error[:500])
-                    failed += 1
+                db.mark_sent(lead_id)
+                sent += 1
                 if (sent + failed) % 20 == 0:
                     db.update_campaign(campaign_id, sent=sent, failed=failed)
 
-            if result.is_success:
-                if test_interval > 0 and interval_recips and sent % test_interval == 0:
-                    for tr in interval_recips:
-                        try:
-                            t_account = pool.acquire()
-                            if not t_account:
-                                continue
-                            t_from = from_email_cfg or t_account.user
-                            t_html = _process(html_bodies[0] if html_bodies else "<p>Interval test #{sent}</p>", tr)
-                            t_plain = re.sub(r"<[^>]+>", "", t_html).strip()
-                            t_msg = MIMEBuilder.build_email(
-                                from_name=_process(from_name_cfg, tr), from_email=t_from,
-                                to_email=tr, subject=f"[TEST #{sent}] {_process(subject_cfg, tr)}",
-                                html_body=t_html, plain_body=t_plain)
-                            worker.send(t_from, tr, t_msg, account=t_account)
-                        except Exception:
-                            pass
+            delay = worker.get_delay(email)
+            if delay > 0:
+                time.sleep(delay)
+            return True
 
-                delay = worker.get_delay(email)
-                if delay > 0:
-                    time.sleep(delay)
+        def _worker_thread():
+            """Each thread grabs an SMTP, connects, sends many mails."""
+            nonlocal sent, failed
+            while campaign_id in _runners:
+                account = pool.acquire()
+                if account is None:
+                    time.sleep(1)
+                    continue
+
+                try:
+                    server_obj = pool.connect(account)
+                except Exception as e:
+                    logger.warning("Campaign %d: connect failed %s: %s", campaign_id, account.user, e)
+                    time.sleep(1)
+                    continue
+
+                warmup_wait = pool.get_warmup_delay(account)
+
+                try:
+                    while campaign_id in _runners:
+                        try:
+                            lead_id, email = mail_queue.get(timeout=2)
+                        except queue.Empty:
+                            break
+
+                        if warmup_wait > 0:
+                            time.sleep(warmup_wait)
+                            warmup_wait = pool.get_warmup_delay(account)
+
+                        try:
+                            ok = _build_and_send(server_obj, account, lead_id, email)
+                            if not ok:
+                                break
+                        except Exception:
+                            break
+
+                        time.sleep(cfg.get("normal_delay", 0.3))
+                except Exception:
+                    pass
+                finally:
+                    try:
+                        server_obj.quit()
+                    except Exception:
+                        pass
+
+        def _run_send_pass():
+            """Fill queue from DB, run worker threads."""
+            db.reset_in_progress(lead_list_id)
+            while mail_queue.qsize() > 0:
+                try:
+                    mail_queue.get_nowait()
+                except queue.Empty:
+                    break
+
+            leads = db._conn().execute(
+                "SELECT id, email FROM trans_leads WHERE list_id=? AND state='PENDING' ORDER BY id",
+                (lead_list_id,)).fetchall()
+            if not leads:
+                return
+
+            for lead in leads:
+                db._conn().execute("UPDATE trans_leads SET state='IN_PROGRESS' WHERE id=?", (lead["id"],))
+                mail_queue.put((lead["id"], lead["email"]))
+            db._conn().commit()
+
+            threads = []
+            for _ in range(thread_count):
+                t = threading.Thread(target=_worker_thread, daemon=True)
+                t.start()
+                threads.append(t)
+
+            for t in threads:
+                t.join()
 
         try:
-            with ThreadPoolExecutor(max_workers=thread_count) as executor:
+            _run_send_pass()
+
+            if cid in _runners and cfg.get("auto_retry_failed", True):
                 db.reset_in_progress(lead_list_id)
+                db._conn().execute(
+                    "UPDATE trans_leads SET state='PENDING' WHERE list_id=? AND state='FAILED' "
+                    "AND id NOT IN (SELECT lead_id FROM trans_bounce_log WHERE error_type='mailbox_not_found' AND campaign_id=?)",
+                    (lead_list_id, cid))
+                db._conn().commit()
 
-                # Main send loop
-                while cid in _runners:
-                    if pool.all_dead:
-                        break
-                    batch = db.fetch_pending(lead_list_id, 200)
-                    if not batch:
-                        break
-                    db.mark_in_progress([r["id"] for r in batch])
-                    futures = {executor.submit(_send_one, r["id"], r["email"]): r["id"] for r in batch}
-                    for f in as_completed(futures):
-                        try:
-                            f.result()
-                        except Exception as e:
-                            lid = futures[f]
-                            try:
-                                db.mark_failed(lid, str(e)[:500])
-                            except Exception:
-                                pass
-
-                # Retry: reset all FAILED (except mailbox_not_found) and send again
-                if cid in _runners and cfg.get("auto_retry_failed", True):
-                    db.reset_in_progress(lead_list_id)
-                    db._conn().execute(
-                        "UPDATE trans_leads SET state='PENDING' WHERE list_id=? AND state='FAILED' "
-                        "AND id NOT IN (SELECT lead_id FROM trans_bounce_log WHERE error_type='mailbox_not_found' AND campaign_id=?)",
-                        (lead_list_id, cid))
-                    db._conn().commit()
-
-                    pending = db._conn().execute(
-                        "SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='PENDING'",
-                        (lead_list_id,)).fetchone()[0]
-
-                    if pending > 0:
-                        logger.info("Campaign %d: retrying %d failed leads", cid, pending)
-                        time.sleep(10)
-
-                        while cid in _runners:
-                            if pool.all_dead:
-                                break
-                            batch = db.fetch_pending(lead_list_id, 200)
-                            if not batch:
-                                break
-                            db.mark_in_progress([r["id"] for r in batch])
-                            futs = {executor.submit(_send_one, r["id"], r["email"]): r["id"] for r in batch}
-                            for f in as_completed(futs):
-                                try:
-                                    f.result()
-                                except Exception:
-                                    pass
+                pending = db._conn().execute(
+                    "SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='PENDING'",
+                    (lead_list_id,)).fetchone()[0]
+                if pending > 0:
+                    logger.info("Campaign %d: retrying %d failed leads", cid, pending)
+                    time.sleep(10)
+                    _run_send_pass()
         finally:
             db.reset_in_progress(lead_list_id)
 
