@@ -12,7 +12,7 @@
         <tbody>
         {% for g in logo_groups %}
         {% set group_logos = db.get_logos_by_group(g.id) %}
-        {% set cdn_count = group_logos|selectattr('cdn_url')|list|length %}
+        {% set cdn_count = g.get('cdn_count', 0) %}
         <tr>
             <td style="font-weight:500">{{ g.name }}</td>
             <td>{{ group_logos|length }}</td>

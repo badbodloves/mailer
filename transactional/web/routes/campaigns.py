@@ -806,11 +806,17 @@ def _run_campaign(db, cid: int):
 
             # Load Cloudinary CDN URLs if mode is cloudinary
             if cfg.get("image_mode") == "cloudinary":
+                import json as _json
                 if logo_group_id:
-                    cdn_logos = db.get_logos_by_group(logo_group_id)
-                else:
-                    cdn_logos = db.get_logos(uid)
-                logo_cdn_urls = [dict(l)["cdn_url"] for l in cdn_logos if dict(l).get("cdn_url")]
+                    grp = db._conn().execute("SELECT cdn_urls_json FROM trans_logo_groups WHERE id=?",
+                                              (logo_group_id,)).fetchone()
+                    if grp and grp["cdn_urls_json"]:
+                        logo_cdn_urls = _json.loads(grp["cdn_urls_json"])
+                if not logo_cdn_urls:
+                    for g in db.get_logo_groups(uid):
+                        gd = dict(g)
+                        if gd.get("cdn_urls_json"):
+                            logo_cdn_urls.extend(_json.loads(gd["cdn_urls_json"]))
                 logger.info("Campaign %d: %d Cloudinary URLs loaded", cid, len(logo_cdn_urls))
 
         # Redirect setup

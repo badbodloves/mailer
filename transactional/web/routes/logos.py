@@ -70,9 +70,14 @@ async def logos_page(request: Request):
     db = request.app.state.db
     uid = request.state.user["id"]
     logos = [dict(l) for l in db.get_logos(uid)]
+    import json as _json
     logo_groups = [dict(g) for g in db.get_logo_groups(uid)]
     for g in logo_groups:
         g["variant_count"] = get_group_variant_count(g["id"])
+        try:
+            g["cdn_count"] = len(_json.loads(g.get("cdn_urls_json") or "[]"))
+        except Exception:
+            g["cdn_count"] = 0
     return request.app.state.templates.TemplateResponse(request, "logos.html", {
         "active": "logos", "logos": logos, "logo_groups": logo_groups, "db": db,
         "variant_running": _variant_progress["running"],
@@ -286,6 +291,7 @@ async def upload_to_cloudinary(request: Request, group_id: int = Form(0)):
     def worker():
         import requests as req_lib
         import hashlib, time as _time
+        cdn_urls = []
         for i, fname in enumerate(files):
             fpath = os.path.join(d, fname)
             try:
@@ -302,10 +308,7 @@ async def upload_to_cloudinary(request: Request, group_id: int = Form(0)):
                 if resp.status_code == 200:
                     url = resp.json().get("secure_url", "")
                     if url:
-                        logo_id = db.add_logo(fname, fpath, uid, group_id)
-                        c = db._conn()
-                        c.execute("UPDATE trans_logos SET cdn_url=? WHERE id=?", (url, logo_id))
-                        c.commit()
+                        cdn_urls.append(url)
                         _cdn_progress["ok"] += 1
                     else:
                         _cdn_progress["errors"] += 1
@@ -321,6 +324,14 @@ async def upload_to_cloudinary(request: Request, group_id: int = Form(0)):
                 _cdn_progress["errors"] += 1
                 _cdn_progress["log"].append(f"{fname}: {str(e)[:100]}")
             _cdn_progress["done"] = i + 1
+
+        if cdn_urls:
+            import json
+            c = db._conn()
+            c.execute("UPDATE trans_logo_groups SET cdn_urls_json=? WHERE id=?",
+                      (json.dumps(cdn_urls), group_id))
+            c.commit()
+
         _cdn_progress["running"] = False
 
     threading.Thread(target=worker, daemon=True).start()

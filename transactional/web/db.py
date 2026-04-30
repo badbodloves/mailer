@@ -253,6 +253,7 @@ class TransDB:
             ("trans_templates", "logo_group_id", "0"),
             ("trans_logos", "group_id", "0"),
             ("trans_logos", "cdn_url", "''"),
+            ("trans_logo_groups", "cdn_urls_json", "''"),
             ("trans_redirect_links", "pool_id", "0"),
             ("trans_macros", "preset_name", "''"),
             ("trans_macros", "is_active", "1"),
