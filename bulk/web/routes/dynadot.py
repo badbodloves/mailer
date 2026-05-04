@@ -285,7 +285,7 @@ def _do_buy(db, config, domain, cf_account_id, log):
     log.append(f"Registering {domain}... (key: {config['api_key'][:6]}...)")
     try:
         data = _dynadot_call(config["api_key"], "register", {
-            "domain": domain, "duration": "1"
+            "domain": domain, "duration": "1", "currency": "USD"
         })
         reg_resp = data.get("RegisterResponse", data)
         resp_code = str(reg_resp.get("ResponseCode", "-1"))
