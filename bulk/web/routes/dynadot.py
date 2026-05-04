@@ -282,7 +282,7 @@ def _do_buy(db, config, domain, cf_account_id, log):
     except Exception as e:
         log.append(f"Availability check error: {e}, proceeding...")
 
-    log.append(f"Registering {domain}...")
+    log.append(f"Registering {domain}... (key: {config['api_key'][:6]}...)")
     try:
         data = _dynadot_call(config["api_key"], "register", {
             "domain": domain, "duration": "1"
