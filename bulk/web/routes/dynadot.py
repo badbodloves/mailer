@@ -213,9 +213,15 @@ async def buy_domain(request: Request, domain: str = Form(""),
                      dynadot_account_id: int = Form(0)):
     db = request.app.state.db
     import logging
-    logging.getLogger("bulk.dynadot").info(
-        "BUY: domain=%s cf_id=%s dynadot_id=%s", domain, cf_account_id, dynadot_account_id)
+    log = logging.getLogger("bulk.dynadot")
+    acct_name = "(legacy)"
+    if dynadot_account_id:
+        acct = db.get_dynadot_account(dynadot_account_id)
+        if acct:
+            acct_name = dict(acct).get("name", "?")
     api_key = _get_api_key(db, dynadot_account_id)
+    log.info("BUY: domain=%s cf_id=%s dynadot_id=%s name=%s key=%s...",
+             domain, cf_account_id, dynadot_account_id, acct_name, api_key[:6] if api_key else "NONE")
     if not api_key or not domain.strip():
         return HTMLResponse('<div class="alert alert-danger">Missing API key or domain.</div>')
 
