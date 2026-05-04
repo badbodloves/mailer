@@ -54,7 +54,7 @@
                         {% endif %}
                     </select>
                     <label style="margin-top:8px">Cloudflare Account</label>
-                    <select id="cf-account-select">
+                    <select id="cf-account-select" name="cf_account_id">
                         {% if cf_accounts %}
                         {% for a in cf_accounts %}
                         <option value="{{ a.id }}">{{ a.name }}</option>
