@@ -146,11 +146,10 @@ async def search_domains(request: Request, query: str = Form(""),
             buy_btn = (
                 f'<button class="btn btn-primary btn-xs" '
                 f'hx-post="/domains/buy" '
-                f'hx-vals=\'js:{{domain:"{r["domain"]}", '
-                f'cf_account_id: document.getElementById("cf-account-select")?.value || "0", '
-                f'dynadot_account_id: document.getElementById("dynadot-account-select")?.value || "0"}}\' '
+                f'hx-vals=\'{{"domain":"{escape(r["domain"])}"}}\' '
+                f'hx-include="#cf-account-select,#dynadot-account-select" '
                 f'hx-target="#buy-result" hx-swap="innerHTML" '
-                f'hx-confirm="Buy {r["domain"]} for {price_str}?">Buy</button>'
+                f'hx-confirm="Buy {escape(r["domain"])} for {price_str}?">Buy</button>'
             )
         rows += (
             f'<tr>'
@@ -168,9 +167,8 @@ async def search_domains(request: Request, query: str = Form(""),
             f'<div style="margin-top:10px">'
             f'<button class="btn btn-primary btn-sm" '
             f'hx-post="/domains/buy-bulk" '
-            f'hx-vals=\'js:{{domains: {json.dumps(json.dumps(available_domains))}, '
-            f'cf_account_id: document.getElementById("cf-account-select")?.value || "0", '
-            f'dynadot_account_id: document.getElementById("dynadot-account-select")?.value || "0"}}\' '
+            f'hx-vals=\'{{"domains": {json.dumps(json.dumps(available_domains))}}}\' '
+            f'hx-include="#cf-account-select,#dynadot-account-select" '
             f'hx-target="#buy-result" hx-swap="innerHTML" '
             f'hx-confirm="Buy all {len(available_domains)} available domains?">Buy All Available ({len(available_domains)})</button>'
             f'</div>'
@@ -214,6 +212,9 @@ async def buy_domain(request: Request, domain: str = Form(""),
                      cf_account_id: int = Form(0),
                      dynadot_account_id: int = Form(0)):
     db = request.app.state.db
+    import logging
+    logging.getLogger("bulk.dynadot").info(
+        "BUY: domain=%s cf_id=%s dynadot_id=%s", domain, cf_account_id, dynadot_account_id)
     api_key = _get_api_key(db, dynadot_account_id)
     if not api_key or not domain.strip():
         return HTMLResponse('<div class="alert alert-danger">Missing API key or domain.</div>')
