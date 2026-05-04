@@ -147,7 +147,8 @@ async def search_domains(request: Request, query: str = Form(""),
                 f'<button class="btn btn-primary btn-xs" '
                 f'hx-post="/domains/buy" '
                 f'hx-vals=\'js:{{domain:"{r["domain"]}", '
-                f'cf_account_id: document.getElementById("cf-account-select")?.value || "0"}}\' '
+                f'cf_account_id: document.getElementById("cf-account-select")?.value || "0", '
+                f'dynadot_account_id: document.getElementById("dynadot-account-select")?.value || "0"}}\' '
                 f'hx-target="#buy-result" hx-swap="innerHTML" '
                 f'hx-confirm="Buy {r["domain"]} for {price_str}?">Buy</button>'
             )
@@ -163,13 +164,13 @@ async def search_domains(request: Request, query: str = Form(""),
     available_domains = [r["domain"] for r in results if r["available"]]
     buy_all_btn = ""
     if len(available_domains) > 1:
-        domains_json = json.dumps(available_domains)
         buy_all_btn = (
             f'<div style="margin-top:10px">'
             f'<button class="btn btn-primary btn-sm" '
             f'hx-post="/domains/buy-bulk" '
-            f'hx-vals=\'{{"domains": {json.dumps(json.dumps(available_domains))}, '
-            f'"cf_account_id": "0"}}\' '
+            f'hx-vals=\'js:{{domains: {json.dumps(json.dumps(available_domains))}, '
+            f'cf_account_id: document.getElementById("cf-account-select")?.value || "0", '
+            f'dynadot_account_id: document.getElementById("dynadot-account-select")?.value || "0"}}\' '
             f'hx-target="#buy-result" hx-swap="innerHTML" '
             f'hx-confirm="Buy all {len(available_domains)} available domains?">Buy All Available ({len(available_domains)})</button>'
             f'</div>'
