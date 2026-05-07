@@ -371,6 +371,8 @@ class TransDB:
         "spam_checker_url": "http://127.0.0.1:11333/checkv2",
         "mime_profile": "rotate",
         "auto_retry_failed": True,
+        "aws_access_key": "", "aws_secret_key": "",
+        "aws_region": "eu-central-1", "s3_bucket_prefix": "lk",
     }
 
     def get_config(self) -> dict:

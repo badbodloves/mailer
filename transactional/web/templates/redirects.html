@@ -56,7 +56,38 @@
     </div>
 
     <div class="card">
-        <h3>Add Manually</h3>
+        <h3>Generate Redirects (AWS S3)</h3>
+        {% if not s3_configured %}
+        <div class="alert alert-warning" style="margin-bottom:10px">
+            AWS credentials missing. Set them under <a href="/config" style="color:var(--accent)">Config &rarr; AWS S3</a>.
+        </div>
+        {% endif %}
+        <form hx-post="/redirects/generate-s3" hx-target="#s3-result" hx-swap="innerHTML">
+            <label>Pool (optional)</label>
+            <select name="pool_id">
+                <option value="0">No Pool (global)</option>
+                {% for p in redirect_pools %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+                {% endfor %}
+            </select>
+            <label>Target URL</label>
+            <input name="target_url" placeholder="https://yoursite.com/landing" required>
+            <div class="form-row">
+                <div><label>Count</label><input name="count" type="number" value="50" min="1" max="5000"></div>
+                <div><label>Tag (optional)</label><input name="tag" placeholder="campaign-x" maxlength="16"></div>
+            </div>
+            <div class="form-help" style="margin-top:6px">
+                Creates one fresh public bucket per generation; URLs are path-style
+                <code>https://s3.{region}.amazonaws.com/{bucket}/{key}.html</code>.
+            </div>
+            <div style="margin-top:10px"><button class="btn btn-primary" {% if not s3_configured %}disabled{% endif %}>Generate S3 Links</button></div>
+        </form>
+        <div id="s3-result" style="margin-top:10px"></div>
+    </div>
+</div>
+
+<div class="card">
+    <h3>Add Manually</h3>
         <form method="post" action="/redirects/add">
             <label>Pool (optional)</label>
             <select name="pool_id">
@@ -70,13 +101,12 @@
                 <div class="shrink"><button class="btn btn-primary btn-sm">Add</button></div>
             </div>
         </form>
-        <form hx-post="/redirects/bulk-add" hx-target="#bulk-result" hx-swap="innerHTML" style="margin-top:12px">
-            <label>Bulk Add (one URL per line)</label>
-            <textarea name="urls" rows="4" placeholder="https://g.co/kgs/abc123&#10;https://g.co/kgs/def456" style="font-family:monospace;font-size:12px"></textarea>
-            <div style="margin-top:8px"><button class="btn btn-secondary btn-sm">Bulk Add</button></div>
-        </form>
-        <div id="bulk-result" style="margin-top:8px"></div>
-    </div>
+    <form hx-post="/redirects/bulk-add" hx-target="#bulk-result" hx-swap="innerHTML" style="margin-top:12px">
+        <label>Bulk Add (one URL per line)</label>
+        <textarea name="urls" rows="4" placeholder="https://g.co/kgs/abc123&#10;https://g.co/kgs/def456" style="font-family:monospace;font-size:12px"></textarea>
+        <div style="margin-top:8px"><button class="btn btn-secondary btn-sm">Bulk Add</button></div>
+    </form>
+    <div id="bulk-result" style="margin-top:8px"></div>
 </div>
 
 <div class="card">

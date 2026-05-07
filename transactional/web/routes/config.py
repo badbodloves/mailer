@@ -26,7 +26,9 @@ async def save_config(request: Request):
                  "cloudinary_cloud_name", "cloudinary_api_key",
                  "cloudinary_api_secret", "mxtoolbox_api_key",
                  "spam_checker", "spam_checker_url", "mime_profile",
-                 "logo_base_url", "logo_text", "logo_text_color"]:
+                 "logo_base_url", "logo_text", "logo_text_color",
+                 "aws_access_key", "aws_secret_key", "aws_region",
+                 "s3_bucket_prefix"]:
         if key in form:
             cfg[key] = str(form[key]).strip()
 
