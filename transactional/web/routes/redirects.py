@@ -1,4 +1,5 @@
 """Redirect Links — generate Google Share links, add, bulk-add, delete, clear."""
+import random
 import threading
 import time
 import logging
@@ -9,9 +10,24 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 logger = logging.getLogger("trans.redirects")
 router = APIRouter()
 
+AWS_REGIONS = [
+    "us-east-1", "us-east-2", "us-west-1", "us-west-2",
+    "af-south-1",
+    "ap-east-1", "ap-south-1", "ap-south-2",
+    "ap-northeast-1", "ap-northeast-2", "ap-northeast-3",
+    "ap-southeast-1", "ap-southeast-2", "ap-southeast-3", "ap-southeast-4",
+    "ca-central-1", "ca-west-1",
+    "eu-central-1", "eu-central-2",
+    "eu-west-1", "eu-west-2", "eu-west-3",
+    "eu-north-1", "eu-south-1", "eu-south-2",
+    "me-south-1", "me-central-1",
+    "sa-east-1",
+    "il-central-1",
+]
+
 _gen_progress = {"running": False, "total": 0, "done": 0, "ok": 0, "errors": 0}
 _s3_progress = {"running": False, "total": 0, "done": 0, "ok": 0, "errors": 0,
-                "bucket": "", "stage": ""}
+                "bucket": "", "stage": "", "region": ""}
 
 
 @router.get("/redirects", response_class=HTMLResponse)
@@ -27,8 +43,23 @@ async def redirects_page(request: Request):
         "active": "redirects", "redirects": redirects, "db": db,
         "redirect_count": count, "redirect_pools": redirect_pools,
         "gen_progress": _gen_progress, "s3_progress": _s3_progress,
-        "s3_configured": s3_configured,
+        "s3_configured": s3_configured, "cfg": cfg,
+        "aws_regions": AWS_REGIONS,
     })
+
+
+@router.post("/redirects/s3-config")
+async def save_s3_config(request: Request,
+                          aws_access_key: str = Form(""),
+                          aws_secret_key: str = Form(""),
+                          s3_bucket_prefix: str = Form("lk")):
+    db = request.app.state.db
+    cfg = db.get_config()
+    cfg["aws_access_key"] = aws_access_key.strip()
+    cfg["aws_secret_key"] = aws_secret_key.strip()
+    cfg["s3_bucket_prefix"] = s3_bucket_prefix.strip() or "lk"
+    db.save_config(cfg)
+    return RedirectResponse("/redirects", status_code=303)
 
 
 @router.post("/redirects/add-pool")
@@ -119,6 +150,7 @@ async def generate_s3_redirects(request: Request,
                                  target_url: str = Form(""),
                                  count: int = Form(50),
                                  tag: str = Form(""),
+                                 region: str = Form("random"),
                                  pool_id: int = Form(0)):
     target = target_url.strip()
     if not target:
@@ -132,20 +164,25 @@ async def generate_s3_redirects(request: Request,
     cfg = db.get_config()
     access_key = cfg.get("aws_access_key", "").strip()
     secret_key = cfg.get("aws_secret_key", "").strip()
-    region = cfg.get("aws_region", "eu-central-1").strip() or "eu-central-1"
     bucket_prefix = cfg.get("s3_bucket_prefix", "lk").strip() or "lk"
 
     if not access_key or not secret_key:
         return HTMLResponse(
             '<div class="alert alert-warning">AWS credentials missing. '
-            'Set them under <a href="/config" style="color:var(--accent)">Config</a>.</div>'
+            'Save them in the S3 Settings box above.</div>'
         )
+
+    region = (region or "").strip().lower()
+    if region == "random" or not region:
+        region = random.choice(AWS_REGIONS)
+    elif region not in AWS_REGIONS:
+        return HTMLResponse(f'<div class="alert alert-warning">Unknown region: {escape(region)}</div>')
 
     count = max(1, min(count, 5000))
     gen_uid = request.state.user["id"]
 
     _s3_progress.update(running=True, total=count, done=0, ok=0, errors=0,
-                         bucket="", stage="creating bucket")
+                         bucket="", stage="creating bucket", region=region)
 
     def worker():
         try:
@@ -216,8 +253,10 @@ async def generate_s3_redirects(request: Request,
 async def s3_gen_status(request: Request):
     p = _s3_progress
     bucket_html = ''
-    if p["bucket"]:
-        bucket_html = f'<div style="font-size:11px;color:var(--fg2);margin-bottom:6px">Bucket: <code>{escape(p["bucket"])}</code></div>'
+    if p["bucket"] or p.get("region"):
+        region_str = f' <span style="margin-left:6px">Region: <code>{escape(p.get("region", ""))}</code></span>' if p.get("region") else ''
+        bucket_str = f'Bucket: <code>{escape(p["bucket"])}</code>' if p["bucket"] else ''
+        bucket_html = f'<div style="font-size:11px;color:var(--fg2);margin-bottom:6px">{bucket_str}{region_str}</div>'
     if p["running"]:
         done = p["done"]
         total = p["total"] or 1

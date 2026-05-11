@@ -59,7 +59,7 @@
         <h3>Generate Redirects (AWS S3)</h3>
         {% if not s3_configured %}
         <div class="alert alert-warning" style="margin-bottom:10px">
-            AWS credentials missing. Set them under <a href="/config" style="color:var(--accent)">Config &rarr; AWS S3</a>.
+            AWS credentials missing. Save them in <em>S3 Settings</em> below.
         </div>
         {% endif %}
         <form hx-post="/redirects/generate-s3" hx-target="#s3-result" hx-swap="innerHTML">
@@ -76,6 +76,13 @@
                 <div><label>Count</label><input name="count" type="number" value="50" min="1" max="5000"></div>
                 <div><label>Tag (optional)</label><input name="tag" placeholder="campaign-x" maxlength="16"></div>
             </div>
+            <label style="margin-top:8px">Region</label>
+            <select name="region">
+                <option value="random" selected>&#127922; Random (any region)</option>
+                {% for r in aws_regions %}
+                <option value="{{ r }}">{{ r }}</option>
+                {% endfor %}
+            </select>
             <div class="form-help" style="margin-top:6px">
                 Creates one fresh public bucket per generation; URLs are path-style
                 <code>https://s3.{region}.amazonaws.com/{bucket}/{key}.html</code>.
@@ -84,6 +91,34 @@
         </form>
         <div id="s3-result" style="margin-top:10px"></div>
     </div>
+</div>
+
+<div class="card">
+    <div class="card-header"><h3>S3 Settings</h3></div>
+    <form method="post" action="/redirects/s3-config">
+        <div class="form-row">
+            <div>
+                <label>AWS Access Key ID</label>
+                <input name="aws_access_key" value="{{ cfg.aws_access_key or '' }}" placeholder="AKIA...">
+            </div>
+            <div>
+                <label>AWS Secret Access Key</label>
+                <input name="aws_secret_key" type="password" value="{{ cfg.aws_secret_key or '' }}" placeholder="{% if cfg.aws_secret_key %}(saved){% endif %}">
+            </div>
+        </div>
+        <div class="form-row" style="margin-top:8px">
+            <div>
+                <label>Bucket Prefix</label>
+                <input name="s3_bucket_prefix" value="{{ cfg.s3_bucket_prefix or 'lk' }}" placeholder="lk">
+            </div>
+            <div class="shrink" style="align-self:end">
+                <button class="btn btn-primary btn-sm">Save S3 Settings</button>
+            </div>
+        </div>
+        <div class="form-help" style="margin-top:6px">
+            Credentials are stored locally. Region is chosen per generation above (random selects a random AWS region for that batch).
+        </div>
+    </form>
 </div>
 
 <div class="card">

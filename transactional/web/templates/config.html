@@ -146,22 +146,6 @@
             <label>API Secret</label><input name="cloudinary_api_secret" type="password" value="{{ cfg.cloudinary_api_secret or '' }}">
         </div>
         <div class="card">
-            <h3>AWS S3 (Redirect Generator)</h3>
-            <label>Access Key ID</label><input name="aws_access_key" value="{{ cfg.aws_access_key or '' }}" placeholder="AKIA...">
-            <label>Secret Access Key</label><input name="aws_secret_key" type="password" value="{{ cfg.aws_secret_key or '' }}">
-            <div class="form-row">
-                <div>
-                    <label>Region</label>
-                    <input name="aws_region" value="{{ cfg.aws_region or 'eu-central-1' }}" placeholder="eu-central-1">
-                </div>
-                <div>
-                    <label>Bucket Prefix</label>
-                    <input name="s3_bucket_prefix" value="{{ cfg.s3_bucket_prefix or 'lk' }}" placeholder="lk">
-                </div>
-            </div>
-            <div class="form-help">Used by the Redirects page S3 link generator. Buckets are auto-created with public read.</div>
-        </div>
-        <div class="card">
             <h3>Spam Checker</h3>
             <label>Backend</label>
             <select name="spam_checker">
