@@ -99,7 +99,8 @@ async def save_config(request: Request, api_key: str = Form(""), secret: str = F
 
 @router.post("/domains/search", response_class=HTMLResponse)
 async def search_domains(request: Request, query: str = Form(""),
-                         dynadot_account_id: int = Form(0)):
+                         dynadot_account_id: int = Form(0),
+                         debug: str = Form("")):
     db = request.app.state.db
     api_key = _get_api_key(db, dynadot_account_id)
     if not api_key:
@@ -109,37 +110,69 @@ async def search_domains(request: Request, query: str = Form(""),
     if not domains_raw:
         return HTMLResponse('<div class="alert alert-warning">Enter at least one domain.</div>')
 
+    debug_mode = bool(debug)
     results = []
+    last_data = None
     for d in domains_raw[:50]:
         try:
             data = _dynadot_call(api_key, "search", {
                 "domain0": d, "show_price": "1", "currency": "EUR"
             })
+            last_data = data
             search_resp = data.get("SearchResponse", {})
             items = search_resp.get("SearchResults", [])
             if not isinstance(items, list):
                 items = [items] if items else []
             for item in items:
                 name = item.get("DomainName", d)
-                status_val = str(item.get("Available", "")).lower()
-                available = status_val in ("yes", "true", "available")
+                status_val = str(item.get("Available", "")).lower().strip()
+                status_field = str(item.get("Status", "")).lower().strip()
                 price = item.get("Price", "")
-                results.append({"domain": name, "available": available, "price": price})
+
+                # Dynadot returns: yes / no / premium / offline / system_busy / error
+                # premium = available at higher price; offline / system_busy = could not determine
+                if status_val in ("yes", "true", "available"):
+                    available, label = True, "Available"
+                elif status_val == "premium":
+                    available, label = True, "Premium"
+                elif status_val in ("offline", "system_busy", "error", ""):
+                    available, label = False, f"Unknown ({status_val or 'empty'})"
+                elif status_val in ("no", "false", "taken"):
+                    available, label = False, "Taken"
+                else:
+                    available, label = False, f"? ({status_val})"
+
+                results.append({
+                    "domain": name,
+                    "available": available,
+                    "label": label,
+                    "price": price,
+                    "raw_available": status_val,
+                    "raw_status": status_field,
+                    "raw_item": item if debug_mode else None,
+                })
             if not items:
-                results.append({"domain": d, "available": False, "price": ""})
+                results.append({
+                    "domain": d, "available": False, "label": "No result",
+                    "price": "", "raw_available": "", "raw_status": "",
+                    "raw_item": search_resp if debug_mode else None,
+                })
         except Exception as e:
-            results.append({"domain": d, "available": False, "price": f"Error: {e}"})
+            results.append({
+                "domain": d, "available": False, "label": f"Error",
+                "price": f"{e}", "raw_available": "exception",
+                "raw_status": "", "raw_item": None,
+            })
 
     if not results:
         return HTMLResponse(
             f'<div class="alert alert-info">No results. Raw response: '
-            f'<pre style="font-size:11px;white-space:pre-wrap">{escape(json.dumps(data))}</pre></div>'
+            f'<pre style="font-size:11px;white-space:pre-wrap">{escape(json.dumps(last_data))}</pre></div>'
         )
 
     rows = ""
     for r in results:
         badge = "badge-running" if r["available"] else "badge-failed"
-        label = "Available" if r["available"] else "Taken"
         price_str = f'{r["price"]}' if r["price"] and r["available"] else "—"
         buy_btn = ""
         if r["available"]:
@@ -151,12 +184,23 @@ async def search_domains(request: Request, query: str = Form(""),
                 f'hx-target="#buy-result" hx-swap="innerHTML" '
                 f'hx-confirm="Buy {escape(r["domain"])} for {price_str}?">Buy</button>'
             )
+        debug_cell = ""
+        if debug_mode:
+            raw_json = escape(json.dumps(r.get("raw_item") or {}, ensure_ascii=False, indent=2)[:1200])
+            debug_cell = (
+                f'<td style="font-family:monospace;font-size:10px;color:var(--fg2)">'
+                f'<details><summary>raw</summary>'
+                f'<div>Available=<b>{escape(r["raw_available"])}</b> Status=<b>{escape(r["raw_status"])}</b></div>'
+                f'<pre style="white-space:pre-wrap;max-width:480px">{raw_json}</pre>'
+                f'</details></td>'
+            )
         rows += (
             f'<tr>'
             f'<td style="font-weight:500">{escape(r["domain"])}</td>'
-            f'<td><span class="badge {badge}">{label}</span></td>'
+            f'<td><span class="badge {badge}">{escape(r["label"])}</span></td>'
             f'<td>{escape(price_str)}</td>'
             f'<td>{buy_btn}</td>'
+            f'{debug_cell}'
             f'</tr>'
         )
 
@@ -174,8 +218,9 @@ async def search_domains(request: Request, query: str = Form(""),
             f'</div>'
         )
 
+    debug_header = '<th>Debug</th>' if debug_mode else ''
     return HTMLResponse(
-        f'<table><thead><tr><th>Domain</th><th>Status</th><th>Price</th><th></th></tr></thead>'
+        f'<table><thead><tr><th>Domain</th><th>Status</th><th>Price</th><th></th>{debug_header}</tr></thead>'
         f'<tbody>{rows}</tbody></table>{buy_all_btn}'
     )
 
@@ -271,12 +316,18 @@ def _do_buy(db, config, domain, cf_account_id, log):
         if not isinstance(items, list):
             items = [items] if items else []
         if items:
-            status_val = str(items[0].get("Available", "")).lower()
-            if status_val not in ("yes", "true", "available"):
+            status_val = str(items[0].get("Available", "")).lower().strip()
+            if status_val in ("yes", "true", "available"):
+                price = items[0].get("Price", "?")
+                log.append(f"Available! Price: {price}")
+            elif status_val == "premium":
+                price = items[0].get("Price", "?")
+                log.append(f"Premium available! Price: {price}")
+            elif status_val in ("offline", "system_busy", "error", ""):
+                log.append(f"Dynadot inconclusive ({status_val or 'empty'}) — attempting register anyway.")
+            else:
                 log.append(f"Domain {domain} is NOT available ({status_val}).")
                 return
-            price = items[0].get("Price", "?")
-            log.append(f"Available! Price: {price}")
         else:
             log.append("Could not verify availability, proceeding...")
     except Exception as e:
