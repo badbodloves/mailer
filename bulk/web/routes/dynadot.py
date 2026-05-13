@@ -111,6 +111,7 @@ async def search_domains(request: Request, query: str = Form(""),
         return HTMLResponse('<div class="alert alert-warning">Enter at least one domain.</div>')
 
     debug_mode = bool(debug)
+    from mailer import whois_check as whois_mod
     results = []
     last_data = None
     for d in domains_raw[:50]:
@@ -131,14 +132,30 @@ async def search_domains(request: Request, query: str = Form(""),
 
                 # Dynadot returns: yes / no / premium / offline / system_busy / error
                 # premium = available at higher price; offline / system_busy = could not determine
+                whois_verdict = ""
+                whois_override = False
                 if status_val in ("yes", "true", "available"):
                     available, label = True, "Available"
                 elif status_val == "premium":
                     available, label = True, "Premium"
                 elif status_val in ("offline", "system_busy", "error", ""):
-                    available, label = False, f"Unknown ({status_val or 'empty'})"
+                    # Dynadot inconclusive — trust WHOIS instead
+                    whois_verdict, _raw = whois_mod.check(name)
+                    if whois_verdict == "available":
+                        available, label = True, "WHOIS-Free"
+                        whois_override = True
+                    elif whois_verdict == "taken":
+                        available, label = False, "Taken (WHOIS)"
+                    else:
+                        available, label = False, f"Unknown ({status_val or 'empty'})"
                 elif status_val in ("no", "false", "taken"):
-                    available, label = False, "Taken"
+                    # Verify Dynadot's "no" via WHOIS — known issue with .de & some TLDs
+                    whois_verdict, _raw = whois_mod.check(name)
+                    if whois_verdict == "available":
+                        available, label = True, "WHOIS-Free"
+                        whois_override = True
+                    else:
+                        available, label = False, "Taken"
                 else:
                     available, label = False, f"? ({status_val})"
 
@@ -149,19 +166,23 @@ async def search_domains(request: Request, query: str = Form(""),
                     "price": price,
                     "raw_available": status_val,
                     "raw_status": status_field,
+                    "whois_verdict": whois_verdict,
+                    "whois_override": whois_override,
                     "raw_item": item if debug_mode else None,
                 })
             if not items:
                 results.append({
                     "domain": d, "available": False, "label": "No result",
                     "price": "", "raw_available": "", "raw_status": "",
+                    "whois_verdict": "", "whois_override": False,
                     "raw_item": search_resp if debug_mode else None,
                 })
         except Exception as e:
             results.append({
                 "domain": d, "available": False, "label": f"Error",
                 "price": f"{e}", "raw_available": "exception",
-                "raw_status": "", "raw_item": None,
+                "raw_status": "", "whois_verdict": "", "whois_override": False,
+                "raw_item": None,
             })
 
     if not results:
@@ -176,21 +197,39 @@ async def search_domains(request: Request, query: str = Form(""),
         price_str = f'{r["price"]}' if r["price"] and r["available"] else "—"
         buy_btn = ""
         if r["available"]:
+            # If WHOIS overrode Dynadot, force=1 so register skips Dynadot's bogus 'no'
+            force_attr = ',"force":"1"' if r.get("whois_override") else ''
+            confirm_txt = (f"Force-buy {r['domain']} (Dynadot says 'no' but WHOIS says free)?"
+                            if r.get("whois_override") else
+                            f"Buy {r['domain']} for {price_str}?")
+            btn_label = "Force Buy" if r.get("whois_override") else "Buy"
             buy_btn = (
                 f'<button class="btn btn-primary btn-xs" '
                 f'hx-post="/domains/buy" '
-                f'hx-vals=\'{{"domain":"{escape(r["domain"])}"}}\' '
+                f'hx-vals=\'{{"domain":"{escape(r["domain"])}"{force_attr}}}\' '
                 f'hx-include="#cf-account-select,#dynadot-account-select" '
                 f'hx-target="#buy-result" hx-swap="innerHTML" '
-                f'hx-confirm="Buy {escape(r["domain"])} for {price_str}?">Buy</button>'
+                f'hx-confirm="{escape(confirm_txt)}">{btn_label}</button>'
+            )
+        elif r.get("whois_verdict") == "unknown" and r["raw_available"] in ("no", "false", "taken"):
+            # Dynadot says no, WHOIS couldn't verify — offer manual force-buy
+            buy_btn = (
+                f'<button class="btn btn-secondary btn-xs" '
+                f'hx-post="/domains/buy" '
+                f'hx-vals=\'{{"domain":"{escape(r["domain"])}","force":"1"}}\' '
+                f'hx-include="#cf-account-select,#dynadot-account-select" '
+                f'hx-target="#buy-result" hx-swap="innerHTML" '
+                f'hx-confirm="Force-buy {escape(r["domain"])} (no WHOIS verdict)?">Try anyway</button>'
             )
         debug_cell = ""
         if debug_mode:
             raw_json = escape(json.dumps(r.get("raw_item") or {}, ensure_ascii=False, indent=2)[:1200])
+            whois_info = f"WHOIS={escape(r.get('whois_verdict', '') or 'not checked')}"
             debug_cell = (
                 f'<td style="font-family:monospace;font-size:10px;color:var(--fg2)">'
                 f'<details><summary>raw</summary>'
-                f'<div>Available=<b>{escape(r["raw_available"])}</b> Status=<b>{escape(r["raw_status"])}</b></div>'
+                f'<div>Available=<b>{escape(r["raw_available"])}</b> '
+                f'Status=<b>{escape(r["raw_status"])}</b> {whois_info}</div>'
                 f'<pre style="white-space:pre-wrap;max-width:480px">{raw_json}</pre>'
                 f'</details></td>'
             )
@@ -255,7 +294,8 @@ async def check_balance(request: Request, dynadot_account_id: int = Form(0)):
 @router.post("/domains/buy", response_class=HTMLResponse)
 async def buy_domain(request: Request, domain: str = Form(""),
                      cf_account_id: int = Form(0),
-                     dynadot_account_id: int = Form(0)):
+                     dynadot_account_id: int = Form(0),
+                     force: str = Form("")):
     db = request.app.state.db
     import logging
     log = logging.getLogger("bulk.dynadot")
@@ -265,8 +305,9 @@ async def buy_domain(request: Request, domain: str = Form(""),
         if acct:
             acct_name = dict(acct).get("name", "?")
     api_key = _get_api_key(db, dynadot_account_id)
-    log.info("BUY: domain=%s cf_id=%s dynadot_id=%s name=%s key=%s...",
-             domain, cf_account_id, dynadot_account_id, acct_name, api_key[:6] if api_key else "NONE")
+    log.info("BUY: domain=%s cf_id=%s dynadot_id=%s name=%s key=%s... force=%s",
+             domain, cf_account_id, dynadot_account_id, acct_name,
+             api_key[:6] if api_key else "NONE", bool(force))
     if not api_key or not domain.strip():
         return HTMLResponse('<div class="alert alert-danger">Missing API key or domain.</div>')
 
@@ -275,12 +316,13 @@ async def buy_domain(request: Request, domain: str = Form(""),
 
     domain = domain.strip().lower()
     config = {"api_key": api_key}
+    force_buy = bool(force)
     _buy_progress.update(running=True, log=[], domain=domain, done=False)
 
     def worker():
         log = _buy_progress["log"]
         try:
-            _do_buy(db, config, domain, cf_account_id, log)
+            _do_buy(db, config, domain, cf_account_id, log, force=force_buy)
         except Exception as e:
             log.append(f"Fatal error: {e}")
         finally:
@@ -289,7 +331,7 @@ async def buy_domain(request: Request, domain: str = Form(""),
 
     threading.Thread(target=worker, daemon=True).start()
     return HTMLResponse(
-        f'<div class="alert alert-info">Purchasing {escape(domain)}...</div>'
+        f'<div class="alert alert-info">Purchasing {escape(domain)}{" (force)" if force_buy else ""}...</div>'
         f'<div id="buy-live" hx-get="/domains/buy-progress" hx-trigger="every 2s" hx-swap="innerHTML"></div>'
     )
 
@@ -304,34 +346,39 @@ async def buy_progress(request: Request):
     return HTMLResponse(html)
 
 
-def _do_buy(db, config, domain, cf_account_id, log):
-    """Run the full buy+CF+NS flow in a background thread."""
-    log.append(f"Checking availability of {domain}...")
-    try:
-        check = _dynadot_call(config["api_key"], "search", {
-            "domain0": domain, "show_price": "1", "currency": "EUR"
-        })
-        sr = check.get("SearchResponse", {})
-        items = sr.get("SearchResults", [])
-        if not isinstance(items, list):
-            items = [items] if items else []
-        if items:
-            status_val = str(items[0].get("Available", "")).lower().strip()
-            if status_val in ("yes", "true", "available"):
-                price = items[0].get("Price", "?")
-                log.append(f"Available! Price: {price}")
-            elif status_val == "premium":
-                price = items[0].get("Price", "?")
-                log.append(f"Premium available! Price: {price}")
-            elif status_val in ("offline", "system_busy", "error", ""):
-                log.append(f"Dynadot inconclusive ({status_val or 'empty'}) — attempting register anyway.")
+def _do_buy(db, config, domain, cf_account_id, log, force: bool = False):
+    """Run the full buy+CF+NS flow in a background thread.
+    force=True skips the Dynadot availability check (used when WHOIS
+    says the domain is free but Dynadot's search returns 'no')."""
+    if force:
+        log.append(f"Force-buy: skipping Dynadot availability check for {domain}.")
+    else:
+        log.append(f"Checking availability of {domain}...")
+        try:
+            check = _dynadot_call(config["api_key"], "search", {
+                "domain0": domain, "show_price": "1", "currency": "EUR"
+            })
+            sr = check.get("SearchResponse", {})
+            items = sr.get("SearchResults", [])
+            if not isinstance(items, list):
+                items = [items] if items else []
+            if items:
+                status_val = str(items[0].get("Available", "")).lower().strip()
+                if status_val in ("yes", "true", "available"):
+                    price = items[0].get("Price", "?")
+                    log.append(f"Available! Price: {price}")
+                elif status_val == "premium":
+                    price = items[0].get("Price", "?")
+                    log.append(f"Premium available! Price: {price}")
+                elif status_val in ("offline", "system_busy", "error", ""):
+                    log.append(f"Dynadot inconclusive ({status_val or 'empty'}) — attempting register anyway.")
+                else:
+                    log.append(f"Domain {domain} is NOT available ({status_val}).")
+                    return
             else:
-                log.append(f"Domain {domain} is NOT available ({status_val}).")
-                return
-        else:
-            log.append("Could not verify availability, proceeding...")
-    except Exception as e:
-        log.append(f"Availability check error: {e}, proceeding...")
+                log.append("Could not verify availability, proceeding...")
+        except Exception as e:
+            log.append(f"Availability check error: {e}, proceeding...")
 
     log.append(f"Registering {domain}... (key: {config['api_key'][:6]}...)")
     try:
