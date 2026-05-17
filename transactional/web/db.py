@@ -333,6 +333,25 @@ class TransDB:
                 folder_found TEXT DEFAULT '',
                 error_message TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
+            ("trans_logo_codes", """CREATE TABLE IF NOT EXISTS trans_logo_codes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                code TEXT NOT NULL,
+                is_active INTEGER DEFAULT 0,
+                user_id INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
+            ("trans_export_jobs", """CREATE TABLE IF NOT EXISTS trans_export_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT DEFAULT '',
+                status TEXT DEFAULT 'PENDING',
+                total_count INTEGER DEFAULT 0,
+                done_count INTEGER DEFAULT 0,
+                logo_mode TEXT DEFAULT 'code',
+                file_path TEXT DEFAULT '',
+                error_msg TEXT DEFAULT '',
+                user_id INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMP)"""),
         ]:
             if new_tbl not in tables:
                 c.execute(create_sql)
@@ -1164,3 +1183,69 @@ class TransDB:
 
     def get_inbox_results(self, test_id):
         return self._conn().execute("SELECT * FROM trans_inbox_results WHERE test_id=? ORDER BY id", (test_id,)).fetchall()
+
+    # ── Logo Code Presets ────────────────────────────────
+    def add_logo_code(self, name: str, code: str, user_id: int = 0) -> int:
+        c = self._conn()
+        existing = c.execute("SELECT COUNT(*) FROM trans_logo_codes WHERE user_id=?", (user_id,)).fetchone()[0]
+        is_active = 1 if existing == 0 else 0
+        c.execute("INSERT INTO trans_logo_codes (name,code,is_active,user_id) VALUES (?,?,?,?)",
+                  (name, code, is_active, user_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_logo_codes(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_logo_codes WHERE user_id=? ORDER BY name", (user_id,)).fetchall()
+        return self._conn().execute("SELECT * FROM trans_logo_codes ORDER BY name").fetchall()
+
+    def get_active_logo_code(self, user_id: int = 0):
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_logo_codes WHERE user_id=? AND is_active=1 LIMIT 1", (user_id,)).fetchone()
+        return self._conn().execute("SELECT * FROM trans_logo_codes WHERE is_active=1 LIMIT 1").fetchone()
+
+    def activate_logo_code(self, cid: int):
+        c = self._conn()
+        row = c.execute("SELECT user_id FROM trans_logo_codes WHERE id=?", (cid,)).fetchone()
+        if not row:
+            return
+        c.execute("UPDATE trans_logo_codes SET is_active=0 WHERE user_id=?", (row["user_id"],))
+        c.execute("UPDATE trans_logo_codes SET is_active=1 WHERE id=?", (cid,))
+        c.commit()
+
+    def update_logo_code(self, cid: int, name: str, code: str):
+        c = self._conn()
+        c.execute("UPDATE trans_logo_codes SET name=?, code=? WHERE id=?", (name, code, cid))
+        c.commit()
+
+    def delete_logo_code(self, cid: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_logo_codes WHERE id=?", (cid,))
+        c.commit()
+
+    # ── Export Jobs ──────────────────────────────────────
+    def create_export_job(self, name: str, total: int, logo_mode: str, user_id: int = 0) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO trans_export_jobs (name,status,total_count,logo_mode,user_id) VALUES (?,?,?,?,?)",
+                  (name, "RUNNING", total, logo_mode, user_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_export_jobs(self, user_id: int = 0) -> list:
+        if user_id:
+            return self._conn().execute("SELECT * FROM trans_export_jobs WHERE user_id=? ORDER BY id DESC", (user_id,)).fetchall()
+        return self._conn().execute("SELECT * FROM trans_export_jobs ORDER BY id DESC").fetchall()
+
+    def get_export_job(self, jid: int):
+        return self._conn().execute("SELECT * FROM trans_export_jobs WHERE id=?", (jid,)).fetchone()
+
+    def update_export_job(self, jid: int, **kw):
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in kw)
+        c.execute(f"UPDATE trans_export_jobs SET {sets} WHERE id=?", list(kw.values()) + [jid])
+        c.commit()
+
+    def delete_export_job(self, jid: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_export_jobs WHERE id=?", (jid,))
+        c.commit()
