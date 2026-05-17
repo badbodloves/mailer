@@ -32,14 +32,25 @@ def _new_bucket_name(prefix: str, tag: str = "") -> str:
     return f"{p}-{suffix}"
 
 
-def make_s3_client(access_key: str, secret_key: str, region: str):
+def make_s3_client(access_key: str, secret_key: str, region: str,
+                    proxy: str = ""):
+    """Build a boto3 S3 client. If `proxy` is set (http://host:port or
+    http://user:pass@host:port), all HTTPS traffic is routed through it."""
     import boto3
-    return boto3.client(
-        "s3",
+    kwargs = dict(
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         region_name=region,
     )
+    proxy = (proxy or "").strip()
+    if proxy:
+        from botocore.config import Config
+        # Default to HTTP scheme if scheme is missing (most HTTP/SOCKS proxies
+        # accept https traffic via CONNECT).
+        if "://" not in proxy:
+            proxy = "http://" + proxy
+        kwargs["config"] = Config(proxies={"http": proxy, "https": proxy})
+    return boto3.client("s3", **kwargs)
 
 
 def create_public_bucket(s3, bucket: str, region: str):

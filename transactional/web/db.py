@@ -392,6 +392,7 @@ class TransDB:
         "auto_retry_failed": True,
         "aws_access_key": "", "aws_secret_key": "",
         "aws_region": "eu-central-1", "s3_bucket_prefix": "lk",
+        "aws_proxy": "",
     }
 
     def get_config(self) -> dict:

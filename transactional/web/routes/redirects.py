@@ -52,14 +52,62 @@ async def redirects_page(request: Request):
 async def save_s3_config(request: Request,
                           aws_access_key: str = Form(""),
                           aws_secret_key: str = Form(""),
-                          s3_bucket_prefix: str = Form("lk")):
+                          s3_bucket_prefix: str = Form("lk"),
+                          aws_proxy: str = Form("")):
     db = request.app.state.db
     cfg = db.get_config()
     cfg["aws_access_key"] = aws_access_key.strip()
     cfg["aws_secret_key"] = aws_secret_key.strip()
     cfg["s3_bucket_prefix"] = s3_bucket_prefix.strip() or "lk"
+    cfg["aws_proxy"] = aws_proxy.strip()
     db.save_config(cfg)
     return RedirectResponse("/redirects", status_code=303)
+
+
+@router.post("/redirects/s3-test", response_class=HTMLResponse)
+async def test_s3_connection(request: Request):
+    """Run a fast list_buckets to verify creds + proxy."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    access = cfg.get("aws_access_key", "").strip()
+    secret = cfg.get("aws_secret_key", "").strip()
+    region = cfg.get("aws_region", "eu-central-1").strip() or "eu-central-1"
+    proxy = cfg.get("aws_proxy", "").strip()
+    if not access or not secret:
+        return HTMLResponse('<div class="alert alert-warning">Missing credentials.</div>')
+    try:
+        from mailer.s3_redirect import make_s3_client
+        s3 = make_s3_client(access, secret, region, proxy=proxy)
+        resp = s3.list_buckets()
+        n = len(resp.get("Buckets", []))
+        proxy_str = f" via proxy <code>{escape(proxy)}</code>" if proxy else ""
+        return HTMLResponse(
+            f'<div class="alert alert-success">OK — {n} bucket(s) visible '
+            f'(region {escape(region)}){proxy_str}.</div>'
+        )
+    except Exception as e:
+        return HTMLResponse(
+            f'<div class="alert alert-danger">Connection failed: {escape(str(e)[:300])}</div>'
+        )
+
+
+@router.get("/redirects/pool/{pid}/export")
+async def export_pool(request: Request, pid: int):
+    """Export one redirect pool's links as plain .txt."""
+    from fastapi.responses import Response
+    db = request.app.state.db
+    links = [dict(r)["short_url"] for r in db.get_redirects_by_pool(pid)]
+    pool_name = "pool"
+    for p in db.get_redirect_pools(request.state.user["id"]):
+        if dict(p)["id"] == pid:
+            pool_name = "".join(c if c.isalnum() or c in "-_" else "_"
+                                for c in dict(p)["name"]).strip("_") or f"pool{pid}"
+            break
+    return Response(
+        content="\n".join(links),
+        media_type="text/plain",
+        headers={"Content-Disposition": f'attachment; filename={pool_name}.txt'},
+    )
 
 
 @router.post("/redirects/add-pool")
@@ -165,6 +213,7 @@ async def generate_s3_redirects(request: Request,
     access_key = cfg.get("aws_access_key", "").strip()
     secret_key = cfg.get("aws_secret_key", "").strip()
     bucket_prefix = cfg.get("s3_bucket_prefix", "lk").strip() or "lk"
+    proxy = cfg.get("aws_proxy", "").strip()
 
     if not access_key or not secret_key:
         return HTMLResponse(
@@ -190,7 +239,7 @@ async def generate_s3_redirects(request: Request,
 
             bucket = _new_bucket_name(bucket_prefix, tag)
             _s3_progress["bucket"] = bucket
-            s3 = make_s3_client(access_key, secret_key, region)
+            s3 = make_s3_client(access_key, secret_key, region, proxy=proxy)
 
             for attempt in range(3):
                 try:

@@ -14,7 +14,10 @@
         <tr>
             <td style="font-weight:500">{{ p.name }}</td>
             <td>{{ p.count }}</td>
-            <td>
+            <td style="white-space:nowrap">
+                {% if p.count > 0 %}
+                <a href="/redirects/pool/{{ p.id }}/export" class="btn btn-secondary btn-xs">Export .txt</a>
+                {% endif %}
                 <form method="post" action="/redirects/pool/{{ p.id }}/delete" onsubmit="return confirm('Delete pool + all links?')" style="display:inline">
                     <button class="btn btn-danger btn-xs">Delete</button>
                 </form>
@@ -111,12 +114,22 @@
                 <label>Bucket Prefix</label>
                 <input name="s3_bucket_prefix" value="{{ cfg.s3_bucket_prefix or 'lk' }}" placeholder="lk">
             </div>
-            <div class="shrink" style="align-self:end">
-                <button class="btn btn-primary btn-sm">Save S3 Settings</button>
+            <div>
+                <label>Proxy (optional)</label>
+                <input name="aws_proxy" value="{{ cfg.aws_proxy or '' }}" placeholder="http://user:pass@proxy.example:8080">
             </div>
         </div>
+        <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
+            <button class="btn btn-primary btn-sm">Save S3 Settings</button>
+            <button class="btn btn-secondary btn-sm" type="button"
+                    hx-post="/redirects/s3-test"
+                    hx-target="#s3-test-result"
+                    hx-swap="innerHTML">Test Connection</button>
+            <span id="s3-test-result" style="margin-left:4px"></span>
+        </div>
         <div class="form-help" style="margin-top:6px">
-            Credentials are stored locally. Region is chosen per generation above (random selects a random AWS region for that batch).
+            Credentials are stored locally. Region is picked per generation above. The proxy (if set) routes all HTTPS requests to AWS through it
+            (format: <code>http://host:port</code> or <code>http://user:pass@host:port</code>).
         </div>
     </form>
 </div>
