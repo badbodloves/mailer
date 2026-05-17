@@ -39,13 +39,27 @@ async def redirects_page(request: Request):
     redirect_pools = [dict(p, count=db.get_redirect_pool_count(p["id"])) for p in db.get_redirect_pools(uid)]
     cfg = db.get_config()
     s3_configured = bool(cfg.get("aws_access_key") and cfg.get("aws_secret_key"))
+    proxies = [dict(p) for p in db.get_proxies(uid)]
     return request.app.state.templates.TemplateResponse(request, "redirects.html", {
         "active": "redirects", "redirects": redirects, "db": db,
         "redirect_count": count, "redirect_pools": redirect_pools,
         "gen_progress": _gen_progress, "s3_progress": _s3_progress,
         "s3_configured": s3_configured, "cfg": cfg,
         "aws_regions": AWS_REGIONS,
+        "proxies": proxies,
     })
+
+
+def _resolve_proxy(db, cfg: dict) -> str:
+    """Look up the AWS proxy value from trans_proxies via aws_proxy_id.
+    Returns '' when none is selected or the entry no longer exists."""
+    pid = int(cfg.get("aws_proxy_id", 0) or 0)
+    if not pid:
+        return ""
+    row = db.get_proxy(pid)
+    if not row:
+        return ""
+    return (dict(row).get("value") or "").strip()
 
 
 @router.post("/redirects/s3-config")
@@ -53,13 +67,13 @@ async def save_s3_config(request: Request,
                           aws_access_key: str = Form(""),
                           aws_secret_key: str = Form(""),
                           s3_bucket_prefix: str = Form("lk"),
-                          aws_proxy: str = Form("")):
+                          aws_proxy_id: int = Form(0)):
     db = request.app.state.db
     cfg = db.get_config()
     cfg["aws_access_key"] = aws_access_key.strip()
     cfg["aws_secret_key"] = aws_secret_key.strip()
     cfg["s3_bucket_prefix"] = s3_bucket_prefix.strip() or "lk"
-    cfg["aws_proxy"] = aws_proxy.strip()
+    cfg["aws_proxy_id"] = int(aws_proxy_id or 0)
     db.save_config(cfg)
     return RedirectResponse("/redirects", status_code=303)
 
@@ -72,7 +86,7 @@ async def test_s3_connection(request: Request):
     access = cfg.get("aws_access_key", "").strip()
     secret = cfg.get("aws_secret_key", "").strip()
     region = cfg.get("aws_region", "eu-central-1").strip() or "eu-central-1"
-    proxy = cfg.get("aws_proxy", "").strip()
+    proxy = _resolve_proxy(db, cfg)
     if not access or not secret:
         return HTMLResponse('<div class="alert alert-warning">Missing credentials.</div>')
     try:
@@ -213,7 +227,7 @@ async def generate_s3_redirects(request: Request,
     access_key = cfg.get("aws_access_key", "").strip()
     secret_key = cfg.get("aws_secret_key", "").strip()
     bucket_prefix = cfg.get("s3_bucket_prefix", "lk").strip() or "lk"
-    proxy = cfg.get("aws_proxy", "").strip()
+    proxy = _resolve_proxy(db, cfg)
 
     if not access_key or not secret_key:
         return HTMLResponse(

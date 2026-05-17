@@ -115,8 +115,15 @@
                 <input name="s3_bucket_prefix" value="{{ cfg.s3_bucket_prefix or 'lk' }}" placeholder="lk">
             </div>
             <div>
-                <label>Proxy (optional)</label>
-                <input name="aws_proxy" value="{{ cfg.aws_proxy or '' }}" placeholder="http://user:pass@proxy.example:8080">
+                <label>Proxy (from <a href="/proxies" style="color:var(--accent)">/proxies</a>)</label>
+                <select name="aws_proxy_id">
+                    <option value="0">No Proxy (direct)</option>
+                    {% for p in proxies %}
+                    <option value="{{ p.id }}" {{ 'selected' if cfg.aws_proxy_id == p.id }}>
+                        {{ p.name }} — {{ p.value[:40] }}{{ '...' if p.value and p.value|length > 40 else '' }}
+                    </option>
+                    {% endfor %}
+                </select>
             </div>
         </div>
         <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
@@ -128,8 +135,9 @@
             <span id="s3-test-result" style="margin-left:4px"></span>
         </div>
         <div class="form-help" style="margin-top:6px">
-            Credentials are stored locally. Region is picked per generation above. The proxy (if set) routes all HTTPS requests to AWS through it
-            (format: <code>http://host:port</code> or <code>http://user:pass@host:port</code>).
+            Credentials stored locally. Region is picked per generation. Proxy list managed in
+            <a href="/proxies" style="color:var(--accent)">/proxies</a> — boto3 needs HTTP/HTTPS proxies
+            (<code>host:port</code> or <code>http://user:pass@host:port</code>).
         </div>
     </form>
 </div>
