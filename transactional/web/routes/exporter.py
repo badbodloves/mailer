@@ -181,12 +181,6 @@ async def add_logo_code(request: Request,
     return RedirectResponse("/exporter", status_code=303)
 
 
-@router.post("/exporter/logo-code/{cid}/activate")
-async def activate_logo_code(request: Request, cid: int):
-    request.app.state.db.activate_logo_code(cid)
-    return RedirectResponse("/exporter", status_code=303)
-
-
 @router.post("/exporter/logo-code/{cid}/update")
 async def update_logo_code(request: Request, cid: int,
                             name: str = Form(""),
@@ -222,7 +216,7 @@ async def generate_export(request: Request):
     except (TypeError, ValueError):
         total = 100
 
-    logo_mode = (form.get("logo_mode", "code") or "code").strip()
+    raw_mode = (form.get("logo_mode", "code:default") or "code:default").strip()
     classes = "afp_classes" in form
     advanced = "afp_advanced" in form
 
@@ -230,25 +224,52 @@ async def generate_export(request: Request):
     logo_text = (form.get("logo_text", "") or cfg.get("logo_text", "Logo")).strip() or "Logo"
     logo_text_color = (form.get("logo_text_color", "") or cfg.get("logo_text_color", "#333333")).strip() or "#333333"
 
+    # Resolve logo_mode. The form sends e.g. "code:default", "code:<id>",
+    # "cloudinary", "text". We collapse to effective_mode for the engine
+    # plus a logo_code string when needed.
     logo_code = ""
-    if logo_mode == "code":
-        # Prefer the active preset; fall back to default
-        active = db.get_active_logo_code(uid)
-        logo_code = (dict(active)["code"] if active else DEFAULT_LOGO_CODE)
-        # If the form overrides (override_code field), use that for this run
+    preset_label = ""
+    if raw_mode.startswith("code:"):
+        effective_mode = "code"
+        sel = raw_mode.split(":", 1)[1]
+        if sel == "default":
+            logo_code = DEFAULT_LOGO_CODE
+            preset_label = "Default"
+        else:
+            try:
+                preset = db.get_logo_code(int(sel))
+            except (TypeError, ValueError):
+                preset = None
+            if preset:
+                preset = dict(preset)
+                logo_code = preset["code"]
+                preset_label = preset["name"]
+            else:
+                logo_code = DEFAULT_LOGO_CODE
+                preset_label = "Default (preset missing)"
         override = form.get("logo_code_override", "")
         if override.strip():
             logo_code = override
+            preset_label += " + override"
+    elif raw_mode == "code":  # backward compat
+        effective_mode = "code"
+        logo_code = DEFAULT_LOGO_CODE
+        preset_label = "Default"
+    else:
+        effective_mode = raw_mode
 
+    job_logo_mode = (
+        f"code: {preset_label}" if effective_mode == "code" else effective_mode
+    )
     name = (form.get("name", "") or f"Export {total}").strip()[:80]
 
-    job_id = db.create_export_job(name, total, logo_mode, uid)
+    job_id = db.create_export_job(name, total, job_logo_mode, uid)
     fname = f"export_{job_id}_{int(time.time())}.zip"
     zip_path = os.path.join(EXPORT_DIR, fname)
 
     t = threading.Thread(
         target=_run_export,
-        args=(db, job_id, uid, template_ids, total, logo_mode, logo_code,
+        args=(db, job_id, uid, template_ids, total, effective_mode, logo_code,
               logo_text, logo_text_color, classes, advanced, cfg, zip_path),
         daemon=True,
     )

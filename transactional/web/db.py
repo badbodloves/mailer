@@ -1188,10 +1188,8 @@ class TransDB:
     # ── Logo Code Presets ────────────────────────────────
     def add_logo_code(self, name: str, code: str, user_id: int = 0) -> int:
         c = self._conn()
-        existing = c.execute("SELECT COUNT(*) FROM trans_logo_codes WHERE user_id=?", (user_id,)).fetchone()[0]
-        is_active = 1 if existing == 0 else 0
-        c.execute("INSERT INTO trans_logo_codes (name,code,is_active,user_id) VALUES (?,?,?,?)",
-                  (name, code, is_active, user_id))
+        c.execute("INSERT INTO trans_logo_codes (name,code,is_active,user_id) VALUES (?,?,0,?)",
+                  (name, code, user_id))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -1200,19 +1198,8 @@ class TransDB:
             return self._conn().execute("SELECT * FROM trans_logo_codes WHERE user_id=? ORDER BY name", (user_id,)).fetchall()
         return self._conn().execute("SELECT * FROM trans_logo_codes ORDER BY name").fetchall()
 
-    def get_active_logo_code(self, user_id: int = 0):
-        if user_id:
-            return self._conn().execute("SELECT * FROM trans_logo_codes WHERE user_id=? AND is_active=1 LIMIT 1", (user_id,)).fetchone()
-        return self._conn().execute("SELECT * FROM trans_logo_codes WHERE is_active=1 LIMIT 1").fetchone()
-
-    def activate_logo_code(self, cid: int):
-        c = self._conn()
-        row = c.execute("SELECT user_id FROM trans_logo_codes WHERE id=?", (cid,)).fetchone()
-        if not row:
-            return
-        c.execute("UPDATE trans_logo_codes SET is_active=0 WHERE user_id=?", (row["user_id"],))
-        c.execute("UPDATE trans_logo_codes SET is_active=1 WHERE id=?", (cid,))
-        c.commit()
+    def get_logo_code(self, cid: int):
+        return self._conn().execute("SELECT * FROM trans_logo_codes WHERE id=?", (cid,)).fetchone()
 
     def update_logo_code(self, cid: int, name: str, code: str):
         c = self._conn()

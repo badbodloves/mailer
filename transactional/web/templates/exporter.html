@@ -38,7 +38,12 @@
                 <div>
                     <label>Logo Mode</label>
                     <select name="logo_mode">
-                        <option value="code" selected>External Mailer Code (active preset)</option>
+                        <optgroup label="External Mailer Code">
+                            <option value="code:default" selected>Default (CID placeholder)</option>
+                            {% for c in logo_codes %}
+                            <option value="code:{{ c.id }}">{{ c.name }}</option>
+                            {% endfor %}
+                        </optgroup>
                         <option value="cloudinary">Cloudinary URL (random per mail) — {{ cloudinary_count }} URLs</option>
                         <option value="text">Text Logo</option>
                     </select>
@@ -84,28 +89,20 @@
 
     <!-- Logo Code Presets -->
     <div class="card">
-        <div class="card-header"><h3>External Mailer Logo Code</h3></div>
+        <div class="card-header"><h3>External Mailer Logo Code Presets</h3></div>
         <div class="form-help" style="margin-bottom:8px">
-            Editable snippet that replaces <code>{Logo}</code> in every exported HTML when
-            logo mode is <em>External Mailer Code</em>. Default is the
-            <code>Logo[==ORandImage,RndFileName,RndSize=3==].png</code> placeholder for CID injection.
+            Each saved preset shows up as its own option in the <em>Logo Mode</em> dropdown on the left.
+            <em>Default</em> is the built-in <code>Logo[==ORandImage,RndFileName,RndSize=3==].png</code> CID placeholder
+            and is always available.
         </div>
         {% if logo_codes %}
         <table style="margin-bottom:10px">
-            <thead><tr><th>Name</th><th>Snippet</th><th>Active</th><th></th></tr></thead>
+            <thead><tr><th>Name</th><th>Snippet</th><th></th></tr></thead>
             <tbody>
             {% for c in logo_codes %}
             <tr>
                 <td style="font-weight:500">{{ c.name }}</td>
-                <td style="font-family:monospace;font-size:11px;max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ c.code }}">{{ c.code }}</td>
-                <td>
-                    {% if c.is_active %}<span class="badge badge-running">Active</span>
-                    {% else %}
-                    <form method="post" action="/exporter/logo-code/{{ c.id }}/activate" style="display:inline">
-                        <button class="btn btn-secondary btn-xs">Activate</button>
-                    </form>
-                    {% endif %}
-                </td>
+                <td style="font-family:monospace;font-size:11px;max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ c.code }}">{{ c.code }}</td>
                 <td style="white-space:nowrap">
                     <details><summary class="btn btn-secondary btn-xs" style="display:inline-block">Edit</summary>
                         <form method="post" action="/exporter/logo-code/{{ c.id }}/update" style="margin-top:6px">
