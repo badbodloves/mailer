@@ -32,23 +32,106 @@ def _new_bucket_name(prefix: str, tag: str = "") -> str:
     return f"{p}-{suffix}"
 
 
+_SOCKS_PATCHED = False
+
+
+def _normalize_proxy(value: str) -> str:
+    """Accept SMTP-style or URL-style proxies and emit a valid URL.
+
+    Examples
+        socks5://1.2.3.4:1080:user:pass  -> socks5://user:pass@1.2.3.4:1080
+        1.2.3.4:1080:user:pass            -> http://user:pass@1.2.3.4:1080
+        1.2.3.4:1080                      -> http://1.2.3.4:1080
+        http://user:pass@host:port        -> unchanged
+    """
+    value = (value or "").strip()
+    if not value:
+        return ""
+    if "://" in value:
+        scheme, rest = value.split("://", 1)
+    else:
+        scheme, rest = "http", value
+    if "@" in rest:
+        return f"{scheme}://{rest}"
+    parts = rest.split(":")
+    if len(parts) == 4:
+        host, port, user, pwd = parts
+        return f"{scheme}://{user}:{pwd}@{host}:{port}"
+    if len(parts) == 2:
+        return f"{scheme}://{rest}"
+    return f"{scheme}://{rest}"
+
+
+def _patch_botocore_socks():
+    """Teach botocore to use urllib3's SOCKSProxyManager for socks://
+    proxy URLs. PySocks must be installed (it ships with urllib3[socks])."""
+    global _SOCKS_PATCHED
+    if _SOCKS_PATCHED:
+        return
+    try:
+        from botocore.httpsession import URLLib3Session, ProxyConfiguration
+        from urllib3.contrib.socks import SOCKSProxyManager
+    except Exception:
+        return
+
+    SOCKS_SCHEMES = ("socks4://", "socks4a://", "socks5://", "socks5h://")
+    SOCKS_PREFIXES = ("socks4:", "socks4a:", "socks5:", "socks5h:")
+
+    # 1. ProxyConfiguration._fix_proxy_url only whitelists http:/https: —
+    # without this patch every socks5:// proxy gets "http://" jammed in
+    # front, producing the classic "http://socks5://..." double-prefix.
+    _orig_fix = ProxyConfiguration._fix_proxy_url
+
+    def _patched_fix(self, proxy_url):
+        if proxy_url.startswith(SOCKS_PREFIXES):
+            return proxy_url
+        return _orig_fix(self, proxy_url)
+
+    ProxyConfiguration._fix_proxy_url = _patched_fix
+
+    # 2. _get_proxy_manager needs to hand SOCKS URLs to SOCKSProxyManager
+    # instead of the default urllib3 ProxyManager (which only speaks HTTP).
+    _orig_get = URLLib3Session._get_proxy_manager
+
+    def _patched_get(self, proxy_url):
+        if proxy_url in self._proxy_managers:
+            return self._proxy_managers[proxy_url]
+        if proxy_url.startswith(SOCKS_SCHEMES):
+            proxy_headers = self._proxy_config.proxy_headers_for(proxy_url)
+            pool_kwargs = self._get_pool_manager_kwargs(proxy_headers=proxy_headers)
+            allowed = {k: v for k, v in pool_kwargs.items()
+                        if k in ("num_pools", "headers", "maxsize", "block",
+                                  "timeout", "retries", "ssl_context", "ca_certs",
+                                  "ca_cert_dir", "cert_file", "key_file")}
+            pm = SOCKSProxyManager(proxy_url, **allowed)
+            # NOTE: deliberately do NOT overwrite pool_classes_by_scheme like
+            # the parent does — SOCKSProxyManager ships SOCKS-aware pool
+            # classes that pass _socks_options to the connection; the default
+            # HTTPSConnection rejects that kwarg.
+            self._proxy_managers[proxy_url] = pm
+            return pm
+        return _orig_get(self, proxy_url)
+
+    URLLib3Session._get_proxy_manager = _patched_get
+    _SOCKS_PATCHED = True
+
+
 def make_s3_client(access_key: str, secret_key: str, region: str,
                     proxy: str = ""):
-    """Build a boto3 S3 client. If `proxy` is set (http://host:port or
-    http://user:pass@host:port), all HTTPS traffic is routed through it."""
+    """Build a boto3 S3 client. `proxy` accepts both URL- and SMTP-style
+    strings and supports http://, https://, socks4://, socks5:// schemes.
+    SOCKS routing requires PySocks (ships with urllib3[socks])."""
     import boto3
     kwargs = dict(
         aws_access_key_id=access_key,
         aws_secret_access_key=secret_key,
         region_name=region,
     )
-    proxy = (proxy or "").strip()
+    proxy = _normalize_proxy(proxy)
     if proxy:
+        if proxy.startswith(("socks4://", "socks4a://", "socks5://", "socks5h://")):
+            _patch_botocore_socks()
         from botocore.config import Config
-        # Default to HTTP scheme if scheme is missing (most HTTP/SOCKS proxies
-        # accept https traffic via CONNECT).
-        if "://" not in proxy:
-            proxy = "http://" + proxy
         kwargs["config"] = Config(proxies={"http": proxy, "https": proxy})
     return boto3.client("s3", **kwargs)
 
