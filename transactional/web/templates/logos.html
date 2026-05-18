@@ -20,6 +20,10 @@
                 {{ g.variant_count }}
                 {% if g.variant_count > 0 %}
                 <a href="/logos/export-variants?group_id={{ g.id }}" class="btn btn-secondary btn-xs btn-icon" title="Export ZIP" style="margin-left:2px">&#8615;</a>
+                <button class="btn btn-secondary btn-xs"
+                        hx-get="/logos/variants/list?group_id={{ g.id }}"
+                        hx-target="#variant-gallery" hx-swap="innerHTML"
+                        title="Browse variants">View</button>
                 <form hx-post="/logos/clear-variants" hx-target="closest td" hx-swap="innerHTML"
                       hx-confirm="Clear {{ g.variant_count }} variants?" style="display:inline">
                     <input type="hidden" name="group_id" value="{{ g.id }}">
@@ -123,13 +127,21 @@
             </div>
         </form>
         {% if variant_count > 0 %}
-        <button class="btn btn-danger btn-sm"
-                hx-post="/logos/clear-variants"
-                hx-target="#variant-result"
-                hx-swap="innerHTML"
-                hx-confirm="Clear all {{ variant_count }} variants?">Clear Variants</button>
+        <div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">
+            <a href="/logos/export-variants?group_id=0" class="btn btn-secondary btn-sm">Download ZIP</a>
+            <button class="btn btn-secondary btn-sm"
+                    hx-get="/logos/variants/list?group_id=0"
+                    hx-target="#variant-gallery" hx-swap="innerHTML">View Files</button>
+            <button class="btn btn-danger btn-sm"
+                    hx-post="/logos/clear-variants"
+                    hx-target="#variant-result"
+                    hx-swap="innerHTML"
+                    hx-confirm="Clear all {{ variant_count }} variants?">Clear Variants</button>
+        </div>
         {% endif %}
         <div id="variant-result" style="margin-top:10px"></div>
     </div>
 </div>
+
+<div id="variant-gallery"></div>
 {% endblock %}

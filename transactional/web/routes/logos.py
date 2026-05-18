@@ -395,3 +395,46 @@ async def clear_variant_files(request: Request, group_id: int = Form(0)):
         return HTMLResponse(f'<div class="alert alert-success">Variants for group {group_id} cleared.</div>')
     clear_variants()
     return HTMLResponse('<div class="alert alert-success">All variants cleared.</div>')
+
+
+@router.get("/logos/variants/list", response_class=HTMLResponse)
+async def list_variant_files(request: Request, group_id: int = 0):
+    """Render a thumbnail gallery of all variant files in a group (or global).
+    Each tile is a direct download link to the static file."""
+    d = _group_variant_dir(group_id)
+    if not os.path.isdir(d):
+        return HTMLResponse('<div class="form-help">No variants directory yet.</div>')
+
+    files = sorted(
+        f for f in os.listdir(d)
+        if os.path.isfile(os.path.join(d, f)) and not f.startswith(".")
+    )
+    if not files:
+        return HTMLResponse('<div class="form-help">No variants in this folder.</div>')
+
+    rel = f"group_{group_id}" if group_id else ""
+    label = f"group_{group_id}" if group_id else "global"
+    tiles = []
+    for f in files:
+        url = f"/static/uploads/logo_variants/{rel}/{f}" if rel else f"/static/uploads/logo_variants/{f}"
+        tiles.append(
+            f'<a href="{url}" download="{escape(f)}" '
+            f'style="display:flex;flex-direction:column;align-items:center;gap:4px;'
+            f'border:1px solid var(--border-light);border-radius:var(--radius);'
+            f'padding:6px;background:var(--bg);text-decoration:none;color:var(--fg)" '
+            f'title="Download {escape(f)}">'
+            f'<img src="{url}" style="max-width:100px;max-height:60px;object-fit:contain">'
+            f'<span style="font-size:10px;color:var(--fg2);max-width:100px;'
+            f'overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{escape(f)}</span>'
+            f'</a>'
+        )
+    grid = (
+        '<div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px">'
+        + "".join(tiles) + "</div>"
+    )
+    return HTMLResponse(
+        f'<div style="margin-top:8px">'
+        f'<div style="font-size:12px;color:var(--fg2);margin-bottom:6px">'
+        f'{len(files)} variant(s) in <code>{escape(label)}</code> — click any tile to download.</div>'
+        f'{grid}</div>'
+    )
