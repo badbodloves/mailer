@@ -138,12 +138,32 @@ async def delete_redirect_pool(request: Request, pid: int):
     return RedirectResponse("/redirects", status_code=303)
 
 
+GOOGLE_DOMAINS = [
+    "google.ch", "google.fr", "google.nl", "google.be", "google.se",
+    "google.dk", "google.fi", "google.hu", "google.no", "google.com",
+]
+
+
+def _rewrite_share_google(url: str) -> str:
+    """Convert https://share.google/ID → https://www.google.XX/share.google?q=ID
+    with a random domain from the pool."""
+    prefix = "https://share.google/"
+    if not url.startswith(prefix):
+        return url
+    link_id = url[len(prefix):].split("?")[0].split("#")[0]
+    if not link_id:
+        return url
+    domain = random.choice(GOOGLE_DOMAINS)
+    return f"https://www.{domain}/share.google?q={link_id}"
+
+
 @router.post("/redirects/generate", response_class=HTMLResponse)
 async def generate_redirects(request: Request,
                               target_url: str = Form(""),
                               count: int = Form(100),
                               gen_threads: int = Form(3),
-                              pool_id: int = Form(0)):
+                              pool_id: int = Form(0),
+                              google_rewrite: str = Form("")):
     target = target_url.strip()
     if not target:
         return HTMLResponse(
@@ -158,6 +178,7 @@ async def generate_redirects(request: Request,
     gen_threads = max(1, min(gen_threads, 10))
     db = request.app.state.db
     gen_uid = request.state.user["id"]
+    do_rewrite = bool(google_rewrite)
 
     _gen_progress.update(running=True, total=count, done=0, ok=0, errors=0)
 
@@ -180,6 +201,8 @@ async def generate_redirects(request: Request,
                     try:
                         url = f.result(timeout=15)
                         if url:
+                            if do_rewrite:
+                                url = _rewrite_share_google(url)
                             db.add_redirect(url, target, gen_uid, pool_id)
                             generated += 1
                             _gen_progress["ok"] = generated
@@ -199,9 +222,10 @@ async def generate_redirects(request: Request,
 
     t = threading.Thread(target=worker, daemon=True)
     t.start()
+    fmt_label = " (google.xx format)" if do_rewrite else ""
     return HTMLResponse(
         f'<div class="alert alert-info">Generating {count} redirect links '
-        f'with {gen_threads} threads...</div>'
+        f'with {gen_threads} threads{fmt_label}...</div>'
         f'<div id="gen-progress" hx-get="/redirects/status" '
         f'hx-trigger="every 2s" hx-swap="innerHTML"></div>'
     )
