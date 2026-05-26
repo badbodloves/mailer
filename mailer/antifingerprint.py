@@ -1,5 +1,6 @@
 import re
 import random
+import string
 
 
 _STYLE_ATTR_RE = re.compile(r'(style\s*=\s*")([^"]*?)(")', re.IGNORECASE)
@@ -29,6 +30,55 @@ SUFFIXES = [
     "sub", "alt", "new", "ext", "wrap", "layout", "frame", "view",
     "col", "set", "part", "line",
 ]
+ADJ = ["light", "deep", "soft", "bold", "warm", "cool", "fresh", "clear",
+        "plain", "rich", "bright", "dim", "neat", "smart"]
+NOUN = ["row", "card", "head", "foot", "body", "item", "tile", "lane",
+         "slot", "well", "pane", "rail", "edge", "frame", "wrap"]
+
+CLASS_SCHEMES = (
+    "prefix_suffix_num",   # block-inner-42  (legacy)
+    "mc_hex6",             # mc-1a2b3c
+    "e_hex4",              # e-9f4d
+    "c_num",               # c103
+    "underscore_pair",     # _light-row
+    "noun_num",            # tile47
+    "mixed_short",         # m_4_a1
+    "camel",               # blockInner
+)
+
+
+def _gen_profile(enable_classes: bool) -> dict:
+    """One profile per HTML — defines what transforms run, in what order,
+    and at what intensity. The point of randomising the profile is to
+    make the engine's output distribution wide enough that a filter can't
+    fingerprint the engine itself by looking at a batch of mails."""
+    pass_through = random.random() < 0.02  # ~2% raw, rare enough not to spike Jaccard
+    swap_strategy = random.choice([
+        "random", "random", "random",   # weighted: usually random
+        "prefer_short",
+        "prefer_long",
+        "no_swap",
+    ])
+    return {
+        "pass_through": pass_through,
+        "swap_tags":      random.random() < 0.90,
+        "swap_strategy":  swap_strategy,
+        # Pixel jitter is cheap noise — always run, just vary intensity widely.
+        "vary_pixels":    True,
+        "jitter_prob":    random.uniform(0.15, 0.70),
+        "jitter_delta":   random.randint(1, 4),
+        # CSS/img property order is identifiable, so always shuffle but
+        # at a variable per-attribute rate so the distribution isn't
+        # "100% shuffled" any more.
+        "shuffle_css":    True,
+        "css_shuffle_rate": random.uniform(0.40, 1.00),
+        "shuffle_img":    True,
+        "img_shuffle_rate": random.uniform(0.40, 1.00),
+        "inject_classes": enable_classes and random.random() < 0.90,
+        "class_scheme":   random.choice(CLASS_SCHEMES),
+        "inject_rate":    random.uniform(0.05, 0.90),
+        "style_block":    random.choice(["multiline", "compact", "minified"]),
+    }
 
 
 class AntiFingerprintEngine:
@@ -36,26 +86,39 @@ class AntiFingerprintEngine:
         self._enable_classes = enable_classes
 
     def transform(self, html: str) -> str:
-        html = _swap_tags(html)
-        html = _vary_pixels(html)
-        html = _shuffle_css_properties(html)
-        html = _shuffle_image_attributes(html)
-        if self._enable_classes:
-            html = _inject_classes(html)
+        profile = _gen_profile(self._enable_classes)
+        if profile["pass_through"]:
+            return html
+
+        # Each op is a closure capturing the per-mail profile.
+        ops = []
+        if profile["swap_tags"] and profile["swap_strategy"] != "no_swap":
+            ops.append(lambda h: _swap_tags(h, profile["swap_strategy"]))
+        if profile["vary_pixels"]:
+            ops.append(lambda h: _vary_pixels(h, profile["jitter_prob"], profile["jitter_delta"]))
+        if profile["shuffle_css"]:
+            ops.append(lambda h: _shuffle_css_properties(h, profile["css_shuffle_rate"]))
+        if profile["shuffle_img"]:
+            ops.append(lambda h: _shuffle_image_attributes(h, profile["img_shuffle_rate"]))
+        if profile["inject_classes"]:
+            ops.append(lambda h: _inject_classes(h, profile["class_scheme"],
+                                                  profile["inject_rate"],
+                                                  profile["style_block"]))
+
+        random.shuffle(ops)
+        for op in ops:
+            html = op(html)
         return html
 
 
-def _swap_tags(html: str) -> str:
-    pairs = [
-        ("strong", "b"),
-        ("em", "i"),
-    ]
+def _swap_tags(html: str, strategy: str = "random") -> str:
+    pairs = [("strong", "b"), ("em", "i")]
     for tag_a, tag_b in pairs:
-        html = _swap_one_pair(html, tag_a, tag_b)
+        html = _swap_one_pair(html, tag_a, tag_b, strategy)
     return html
 
 
-def _swap_one_pair(html: str, tag_a: str, tag_b: str) -> str:
+def _swap_one_pair(html: str, tag_a: str, tag_b: str, strategy: str) -> str:
     tokens = re.split(
         rf"(</?(?:{tag_a}|{tag_b})\b[^>]*>)", html, flags=re.IGNORECASE
     )
@@ -68,7 +131,16 @@ def _swap_one_pair(html: str, tag_a: str, tag_b: str) -> str:
             continue
         is_close = m.group(1) == "/"
         if not is_close:
-            do_swap = random.random() < 0.5
+            lower = token.lower()
+            currently_a = tag_a in lower
+            if strategy == "prefer_short":
+                # short = b/i (tag_b). Swap if currently long.
+                do_swap = currently_a
+            elif strategy == "prefer_long":
+                # long = strong/em (tag_a). Swap if currently short.
+                do_swap = not currently_a
+            else:  # random
+                do_swap = random.random() < 0.5
             stack.append(do_swap)
             if do_swap:
                 token = _flip_tag(token, tag_a, tag_b)
@@ -87,33 +159,31 @@ def _flip_tag(token: str, tag_a: str, tag_b: str) -> str:
     return re.sub(tag_b, tag_a, token, count=1, flags=re.IGNORECASE)
 
 
-def _vary_pixels(html: str) -> str:
-    def _vary_style(match: re.Match) -> str:
-        prefix, css, suffix = match.group(1), match.group(2), match.group(3)
-        css = _PX_PROP_RE.sub(_vary_prop, css)
-        return prefix + css + suffix
-
-    return _STYLE_ATTR_RE.sub(_vary_style, html)
-
-
-def _vary_prop(match: re.Match) -> str:
-    prop_prefix = match.group(1)
-    value_part = match.group(2)
-
+def _vary_pixels(html: str, jitter_prob: float = 0.30, jitter_delta: int = 2) -> str:
     def _vary_num(m: re.Match) -> str:
         val = int(m.group(1))
         if val <= 4:
             return m.group(0)
-        if random.random() < 0.3:
-            val = max(0, val + random.choice([-2, -1, 1, 2]))
+        if random.random() < jitter_prob:
+            offset = random.randint(1, jitter_delta) * random.choice([-1, 1])
+            val = max(0, val + offset)
         return f"{val}px"
 
-    return prop_prefix + _PX_NUM_RE.sub(_vary_num, value_part)
+    def _vary_prop(match: re.Match) -> str:
+        return match.group(1) + _PX_NUM_RE.sub(_vary_num, match.group(2))
+
+    def _vary_style(match: re.Match) -> str:
+        prefix, css, suffix = match.group(1), match.group(2), match.group(3)
+        return prefix + _PX_PROP_RE.sub(_vary_prop, css) + suffix
+
+    return _STYLE_ATTR_RE.sub(_vary_style, html)
 
 
-def _shuffle_css_properties(html: str) -> str:
+def _shuffle_css_properties(html: str, rate: float = 1.0) -> str:
     def _shuffle_one(match: re.Match) -> str:
         prefix, css, suffix = match.group(1), match.group(2), match.group(3)
+        if random.random() > rate:
+            return match.group(0)
         parts = [p.strip() for p in css.split(";") if p.strip()]
         if len(parts) > 1:
             random.shuffle(parts)
@@ -122,16 +192,16 @@ def _shuffle_css_properties(html: str) -> str:
     return _STYLE_ATTR_RE.sub(_shuffle_one, html)
 
 
-def _shuffle_image_attributes(html: str) -> str:
+def _shuffle_image_attributes(html: str, rate: float = 1.0) -> str:
     def _shuffle_one(match: re.Match) -> str:
+        if random.random() > rate:
+            return match.group(0)
         tag_open = match.group(1)
         attrs_str = match.group(2)
         tag_close = match.group(3)
-
         attr_spans = list(_ATTR_RE.finditer(attrs_str))
         if len(attr_spans) <= 1:
             return match.group(0)
-
         attr_strings = [attrs_str[m.start():m.end()] for m in attr_spans]
         random.shuffle(attr_strings)
         return tag_open + " " + " ".join(attr_strings) + " " + tag_close
@@ -139,8 +209,8 @@ def _shuffle_image_attributes(html: str) -> str:
     return _IMG_TAG_RE.sub(_shuffle_one, html)
 
 
-def _inject_classes(html: str) -> str:
-    inject_rate = random.uniform(0.25, 0.50)
+def _inject_classes(html: str, scheme: str, inject_rate: float,
+                     style_block: str) -> str:
     style_to_class: dict = {}
     injections: list = []
 
@@ -148,14 +218,11 @@ def _inject_classes(html: str) -> str:
         full = match.group(0)
         if re.search(r'\bclass\s*=', full, re.IGNORECASE):
             return full
-
         style_match = re.search(r'style\s*=\s*"([^"]*?)"', full, re.IGNORECASE)
         if not style_match:
             return full
-
         if random.random() > inject_rate:
             return full
-
         style_val = style_match.group(1).strip()
         if not style_val:
             return full
@@ -164,7 +231,7 @@ def _inject_classes(html: str) -> str:
         if sorted_key in style_to_class:
             cls_name = style_to_class[sorted_key]
         else:
-            cls_name = _make_class_name()
+            cls_name = _make_class_name(scheme)
             style_to_class[sorted_key] = cls_name
             injections.append((cls_name, style_val))
 
@@ -176,29 +243,49 @@ def _inject_classes(html: str) -> str:
 
     html = _ELIGIBLE_TAG_RE.sub(_maybe_inject, html)
 
-    if injections:
-        style_block = "\n<style>\n"
-        for cls_name, css in injections:
-            style_block += f"  .{cls_name} {{ {css} }}\n"
-        style_block += "</style>\n"
+    if not injections:
+        return html
 
-        meta_match = re.search(
-            r'(<meta\s+charset\s*=\s*"[^"]*"\s*/?>)', html, re.IGNORECASE
-        )
-        if meta_match:
-            pos = meta_match.end()
-            html = html[:pos] + style_block + html[pos:]
-        else:
-            head_close = re.search(r"</head>", html, re.IGNORECASE)
-            if head_close:
-                html = html[: head_close.start()] + style_block + html[head_close.start() :]
-            else:
-                html = style_block + html
+    if style_block == "minified":
+        body = "".join(f".{c}{{{css}}}" for c, css in injections)
+        block = f"<style>{body}</style>"
+    elif style_block == "compact":
+        body = " ".join(f".{c} {{ {css} }}" for c, css in injections)
+        block = f"<style>{body}</style>"
+    else:  # multiline (legacy)
+        body = "\n".join(f"  .{c} {{ {css} }}" for c, css in injections)
+        block = f"\n<style>\n{body}\n</style>\n"
 
-    return html
+    meta_match = re.search(
+        r'(<meta\s+charset\s*=\s*"[^"]*"\s*/?>)', html, re.IGNORECASE
+    )
+    if meta_match:
+        pos = meta_match.end()
+        return html[:pos] + block + html[pos:]
+    head_close = re.search(r"</head>", html, re.IGNORECASE)
+    if head_close:
+        return html[: head_close.start()] + block + html[head_close.start():]
+    return block + html
 
 
-def _make_class_name() -> str:
+def _make_class_name(scheme: str = "prefix_suffix_num") -> str:
+    """Random class name in one of several real-world ESP styles."""
+    if scheme == "mc_hex6":
+        return "mc-" + "".join(random.choices("0123456789abcdef", k=6))
+    if scheme == "e_hex4":
+        return "e-" + "".join(random.choices("0123456789abcdef", k=4))
+    if scheme == "c_num":
+        return "c" + str(random.randint(100, 999))
+    if scheme == "underscore_pair":
+        return f"_{random.choice(ADJ)}-{random.choice(NOUN)}"
+    if scheme == "noun_num":
+        return f"{random.choice(NOUN)}{random.randint(1, 99)}"
+    if scheme == "mixed_short":
+        h = "".join(random.choices("0123456789abcdef", k=2))
+        return f"m_{random.randint(1, 9)}_{h}"
+    if scheme == "camel":
+        return random.choice(PREFIXES) + random.choice(SUFFIXES).capitalize()
+    # default — legacy scheme, kept as one of many options
     return (
         f"{random.choice(PREFIXES)}-"
         f"{random.choice(SUFFIXES)}-"
