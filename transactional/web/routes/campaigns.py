@@ -1149,20 +1149,34 @@ def _run_campaign(db, cid: int):
         try:
             _run_send_pass()
 
+            # Blanket retry: every FAILED lead gets up to two more attempts.
+            # No error-type filtering — bounce_log keeps classification for
+            # stats, but we don't use it for flow decisions. A "permanent"
+            # error from one SMTP is often transient on a second IP, and
+            # truly dead mailboxes just fail again at near-zero cost.
             if cid in _runners and cfg.get("auto_retry_failed", True):
-                db.reset_in_progress(lead_list_id)
-                db._conn().execute(
-                    "UPDATE trans_leads SET state='PENDING' WHERE list_id=? AND state='FAILED' "
-                    "AND id NOT IN (SELECT lead_id FROM trans_bounce_log WHERE error_type='mailbox_not_found' AND campaign_id=?)",
-                    (lead_list_id, cid))
-                db._conn().commit()
-
-                pending = db._conn().execute(
-                    "SELECT COUNT(*) FROM trans_leads WHERE list_id=? AND state='PENDING'",
-                    (lead_list_id,)).fetchone()[0]
-                if pending > 0:
-                    logger.info("Campaign %d: retrying %d failed leads", cid, pending)
-                    time.sleep(10)
+                retry_pauses = [5, 30]   # seconds before pass 2 / pass 3
+                total_passes = len(retry_pauses) + 1
+                for attempt, pause in enumerate(retry_pauses, start=2):
+                    if cid not in _runners:
+                        break
+                    db.reset_in_progress(lead_list_id)
+                    db._conn().execute(
+                        "UPDATE trans_leads SET state='PENDING' "
+                        "WHERE list_id=? AND state='FAILED'",
+                        (lead_list_id,))
+                    db._conn().commit()
+                    pending = db._conn().execute(
+                        "SELECT COUNT(*) FROM trans_leads "
+                        "WHERE list_id=? AND state='PENDING'",
+                        (lead_list_id,)).fetchone()[0]
+                    if pending == 0:
+                        break
+                    logger.info(
+                        "Campaign %d: retry pass %d/%d on %d failed leads, "
+                        "pausing %ds first", cid, attempt, total_passes,
+                        pending, pause)
+                    time.sleep(pause)
                     _run_send_pass()
         finally:
             db.reset_in_progress(lead_list_id)
