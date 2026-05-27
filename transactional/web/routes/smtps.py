@@ -109,6 +109,36 @@ async def create_list(request: Request, name: str = Form("")):
     return RedirectResponse("/smtps", status_code=303)
 
 
+@router.post("/smtps/merge-all")
+async def merge_all_lists(request: Request, name: str = Form("")):
+    """Create a new SMTP list containing every SMTP from every existing
+    list (for this user). Duplicates host+username+port are kept once."""
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    new_name = name.strip() or "Merged"
+
+    seen = set()
+    rows = []
+    for sl in db.get_smtp_lists(uid):
+        for s in db.get_smtps(dict(sl)["id"]):
+            s = dict(s)
+            key = (s["host"], int(s["port"]), s["username"])
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append((s["host"], int(s["port"]), s["username"], s["password"]))
+
+    new_list_id = db.create_smtp_list(new_name, uid)
+    if rows:
+        conn = db._conn()
+        conn.executemany(
+            "INSERT INTO trans_smtps (list_id,host,port,username,password) VALUES (?,?,?,?,?)",
+            [(new_list_id, h, p, u, pw) for (h, p, u, pw) in rows],
+        )
+        conn.commit()
+    return RedirectResponse("/smtps", status_code=303)
+
+
 @router.post("/smtps/{lid}/import", response_class=HTMLResponse)
 async def import_smtps(request: Request, lid: int, smtp_text: str = Form("")):
     added = request.app.state.db.import_smtps(lid, smtp_text)

@@ -4,7 +4,16 @@
 <div class="page-header"><h1>SMTP Lists</h1></div>
 
 <div class="card">
-    <div class="card-header"><h3>Lists <span class="count">{{ smtp_lists|length }}</span></h3></div>
+    <div class="card-header">
+        <h3>Lists <span class="count">{{ smtp_lists|length }}</span></h3>
+        {% if smtp_lists|length > 1 %}
+        <form method="post" action="/smtps/merge-all" onsubmit="return confirm('Create a merged list from all current lists?')"
+              style="display:flex;gap:6px;align-items:center;margin-left:auto">
+            <input name="name" placeholder="Merged list name" required style="margin:0;max-width:200px">
+            <button class="btn btn-secondary btn-sm" title="Combine all SMTPs from every list into a new list (dedupes host+port+user)">Merge All Lists</button>
+        </form>
+        {% endif %}
+    </div>
     {% if smtp_lists %}
     {% for sl in smtp_lists %}
     <details>
