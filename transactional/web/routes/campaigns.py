@@ -851,7 +851,38 @@ def _run_campaign(db, cid: int):
         def _classify_error(error_str: str, code: int = 0) -> str:
             e = error_str.lower()
 
-            # --- Rate limiting (check FIRST — "too many" can appear in many forms) ---
+            # ============================================================
+            # SMTP-ACCOUNT FAILURES — these kill the SMTP, NOT the lead.
+            # Must be checked FIRST so phrases like "SMTP Blocked" don't
+            # accidentally fall into the generic "blocked = spam_reject"
+            # branch further down.
+            # ============================================================
+
+            # --- Authentication (fatal: password is wrong) ---
+            if "incorrect authentication" in e or "authentication failed" in e:
+                return "auth_fail"
+            if "535" in e and ("auth" in e or "login" in e or "credentials" in e):
+                return "auth_fail"
+            if "invalid login" in e or "username and password not accepted" in e:
+                return "auth_fail"
+
+            # --- Account-level block: provider says "you can't send" ---
+            if "smtp blocked" in e or "sender blocked" in e or "sender rejected" in e:
+                return "smtp_blocked"
+            if "outbound blocked" in e or "outgoing blocked" in e:
+                return "smtp_blocked"
+            if "from address rejected" in e or "envelope sender" in e and "reject" in e:
+                return "smtp_blocked"
+            if "postmaster" in e and ("reject" in e or "block" in e or "denied" in e):
+                return "smtp_blocked"
+            if "suspended" in e or "deactivated" in e:
+                return "smtp_suspended"
+            if "outgoing" in e and ("blocked" in e or "suspended" in e or "disabled" in e):
+                return "smtp_suspended"
+            if "account" in e and ("disabled" in e or "blocked" in e or "frozen" in e):
+                return "smtp_suspended"
+
+            # --- Rate limiting (SMTP-side, but recoverable after cooldown) ---
             if "too many" in e or ("rate" in e and "limit" in e) or "throttl" in e:
                 return "rate_limit"
             if "has sent too many" in e or "sending rate" in e or "message rate" in e:
@@ -859,76 +890,80 @@ def _run_campaign(db, cid: int):
             if "try again later" in e or "too many connections" in e:
                 return "rate_limit"
 
-            # --- Auth failures ---
-            if "incorrect authentication" in e or "authentication failed" in e:
-                return "auth_fail"
-            if "535" in e and ("auth" in e or "login" in e):
-                return "auth_fail"
+            # --- Network/transport (transient, suspend SMTP briefly) ---
+            if "timeout" in e or "timed out" in e:
+                return "timeout"
+            if "ssl" in e and ("legacy" in e or "renegotiation" in e or "handshake" in e or "certificate" in e or "unsafe" in e):
+                return "connection"
+            if "ssl" in e and "error" in e:
+                return "connection"
+            if "connect" in e and ("refused" in e or "error" in e or "reset" in e):
+                return "connection"
+            if "eof" in e or "broken pipe" in e or "connection reset" in e or "unexpectedly closed" in e:
+                return "connection"
 
-            # --- SMTP account problems ---
-            if "suspended" in e or "deactivated" in e:
-                return "smtp_suspended"
-            if "outgoing" in e and ("blocked" in e or "suspended" in e or "disabled" in e):
-                return "smtp_suspended"
+            # ============================================================
+            # RECIPIENT-LEVEL FAILURES — SMTP is fine, just this address
+            # didn't work. Worker keeps the connection and moves on.
+            # ============================================================
 
-            # --- Recipients refused — parse inner error ---
             if "recipients refused" in e:
                 inner = e.split("(", 1)
                 if len(inner) > 1:
                     inner_msg = inner[1]
-                    if "too many" in inner_msg or "rate" in inner_msg or "limit" in inner_msg:
-                        return "rate_limit"
+                    # Re-check SMTP-side in the inner so account problems
+                    # nested inside SMTPRecipientsRefused still kill the
+                    # SMTP instead of looking like a recipient bounce.
                     if "auth" in inner_msg or "535" in inner_msg or "login" in inner_msg:
                         return "auth_fail"
                     if "suspend" in inner_msg or "deactivat" in inner_msg or "disabled" in inner_msg:
                         return "smtp_suspended"
+                    if "smtp blocked" in inner_msg or "sender blocked" in inner_msg or "sender rejected" in inner_msg:
+                        return "smtp_blocked"
+                    if "too many" in inner_msg or "rate" in inner_msg or "limit" in inner_msg:
+                        return "rate_limit"
                     if "spam" in inner_msg or "blacklist" in inner_msg or "dnsbl" in inner_msg:
                         return "spam_reject"
-                    if "blocked" in inner_msg or "rejected" in inner_msg:
-                        return "smtp_rejected"
-                    # Only true mailbox errors with specific phrases
                     if "no such user" in inner_msg or "mailbox not found" in inner_msg or \
                        "does not exist" in inner_msg or "unknown user" in inner_msg or \
                        "user unknown" in inner_msg or "invalid recipient" in inner_msg or \
                        "recipient rejected" in inner_msg or "addressee unknown" in inner_msg:
                         return "mailbox_not_found"
-                return "smtp_rejected"
+                    if "blocked" in inner_msg or "rejected" in inner_msg:
+                        return "spam_reject"
+                return "spam_reject"
 
-            # --- Timeouts ---
-            if "timeout" in e or "timed out" in e:
-                return "timeout"
+            # Mailbox truly doesn't exist
+            if "no such user" in e or "mailbox not found" in e or \
+               "does not exist" in e or "unknown user" in e or \
+               "user unknown" in e or "invalid recipient" in e or \
+               "addressee unknown" in e or "recipient rejected" in e:
+                return "mailbox_not_found"
 
-            # --- SSL errors ---
-            if "ssl" in e and ("legacy" in e or "renegotiation" in e or "handshake" in e or "certificate" in e or "unsafe" in e):
-                return "connection"
-            if "ssl" in e and "error" in e:
-                return "connection"
-
-            # --- Connection ---
-            if "connect" in e and ("refused" in e or "error" in e or "reset" in e):
-                return "connection"
-            if "eof" in e or "broken pipe" in e or "connection reset" in e:
-                return "connection"
-
-            # --- Spam rejection ---
-            if "spam" in e or "dnsbl" in e or "blacklist" in e or "blocked" in e:
+            # Spam/content rejection (recipient-side content decision)
+            if "spam" in e or "dnsbl" in e or "blacklist" in e:
                 return "spam_reject"
             if ("policy" in e and "reject" in e) or ("content" in e and "reject" in e):
                 return "spam_reject"
 
-            # --- Permanent recipient errors (only very specific phrases) ---
-            if code >= 550:
-                if "no such user" in e or "mailbox not found" in e or \
-                   "does not exist" in e or "unknown user" in e or \
-                   "user unknown" in e or "invalid recipient" in e or \
-                   "addressee unknown" in e or "recipient rejected" in e:
-                    return "mailbox_not_found"
-                return "permanent_reject"
+            # Generic "blocked" — ambiguous, but if we reach this point the
+            # account-specific patterns above didn't match, so it's
+            # probably a recipient/content block.
+            if "blocked" in e:
+                return "spam_reject"
 
+            # --- SMTP code fallbacks ---
+            if code >= 550:
+                return "permanent_reject"
             if code >= 400:
                 return "rate_limit"
 
             return "other"
+
+
+        # Which error classes kill the SMTP vs. just the lead.
+        SMTP_FATAL     = {"auth_fail", "smtp_suspended", "smtp_blocked"}
+        SMTP_TRANSIENT = {"rate_limit", "connection", "timeout"}
 
         def _log_bounce(lead_id, email, error_str, code=0, smtp_host="", smtp_user=""):
             etype = _classify_error(error_str, code)
@@ -1065,13 +1100,40 @@ def _run_campaign(db, cid: int):
             try:
                 server_obj.sendmail(cur_from_email, email, raw_msg)
             except Exception as send_exc:
+                # Pull the SMTP code if smtplib gave us one (sendmail
+                # raises SMTPRecipientsRefused with a dict of code/msg).
+                code = 0
+                if hasattr(send_exc, "smtp_code"):
+                    code = getattr(send_exc, "smtp_code", 0) or 0
+                elif hasattr(send_exc, "recipients"):
+                    try:
+                        first = next(iter(send_exc.recipients.values()))
+                        code = first[0] if isinstance(first, tuple) else 0
+                    except Exception:
+                        code = 0
+
+                err_str = str(send_exc)
+                etype = _classify_error(err_str, code)
+
                 with _lock:
-                    _log_bounce(lead_id, email, str(send_exc), 0, account.host, account.user)
-                    db.mark_failed(lead_id, str(send_exc)[:500])
+                    db.log_bounce(campaign_id, lead_id, email, code, etype,
+                                  err_str[:500],
+                                  mime_profile_mode if mime_profile_mode != "rotate" else "rotated",
+                                  account.host, account.user, uid)
+                    db.mark_failed(lead_id, err_str[:500])
                     failed += 1
-                err_str = str(send_exc).lower()
-                if re.search(r'suspicio|suspended|too many|limit|spam|blocked|unexpectedly closed', err_str):
+
+                if etype in SMTP_FATAL:
+                    # SMTP account is broken — kick it out of the pool
+                    # immediately, do not pick it again this campaign.
+                    pool.mark_dead(account, f"{etype}: {err_str[:200]}")
                     raise Exception(send_exc)
+                if etype in SMTP_TRANSIENT:
+                    # Transient: cooldown via the pool's escalating backoff.
+                    pool.suspend(account, etype)
+                    raise Exception(send_exc)
+                # Recipient-level failure — SMTP is fine, keep the
+                # connection and move on to the next mail.
                 return False
 
             with _lock:
@@ -1079,6 +1141,7 @@ def _run_campaign(db, cid: int):
                 sent += 1
                 if (sent + failed) % 20 == 0:
                     db.update_campaign(campaign_id, sent=sent, failed=failed)
+            pool.record_success(account)
 
             delay = worker.get_delay(email)
             if delay > 0:
@@ -1100,6 +1163,8 @@ def _run_campaign(db, cid: int):
                     server_obj = pool.connect(account)
                 except Exception as e:
                     logger.warning("Campaign %d: connect failed %s: %s", campaign_id, account.user, e)
+                    # connect-time failure is transient: cooldown via pool
+                    pool.suspend(account, "connect_failed")
                     if mail_queue.empty():
                         break
                     time.sleep(1)
@@ -1120,9 +1185,13 @@ def _run_campaign(db, cid: int):
 
                         try:
                             ok = _build_and_send(server_obj, account, lead_id, email)
-                            if not ok:
-                                break
+                            # ok=False = recipient-level failure: SMTP is
+                            # still usable, try the next mail with the
+                            # same connection. (Old behaviour broke here,
+                            # which forced a reconnect after every bounce.)
                         except Exception:
+                            # SMTP-level failure raised inside _build_and_send.
+                            # Pool was already notified via suspend/mark_dead.
                             break
 
                         time.sleep(cfg.get("normal_delay", 0.3))
