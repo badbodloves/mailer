@@ -5,12 +5,24 @@ import random
 import logging
 import threading
 from html import escape
+from urllib.parse import quote
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 logger = logging.getLogger("trans.campaigns")
 router = APIRouter()
+
+
+def _append_ref(url: str, email: str) -> str:
+    """Append ?ref=email (URL-encoded) to a redirect link. Uses & if the
+    URL already has a query string. @ . + - _ are kept literal so the
+    address remains human-readable in tracking logs."""
+    if not url or not email:
+        return url
+    sep = "&" if "?" in url else "?"
+    return f"{url}{sep}ref={quote(email, safe='@.+-_')}"
+
 
 _runners = {}
 _speed = {}
@@ -407,7 +419,10 @@ async def test_send(request: Request, cid: int):
             html = _process_vars(html, recipient)
 
             if redirect_links and "{RedirectLink}" in html:
-                html = html.replace("{RedirectLink}", redirect_links[idx % len(redirect_links)])
+                link = redirect_links[idx % len(redirect_links)]
+                if cfg.get("redirect_append_ref"):
+                    link = _append_ref(link, recipient)
+                html = html.replace("{RedirectLink}", link)
 
             inline_images = None
             if logo_files and "{Logo}" in html:
@@ -988,6 +1003,8 @@ def _run_campaign(db, cid: int):
 
                 if redirect_links and "{RedirectLink}" in html:
                     link = random.choice(redirect_links)
+                    if cfg.get("redirect_append_ref"):
+                        link = _append_ref(link, email)
                     html = html.replace("{RedirectLink}", link)
                     cur_subject = cur_subject.replace("{RedirectLink}", link)
 

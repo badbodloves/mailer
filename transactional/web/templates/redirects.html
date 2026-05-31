@@ -36,6 +36,30 @@
     </form>
 </div>
 
+<div class="card">
+    <div class="card-header"><h3>Per-Recipient Ref Parameter</h3></div>
+    <form method="post" action="/redirects/append-ref-toggle" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;margin:0">
+            <input type="checkbox" name="append_ref" value="1" style="margin:0;width:auto"
+                    {{ 'checked' if cfg.redirect_append_ref }}>
+            <span><strong>Append <code>?ref=&lt;recipient_email&gt;</code> to every {RedirectLink}</strong></span>
+        </label>
+        <button class="btn btn-primary btn-sm">Save</button>
+        <span style="font-size:11px;color:var(--fg2)">
+            {% if cfg.redirect_append_ref %}
+            <span class="badge badge-running">ON</span> — every redirect link will be rewritten at send time.
+            {% else %}
+            <span class="badge badge-draft">OFF</span> — links go out unchanged.
+            {% endif %}
+        </span>
+    </form>
+    <div class="form-help" style="margin-top:6px">
+        Example: <code>https://share.google/abc123</code> &rarr; <code>https://share.google/abc123?ref=jane@example.de</code>.
+        Uses <code>&amp;ref=</code> if the link already has a query string (e.g. google.xx format).
+        Affects both campaign sends and test mails. Macros like <code>{Name}</code> stay untouched.
+    </div>
+</div>
+
 <div class="grid-2" style="align-items:start">
     <div class="card">
         <h3>Generate Redirects (Google Share)</h3>

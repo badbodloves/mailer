@@ -380,6 +380,7 @@ class TransDB:
         "cloudinary_cloud_name": "", "cloudinary_api_key": "", "cloudinary_api_secret": "",
         "redirect_enabled": False, "redirect_target_url": "",
         "redirect_rotate_every": 10, "redirect_gen_threads": 3,
+        "redirect_append_ref": False,
         "proxy_mode": "off", "proxy_value": "", "proxy_rotate_every": 0,
         "mxtoolbox_api_key": "",
         "html_rotate_every": 0,

@@ -62,6 +62,15 @@ def _resolve_proxy(db, cfg: dict) -> str:
     return (dict(row).get("value") or "").strip()
 
 
+@router.post("/redirects/append-ref-toggle")
+async def toggle_append_ref(request: Request, append_ref: str = Form("")):
+    db = request.app.state.db
+    cfg = db.get_config()
+    cfg["redirect_append_ref"] = bool(append_ref)
+    db.save_config(cfg)
+    return RedirectResponse("/redirects", status_code=303)
+
+
 @router.post("/redirects/s3-config")
 async def save_s3_config(request: Request,
                           aws_access_key: str = Form(""),
