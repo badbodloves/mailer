@@ -392,7 +392,25 @@ def _do_buy(db, config, domain, cf_account_id, log, force: bool = False):
         except Exception as e:
             log.append(f"Availability check error: {e}, proceeding...")
 
-    log.append(f"Registering {domain}... (key: {config['api_key'][:6]}...)")
+    # Pre-flight balance check with the same key being used for register.
+    # If this reports $0 while the Dynadot dashboard shows funds, the key
+    # is bound to a different sub-account than the one we think it is.
+    try:
+        bal_data = _dynadot_call(config["api_key"], "get_account_balance")
+        bal_resp = bal_data.get("GetAccountBalanceResponse", bal_data)
+        bal_list = bal_resp.get("BalanceList", [])
+        if bal_list and isinstance(bal_list, list):
+            bal_amount = bal_list[0].get("Amount", "?")
+            bal_currency = bal_list[0].get("Currency", "?")
+        else:
+            bal_amount = bal_resp.get("AccountBalance", "?")
+            bal_currency = bal_resp.get("Currency", "?")
+        log.append(f"Pre-flight balance (same key): {bal_amount} {bal_currency}")
+        log.append(f"Pre-flight raw: {json.dumps(bal_data)[:300]}")
+    except Exception as e:
+        log.append(f"Pre-flight balance check error: {e}")
+
+    log.append(f"Registering {domain}... (key: {config['api_key'][:6]}...{config['api_key'][-4:]})")
     try:
         data = _dynadot_call(config["api_key"], "register", {
             "domain": domain, "duration": "1"
