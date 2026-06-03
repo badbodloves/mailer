@@ -399,9 +399,11 @@ def _do_buy(db, config, domain, cf_account_id, log, force: bool = False):
         })
         reg_resp = data.get("RegisterResponse", data)
         resp_code = str(reg_resp.get("ResponseCode", "-1"))
+        log.append(f"Register raw response: {json.dumps(data)[:500]}")
         if resp_code != "0":
             error_msg = reg_resp.get("Error", reg_resp.get("Status", str(reg_resp)))
             log.append(f"Registration failed: {error_msg}")
+            return
             return
         log.append("Registration successful!")
     except Exception as e:
