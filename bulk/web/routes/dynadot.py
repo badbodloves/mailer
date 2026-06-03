@@ -49,11 +49,17 @@ def _cf_headers_for(db, cf_account_id: int = 0) -> tuple:
 
 
 def _get_api_key(db, dynadot_account_id: int = 0) -> str:
-    """Get API key from specific account or legacy config."""
+    """Get API key from specific account, or the primary account,
+    or legacy config as last resort."""
     if dynadot_account_id:
         acct = db.get_dynadot_account(dynadot_account_id)
         if acct:
             return dict(acct).get("api_key", "")
+    # Fall back to primary account
+    primary = db.get_primary_dynadot_account()
+    if primary:
+        return dict(primary).get("api_key", "")
+    # Last resort: legacy config (to be retired)
     config = db.get_dynadot_config()
     return config.get("api_key", "")
 
@@ -82,6 +88,12 @@ async def add_dynadot_account(request: Request,
                                api_key: str = Form("")):
     if name.strip() and api_key.strip():
         request.app.state.db.add_dynadot_account(name.strip(), api_key.strip())
+    return RedirectResponse("/domains", status_code=303)
+
+
+@router.post("/domains/dynadot/{aid}/set-primary")
+async def set_primary_dynadot(request: Request, aid: int):
+    request.app.state.db.set_primary_dynadot_account(aid)
     return RedirectResponse("/domains", status_code=303)
 
 

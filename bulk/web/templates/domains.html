@@ -50,7 +50,7 @@
                     <select id="dynadot-account-select" name="dynadot_account_id">
                         {% if dynadot_accounts %}
                         {% for a in dynadot_accounts %}
-                        <option value="{{ a.id }}">{{ a.name }}</option>
+                        <option value="{{ a.id }}" {{ 'selected' if a.is_primary }}>{{ a.name }}{{ ' (Primary)' if a.is_primary }}</option>
                         {% endfor %}
                         {% endif %}
                         {% if config.api_key %}
@@ -144,13 +144,22 @@
             <h3 style="font-size:14px;margin-bottom:12px">Dynadot Accounts</h3>
             {% if dynadot_accounts %}
             <table style="margin-bottom:16px">
-                <thead><tr><th>Name</th><th>API Key</th><th></th></tr></thead>
+                <thead><tr><th>Name</th><th>API Key</th><th>Primary</th><th></th></tr></thead>
                 <tbody>
                 {% for a in dynadot_accounts %}
                 <tr>
                     <td style="font-weight:500">{{ a.name }}</td>
                     <td style="font-family:monospace;font-size:12px">{{ a.api_key[:8] }}...{{ a.api_key[-4:] }}</td>
                     <td>
+                        {% if a.is_primary %}
+                        <span class="badge badge-running">Primary</span>
+                        {% else %}
+                        <form method="post" action="/domains/dynadot/{{ a.id }}/set-primary" style="display:inline">
+                            <button class="btn btn-secondary btn-xs">Set Primary</button>
+                        </form>
+                        {% endif %}
+                    </td>
+                    <td style="white-space:nowrap">
                         <form method="post" action="/domains/dynadot/{{ a.id }}/delete" onsubmit="return confirm('Delete?')" style="display:inline">
                             <button class="btn btn-danger btn-xs">Delete</button>
                         </form>

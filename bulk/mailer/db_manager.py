@@ -266,8 +266,16 @@ class BulkDBManager:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 api_key TEXT DEFAULT '',
+                is_primary INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
+        else:
+            da_cols = {r[1] for r in c.execute("PRAGMA table_info(dynadot_accounts)").fetchall()}
+            if "is_primary" not in da_cols:
+                c.execute("ALTER TABLE dynadot_accounts ADD COLUMN is_primary INTEGER DEFAULT 0")
+                first = c.execute("SELECT id FROM dynadot_accounts ORDER BY id LIMIT 1").fetchone()
+                if first:
+                    c.execute("UPDATE dynadot_accounts SET is_primary=1 WHERE id=?", (first[0],))
         c.commit()
 
     # --- Users / Auth ---
@@ -805,22 +813,45 @@ class BulkDBManager:
     # --- Dynadot Accounts ---
     def add_dynadot_account(self, name: str, api_key: str) -> int:
         c = self._conn()
-        c.execute("INSERT INTO dynadot_accounts (name, api_key) VALUES (?,?)",
-                  (name, api_key))
+        # First account becomes primary automatically
+        existing = c.execute("SELECT COUNT(*) FROM dynadot_accounts").fetchone()[0]
+        is_primary = 1 if existing == 0 else 0
+        c.execute("INSERT INTO dynadot_accounts (name, api_key, is_primary) VALUES (?,?,?)",
+                  (name, api_key, is_primary))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
     def get_dynadot_accounts(self) -> list:
         return self._conn().execute(
-            "SELECT * FROM dynadot_accounts ORDER BY name").fetchall()
+            "SELECT * FROM dynadot_accounts ORDER BY is_primary DESC, name").fetchall()
 
     def get_dynadot_account(self, aid: int):
         return self._conn().execute(
             "SELECT * FROM dynadot_accounts WHERE id=?", (aid,)).fetchone()
 
+    def get_primary_dynadot_account(self):
+        row = self._conn().execute(
+            "SELECT * FROM dynadot_accounts WHERE is_primary=1 LIMIT 1").fetchone()
+        if row:
+            return row
+        return self._conn().execute(
+            "SELECT * FROM dynadot_accounts ORDER BY id LIMIT 1").fetchone()
+
+    def set_primary_dynadot_account(self, aid: int):
+        c = self._conn()
+        c.execute("UPDATE dynadot_accounts SET is_primary=0")
+        c.execute("UPDATE dynadot_accounts SET is_primary=1 WHERE id=?", (aid,))
+        c.commit()
+
     def delete_dynadot_account(self, aid: int):
         c = self._conn()
+        was_primary = c.execute(
+            "SELECT is_primary FROM dynadot_accounts WHERE id=?", (aid,)).fetchone()
         c.execute("DELETE FROM dynadot_accounts WHERE id=?", (aid,))
+        if was_primary and was_primary[0]:
+            first = c.execute("SELECT id FROM dynadot_accounts ORDER BY id LIMIT 1").fetchone()
+            if first:
+                c.execute("UPDATE dynadot_accounts SET is_primary=1 WHERE id=?", (first[0],))
         c.commit()
 
     def get_dynadot_config(self) -> dict:
