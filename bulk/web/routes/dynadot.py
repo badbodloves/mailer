@@ -64,6 +64,31 @@ def _get_api_key(db, dynadot_account_id: int = 0) -> str:
     return config.get("api_key", "")
 
 
+def _account_config(db, dynadot_account_id: int = 0) -> dict:
+    """Resolve the effective Dynadot account configuration: API key plus
+    per-account flags (send_currency, secret). Falls back to the primary
+    account when no specific id was passed."""
+    row = None
+    if dynadot_account_id:
+        row = db.get_dynadot_account(dynadot_account_id)
+    if row is None:
+        row = db.get_primary_dynadot_account()
+    if row is not None:
+        r = dict(row)
+        return {
+            "api_key": r.get("api_key", ""),
+            "secret": r.get("secret", "") or "",
+            "send_currency": bool(r.get("send_currency", 0)),
+        }
+    # Legacy fallback
+    legacy = db.get_dynadot_config()
+    return {
+        "api_key": legacy.get("api_key", ""),
+        "secret": legacy.get("secret", "") or "",
+        "send_currency": False,
+    }
+
+
 @router.get("/domains", response_class=HTMLResponse)
 async def domains_page(request: Request):
     db = request.app.state.db
@@ -345,17 +370,7 @@ async def buy_domain(request: Request, domain: str = Form(""),
         return HTMLResponse('<div class="alert alert-warning">Purchase already in progress. Wait for it to finish.</div>')
 
     domain = domain.strip().lower()
-    # Look up the account's optional send_currency toggle
-    send_currency = False
-    if dynadot_account_id:
-        acct_row = db.get_dynadot_account(dynadot_account_id)
-        if acct_row:
-            send_currency = bool(dict(acct_row).get("send_currency", 0))
-    else:
-        primary = db.get_primary_dynadot_account()
-        if primary:
-            send_currency = bool(dict(primary).get("send_currency", 0))
-    config = {"api_key": api_key, "send_currency": send_currency}
+    config = _account_config(db, dynadot_account_id)
     force_buy = bool(force)
     _buy_progress.update(running=True, log=[], domain=domain, done=False)
 
@@ -535,8 +550,8 @@ async def buy_bulk(request: Request, domains: str = Form("[]"),
                    dynadot_account_id: int = Form(0)):
     """Buy multiple domains sequentially with live progress."""
     db = request.app.state.db
-    api_key = _get_api_key(db, dynadot_account_id)
-    if not api_key:
+    config = _account_config(db, dynadot_account_id)
+    if not config["api_key"]:
         return HTMLResponse('<div class="alert alert-danger">No API key.</div>')
 
     try:
@@ -549,8 +564,6 @@ async def buy_bulk(request: Request, domains: str = Form("[]"),
 
     if _buy_progress["running"]:
         return HTMLResponse('<div class="alert alert-warning">Purchase already in progress.</div>')
-
-    config = {"api_key": api_key}
     _buy_progress.update(running=True, log=[], domain=f"{len(domain_list)} domains", done=False)
 
     def worker():
