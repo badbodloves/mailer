@@ -266,6 +266,8 @@ class BulkDBManager:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 api_key TEXT DEFAULT '',
+                secret TEXT DEFAULT '',
+                send_currency INTEGER DEFAULT 0,
                 is_primary INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
@@ -276,6 +278,10 @@ class BulkDBManager:
                 first = c.execute("SELECT id FROM dynadot_accounts ORDER BY id LIMIT 1").fetchone()
                 if first:
                     c.execute("UPDATE dynadot_accounts SET is_primary=1 WHERE id=?", (first[0],))
+            if "secret" not in da_cols:
+                c.execute("ALTER TABLE dynadot_accounts ADD COLUMN secret TEXT DEFAULT ''")
+            if "send_currency" not in da_cols:
+                c.execute("ALTER TABLE dynadot_accounts ADD COLUMN send_currency INTEGER DEFAULT 0")
         c.commit()
 
     # --- Users / Auth ---
@@ -811,15 +817,25 @@ class BulkDBManager:
 
     # --- Dynadot ---
     # --- Dynadot Accounts ---
-    def add_dynadot_account(self, name: str, api_key: str) -> int:
+    def add_dynadot_account(self, name: str, api_key: str,
+                            secret: str = "", send_currency: int = 0) -> int:
         c = self._conn()
         # First account becomes primary automatically
         existing = c.execute("SELECT COUNT(*) FROM dynadot_accounts").fetchone()[0]
         is_primary = 1 if existing == 0 else 0
-        c.execute("INSERT INTO dynadot_accounts (name, api_key, is_primary) VALUES (?,?,?)",
-                  (name, api_key, is_primary))
+        c.execute("INSERT INTO dynadot_accounts (name, api_key, secret, send_currency, is_primary) VALUES (?,?,?,?,?)",
+                  (name, api_key, secret, send_currency, is_primary))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def update_dynadot_account(self, aid: int, **fields):
+        if not fields:
+            return
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in fields)
+        c.execute(f"UPDATE dynadot_accounts SET {sets} WHERE id=?",
+                  list(fields.values()) + [aid])
+        c.commit()
 
     def get_dynadot_accounts(self) -> list:
         return self._conn().execute(

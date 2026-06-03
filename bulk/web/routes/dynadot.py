@@ -85,9 +85,27 @@ async def domains_page(request: Request):
 @router.post("/domains/add-dynadot-account")
 async def add_dynadot_account(request: Request,
                                name: str = Form(""),
-                               api_key: str = Form("")):
+                               api_key: str = Form(""),
+                               secret: str = Form(""),
+                               send_currency: str = Form("")):
     if name.strip() and api_key.strip():
-        request.app.state.db.add_dynadot_account(name.strip(), api_key.strip())
+        request.app.state.db.add_dynadot_account(
+            name.strip(), api_key.strip(),
+            secret=secret.strip(),
+            send_currency=1 if send_currency else 0,
+        )
+    return RedirectResponse("/domains", status_code=303)
+
+
+@router.post("/domains/dynadot/{aid}/update")
+async def update_dynadot_account(request: Request, aid: int,
+                                  secret: str = Form(""),
+                                  send_currency: str = Form("")):
+    request.app.state.db.update_dynadot_account(
+        aid,
+        secret=secret.strip(),
+        send_currency=1 if send_currency else 0,
+    )
     return RedirectResponse("/domains", status_code=303)
 
 
@@ -327,7 +345,17 @@ async def buy_domain(request: Request, domain: str = Form(""),
         return HTMLResponse('<div class="alert alert-warning">Purchase already in progress. Wait for it to finish.</div>')
 
     domain = domain.strip().lower()
-    config = {"api_key": api_key}
+    # Look up the account's optional send_currency toggle
+    send_currency = False
+    if dynadot_account_id:
+        acct_row = db.get_dynadot_account(dynadot_account_id)
+        if acct_row:
+            send_currency = bool(dict(acct_row).get("send_currency", 0))
+    else:
+        primary = db.get_primary_dynadot_account()
+        if primary:
+            send_currency = bool(dict(primary).get("send_currency", 0))
+    config = {"api_key": api_key, "send_currency": send_currency}
     force_buy = bool(force)
     _buy_progress.update(running=True, log=[], domain=domain, done=False)
 
@@ -410,11 +438,13 @@ def _do_buy(db, config, domain, cf_account_id, log, force: bool = False):
     except Exception as e:
         log.append(f"Pre-flight balance check error: {e}")
 
+    register_params = {"domain": domain, "duration": "1"}
+    if config.get("send_currency"):
+        register_params["currency"] = "USD"
+        log.append(f"Sending currency=USD with register (workaround toggle).")
     log.append(f"Registering {domain}... (key: {config['api_key'][:6]}...{config['api_key'][-4:]})")
     try:
-        data = _dynadot_call(config["api_key"], "register", {
-            "domain": domain, "duration": "1"
-        })
+        data = _dynadot_call(config["api_key"], "register", register_params)
         reg_resp = data.get("RegisterResponse", data)
         resp_code = str(reg_resp.get("ResponseCode", "-1"))
         log.append(f"Register raw response: {json.dumps(data)[:500]}")

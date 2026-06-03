@@ -144,12 +144,18 @@
             <h3 style="font-size:14px;margin-bottom:12px">Dynadot Accounts</h3>
             {% if dynadot_accounts %}
             <table style="margin-bottom:16px">
-                <thead><tr><th>Name</th><th>API Key</th><th>Primary</th><th></th></tr></thead>
+                <thead><tr><th>Name</th><th>API Key</th><th>Secret</th><th>USD</th><th>Primary</th><th></th></tr></thead>
                 <tbody>
                 {% for a in dynadot_accounts %}
                 <tr>
                     <td style="font-weight:500">{{ a.name }}</td>
                     <td style="font-family:monospace;font-size:12px">{{ a.api_key[:8] }}...{{ a.api_key[-4:] }}</td>
+                    <td style="font-family:monospace;font-size:11px">
+                        {% if a.secret %}{{ a.secret[:6] }}...{{ a.secret[-4:] }}{% else %}—{% endif %}
+                    </td>
+                    <td>
+                        {% if a.send_currency %}<span class="badge badge-running">USD</span>{% else %}—{% endif %}
+                    </td>
                     <td>
                         {% if a.is_primary %}
                         <span class="badge badge-running">Primary</span>
@@ -160,6 +166,18 @@
                         {% endif %}
                     </td>
                     <td style="white-space:nowrap">
+                        <details style="display:inline-block;vertical-align:middle">
+                            <summary class="btn btn-secondary btn-xs" style="display:inline-block">Edit</summary>
+                            <form method="post" action="/domains/dynadot/{{ a.id }}/update" style="margin-top:6px;padding:8px;border:1px solid var(--border-light);border-radius:var(--radius);min-width:280px">
+                                <label style="font-size:11px">Secret</label>
+                                <input name="secret" type="password" value="{{ a.secret or '' }}" placeholder="(optional)" style="margin-bottom:6px">
+                                <label style="display:flex;align-items:center;gap:4px;font-weight:400;cursor:pointer;margin-bottom:6px">
+                                    <input type="checkbox" name="send_currency" value="1" {{ 'checked' if a.send_currency }} style="margin:0;width:auto">
+                                    <span style="font-size:11px">Send <code>currency=USD</code> with register (workaround)</span>
+                                </label>
+                                <button class="btn btn-primary btn-xs">Save</button>
+                            </form>
+                        </details>
                         <form method="post" action="/domains/dynadot/{{ a.id }}/delete" onsubmit="return confirm('Delete?')" style="display:inline">
                             <button class="btn btn-danger btn-xs">Delete</button>
                         </form>
@@ -181,6 +199,14 @@
                         <input name="api_key" type="password" placeholder="Dynadot API key" required>
                     </div>
                 </div>
+                <div style="margin-top:8px">
+                    <label>API Secret (optional)</label>
+                    <input name="secret" type="password" placeholder="Only if your Dynadot account exposes a separate secret">
+                </div>
+                <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;margin-top:8px">
+                    <input type="checkbox" name="send_currency" value="1" style="margin:0;width:auto">
+                    <span style="font-size:12px">Send <code>currency=USD</code> with register (workaround for <code>insufficient_funds</code> on accounts where balance shows but register refuses)</span>
+                </label>
                 <div style="margin-top:10px">
                     <button class="btn btn-primary btn-sm">Add Account</button>
                 </div>
