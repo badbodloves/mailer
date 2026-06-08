@@ -62,6 +62,17 @@ def _resolve_proxy(db, cfg: dict) -> str:
     return (dict(row).get("value") or "").strip()
 
 
+def _parse_s3_url(url: str) -> tuple:
+    """Pull (region, bucket, key) out of a path-style S3 URL.
+    Returns (None, None, None) when the URL doesn't look like one we
+    generated."""
+    import re
+    m = re.match(r"^https://s3\.([a-z0-9-]+)\.amazonaws\.com/([a-z0-9.-]+)/(.+)$", url)
+    if not m:
+        return None, None, None
+    return m.group(1), m.group(2), m.group(3)
+
+
 @router.post("/redirects/append-ref-toggle")
 async def toggle_append_ref(request: Request, append_ref: str = Form("")):
     db = request.app.state.db
@@ -247,7 +258,8 @@ async def generate_s3_redirects(request: Request,
                                  tag: str = Form(""),
                                  region: str = Form("random"),
                                  pool_id: int = Form(0),
-                                 bot_filter: str = Form("")):
+                                 bot_filter: str = Form(""),
+                                 unique_bucket: str = Form("")):
     target = target_url.strip()
     if not target:
         return HTMLResponse('<div class="alert alert-warning">Enter a target URL.</div>')
@@ -279,40 +291,58 @@ async def generate_s3_redirects(request: Request,
     gen_uid = request.state.user["id"]
 
     use_bot_filter = bool(bot_filter)
+    per_link_bucket = bool(unique_bucket)
     _s3_progress.update(running=True, total=count, done=0, ok=0, errors=0,
                          bucket="", stage="creating bucket", region=region)
 
     def worker():
         try:
-            from mailer.s3_redirect import generate_links, _new_bucket_name, make_s3_client, create_public_bucket
-
-            bucket = _new_bucket_name(bucket_prefix, tag)
-            _s3_progress["bucket"] = bucket
-            s3 = make_s3_client(access_key, secret_key, region, proxy=proxy)
-
-            for attempt in range(3):
-                try:
-                    create_public_bucket(s3, bucket, region)
-                    break
-                except s3.exceptions.BucketAlreadyOwnedByYou:
-                    break
-                except s3.exceptions.BucketAlreadyExists:
-                    bucket = _new_bucket_name(bucket_prefix, tag)
-                    _s3_progress["bucket"] = bucket
-                except Exception as e:
-                    if attempt == 2:
-                        raise
-                    logger.warning("Bucket creation retry %d: %s", attempt + 1, e)
-                    bucket = _new_bucket_name(bucket_prefix, tag)
-                    _s3_progress["bucket"] = bucket
-
-            _s3_progress["stage"] = "uploading"
-
+            from mailer.s3_redirect import _new_bucket_name, make_s3_client, create_public_bucket
             from mailer.s3_redirect import _redirect_html, _random_suffix
+
+            s3 = make_s3_client(access_key, secret_key, region, proxy=proxy)
             body = _redirect_html(target, bot_filter=use_bot_filter).encode("utf-8")
+
+            def _spawn_bucket():
+                """Create one fresh bucket, return its name (retries on collision)."""
+                b = _new_bucket_name(bucket_prefix, tag)
+                for attempt in range(3):
+                    try:
+                        create_public_bucket(s3, b, region)
+                        return b
+                    except s3.exceptions.BucketAlreadyOwnedByYou:
+                        return b
+                    except s3.exceptions.BucketAlreadyExists:
+                        b = _new_bucket_name(bucket_prefix, tag)
+                    except Exception as e:
+                        if attempt == 2:
+                            raise
+                        logger.warning("Bucket creation retry %d: %s", attempt + 1, e)
+                        b = _new_bucket_name(bucket_prefix, tag)
+                return b
+
+            shared_bucket = None
+            if not per_link_bucket:
+                shared_bucket = _spawn_bucket()
+                _s3_progress["bucket"] = shared_bucket
+
+            _s3_progress["stage"] = "uploading" if not per_link_bucket else "creating buckets + uploading"
+
             ok = 0
             errors = 0
             for i in range(count):
+                if per_link_bucket:
+                    try:
+                        bucket = _spawn_bucket()
+                    except Exception as e:
+                        errors += 1
+                        logger.warning("Per-link bucket %d failed: %s", i + 1, e)
+                        _s3_progress["done"] = i + 1
+                        _s3_progress["errors"] = errors
+                        continue
+                    _s3_progress["bucket"] = bucket
+                else:
+                    bucket = shared_bucket
                 key = _random_suffix(10)
                 try:
                     s3.put_object(
@@ -377,6 +407,123 @@ async def s3_gen_status(request: Request):
             f'{bucket_html}'
             f'<div class="alert alert-success">Done! {p["ok"]} S3 redirect links generated. '
             f'<a href="/redirects" style="color:var(--accent)">Reload page</a></div>'
+        )
+    return HTMLResponse("")
+
+
+def _re_upload_redirect(db, cfg, link_row: dict, new_target: str,
+                         bot_filter: bool) -> tuple:
+    """Re-PUT the HTML for one stored redirect link with a new destination.
+    Returns (ok: bool, error_msg: str)."""
+    from mailer.s3_redirect import make_s3_client, _redirect_html
+    region, bucket, key = _parse_s3_url(link_row.get("short_url", ""))
+    if not bucket or not key or not region:
+        return False, "URL not parseable as S3"
+    access = cfg.get("aws_access_key", "").strip()
+    secret = cfg.get("aws_secret_key", "").strip()
+    if not access or not secret:
+        return False, "AWS credentials missing"
+    proxy = _resolve_proxy(db, cfg)
+    s3 = make_s3_client(access, secret, region, proxy=proxy)
+    body = _redirect_html(new_target, bot_filter=bot_filter).encode("utf-8")
+    try:
+        s3.put_object(Bucket=bucket, Key=key, Body=body,
+                      ContentType="text/html; charset=utf-8",
+                      CacheControl="no-cache")
+        return True, ""
+    except Exception as e:
+        return False, str(e)[:200]
+
+
+@router.post("/redirects/{rid}/update-target", response_class=HTMLResponse)
+async def update_link_target(request: Request, rid: int,
+                              new_target: str = Form(""),
+                              bot_filter: str = Form("")):
+    new_target = new_target.strip()
+    if not new_target:
+        return HTMLResponse('<span style="color:var(--red)">Empty target</span>')
+    if not (new_target.startswith("http://") or new_target.startswith("https://")):
+        return HTMLResponse('<span style="color:var(--red)">Target must start with http:// or https://</span>')
+    db = request.app.state.db
+    row = db._conn().execute("SELECT * FROM trans_redirect_links WHERE id=?", (rid,)).fetchone()
+    if not row:
+        return HTMLResponse('<span style="color:var(--red)">Not found</span>')
+    cfg = db.get_config()
+    ok, err = _re_upload_redirect(db, cfg, dict(row), new_target, bool(bot_filter))
+    if not ok:
+        return HTMLResponse(f'<span style="color:var(--red)">Failed: {escape(err)}</span>')
+    db._conn().execute("UPDATE trans_redirect_links SET target_url=? WHERE id=?",
+                        (new_target, rid))
+    db._conn().commit()
+    return HTMLResponse(f'<span class="badge badge-running">Updated</span>')
+
+
+_pool_update_progress = {"running": False, "total": 0, "done": 0,
+                          "ok": 0, "errors": 0, "pool_id": 0}
+
+
+@router.post("/redirects/pool/{pid}/update-targets", response_class=HTMLResponse)
+async def update_pool_targets(request: Request, pid: int,
+                               new_target: str = Form(""),
+                               bot_filter: str = Form("")):
+    new_target = new_target.strip()
+    if not new_target:
+        return HTMLResponse('<div class="alert alert-warning">Empty target.</div>')
+    if not (new_target.startswith("http://") or new_target.startswith("https://")):
+        return HTMLResponse('<div class="alert alert-warning">Target must start with http:// or https://</div>')
+    if _pool_update_progress["running"]:
+        return HTMLResponse('<div class="alert alert-warning">Pool update already running.</div>')
+
+    db = request.app.state.db
+    cfg = db.get_config()
+    use_bot_filter = bool(bot_filter)
+    rows = [dict(r) for r in db.get_redirects_by_pool(pid)]
+    if not rows:
+        return HTMLResponse('<div class="alert alert-warning">Pool is empty.</div>')
+
+    _pool_update_progress.update(running=True, total=len(rows), done=0,
+                                  ok=0, errors=0, pool_id=pid)
+
+    def worker():
+        try:
+            for r in rows:
+                ok, err = _re_upload_redirect(db, cfg, r, new_target, use_bot_filter)
+                if ok:
+                    db._conn().execute("UPDATE trans_redirect_links SET target_url=? WHERE id=?",
+                                        (new_target, r["id"]))
+                    db._conn().commit()
+                    _pool_update_progress["ok"] += 1
+                else:
+                    _pool_update_progress["errors"] += 1
+                    logger.warning("Pool target update failed for %d: %s", r["id"], err)
+                _pool_update_progress["done"] += 1
+        finally:
+            _pool_update_progress["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    return HTMLResponse(
+        f'<div class="alert alert-info">Updating {len(rows)} links in pool to {escape(new_target)}…</div>'
+        f'<div hx-get="/redirects/pool/{pid}/update-status" hx-trigger="every 2s" hx-swap="outerHTML"></div>'
+    )
+
+
+@router.get("/redirects/pool/{pid}/update-status", response_class=HTMLResponse)
+async def pool_update_status(request: Request, pid: int):
+    p = _pool_update_progress
+    if p["pool_id"] != pid:
+        return HTMLResponse("")
+    if p["running"]:
+        pct = int(p["done"] / p["total"] * 100) if p["total"] else 0
+        return HTMLResponse(
+            f'<div hx-get="/redirects/pool/{pid}/update-status" hx-trigger="every 2s" hx-swap="outerHTML">'
+            f'<div class="progress" style="margin-bottom:6px">'
+            f'<div class="progress-bar" style="width:{pct}%">{p["done"]}/{p["total"]}</div></div>'
+            f'<p style="font-size:12px;color:var(--fg2)">Re-uploading objects…</p></div>'
+        )
+    if p["ok"] > 0 or p["errors"] > 0:
+        return HTMLResponse(
+            f'<div class="alert alert-success">Done. {p["ok"]} updated, {p["errors"]} errors. '
+            f'<a href="/redirects" style="color:var(--accent)">Reload</a></div>'
         )
     return HTMLResponse("")
 

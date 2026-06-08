@@ -17,6 +17,22 @@
             <td style="white-space:nowrap">
                 {% if p.count > 0 %}
                 <a href="/redirects/pool/{{ p.id }}/export" class="btn btn-secondary btn-xs">Export .txt</a>
+                <details style="display:inline-block;vertical-align:middle">
+                    <summary class="btn btn-secondary btn-xs" style="display:inline-block">Update Targets</summary>
+                    <form hx-post="/redirects/pool/{{ p.id }}/update-targets"
+                          hx-target="#pool-update-{{ p.id }}"
+                          hx-swap="innerHTML"
+                          style="margin-top:6px;padding:8px;border:1px solid var(--border-light);border-radius:var(--radius);min-width:320px">
+                        <label style="font-size:11px">New Target URL (applies to all {{ p.count }} links)</label>
+                        <input name="new_target" placeholder="https://newdest.example.com">
+                        <label style="display:flex;align-items:center;gap:4px;margin-top:4px;font-weight:400;cursor:pointer">
+                            <input type="checkbox" name="bot_filter" value="1" checked style="margin:0;width:auto">
+                            <span style="font-size:11px">Use bot filter</span>
+                        </label>
+                        <button class="btn btn-primary btn-xs" style="margin-top:6px">Re-upload All</button>
+                        <div id="pool-update-{{ p.id }}" style="margin-top:6px"></div>
+                    </form>
+                </details>
                 {% endif %}
                 <form method="post" action="/redirects/pool/{{ p.id }}/delete" onsubmit="return confirm('Delete pool + all links?')" style="display:inline">
                     <button class="btn btn-danger btn-xs">Delete</button>
@@ -118,7 +134,12 @@
             <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-weight:400;cursor:pointer">
                 <input type="checkbox" name="bot_filter" value="1" checked style="margin:0;width:auto">
                 <span>Bot Filter</span>
-                <span style="font-size:11px;color:var(--fg2)">JS-based anti-bot gate (headless detection, canvas probe, timing check). Destination URL is XOR-obfuscated.</span>
+                <span style="font-size:11px;color:var(--fg2)">JS anti-bot gate. Destination is XOR-obfuscated either way.</span>
+            </label>
+            <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-weight:400;cursor:pointer">
+                <input type="checkbox" name="unique_bucket" value="1" style="margin:0;width:auto">
+                <span>Unique bucket per link</span>
+                <span style="font-size:11px;color:var(--red)">&#9888; AWS default = 100 buckets/account. Slower (1-2s/bucket). Raise the limit via AWS Support before going past ~80.</span>
             </label>
             <div class="form-help" style="margin-top:6px">
                 URLs are extension-less path-style: <code>https://s3.{region}.amazonaws.com/{bucket}/{key}</code>.
@@ -212,20 +233,39 @@
     </div>
     {% if redirects %}
     <table>
-        <thead><tr><th>Short URL</th><th>Pool</th><th>Created</th><th></th></tr></thead>
+        <thead><tr><th>Short URL</th><th>Target</th><th>Pool</th><th>Created</th><th></th></tr></thead>
         <tbody>
         {% for r in redirects[:100] %}
         <tr>
             <td style="font-family:monospace;font-size:12px"><a href="{{ r.short_url }}" target="_blank" style="color:var(--accent)">{{ r.short_url }}</a></td>
+            <td style="font-size:11px;color:var(--fg2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ r.target_url or '' }}">{{ r.target_url or '—' }}</td>
             <td style="font-size:12px;color:var(--fg2)">
                 {% if r.pool_id %}{% for p in redirect_pools %}{% if p.id == r.pool_id %}{{ p.name }}{% endif %}{% endfor %}{% else %}—{% endif %}
             </td>
             <td style="font-size:11px;color:var(--fg2)">{{ r.created_at }}</td>
-            <td><form method="post" action="/redirects/{{ r.id }}/delete"><button class="btn btn-danger btn-xs">Del</button></form></td>
+            <td style="white-space:nowrap">
+                <details style="display:inline-block;vertical-align:middle">
+                    <summary class="btn btn-secondary btn-xs" style="display:inline-block">Edit Target</summary>
+                    <form hx-post="/redirects/{{ r.id }}/update-target"
+                          hx-target="#update-result-{{ r.id }}"
+                          hx-swap="innerHTML"
+                          style="margin-top:6px;padding:8px;border:1px solid var(--border-light);border-radius:var(--radius);min-width:300px">
+                        <label style="font-size:11px">New Target URL</label>
+                        <input name="new_target" value="{{ r.target_url or '' }}" placeholder="https://...">
+                        <label style="display:flex;align-items:center;gap:4px;margin-top:4px;font-weight:400;cursor:pointer">
+                            <input type="checkbox" name="bot_filter" value="1" checked style="margin:0;width:auto">
+                            <span style="font-size:11px">Use bot filter</span>
+                        </label>
+                        <button class="btn btn-primary btn-xs" style="margin-top:6px">Re-upload to S3</button>
+                        <span id="update-result-{{ r.id }}" style="margin-left:6px;font-size:11px"></span>
+                    </form>
+                </details>
+                <form method="post" action="/redirects/{{ r.id }}/delete" style="display:inline"><button class="btn btn-danger btn-xs">Del</button></form>
+            </td>
         </tr>
         {% endfor %}
         {% if redirects|length > 100 %}
-        <tr><td colspan="4" style="text-align:center;color:var(--fg2);font-size:12px">Showing first 100 of {{ redirect_count }}</td></tr>
+        <tr><td colspan="5" style="text-align:center;color:var(--fg2);font-size:12px">Showing first 100 of {{ redirect_count }}</td></tr>
         {% endif %}
         </tbody>
     </table>
