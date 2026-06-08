@@ -255,6 +255,8 @@ class BulkDBManager:
         existing = {r[1] for r in c.execute("PRAGMA table_info(smtp_presets)").fetchall()}
         if "proxy_required" not in existing:
             c.execute("ALTER TABLE smtp_presets ADD COLUMN proxy_required INTEGER DEFAULT 0")
+        if "threads_per_smtp" not in existing:
+            c.execute("ALTER TABLE smtp_presets ADD COLUMN threads_per_smtp INTEGER DEFAULT 1")
         existing = {r[1] for r in c.execute("PRAGMA table_info(domains)").fetchall()}
         if "unsub_domain" not in existing:
             c.execute("ALTER TABLE domains ADD COLUMN unsub_domain TEXT DEFAULT ''")

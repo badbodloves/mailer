@@ -19,9 +19,15 @@ async def add_smtp(request: Request, name: str = Form(""), host: str = Form(""),
                     port: int = Form(587), username: str = Form(""),
                     password: str = Form(""), provider_type: str = Form("generic"),
                     daily_limit: int = Form(0), proxy: str = Form(""),
-                    proxy_required: int = Form(0)):
+                    proxy_required: int = Form(0),
+                    threads_per_smtp: int = Form(1)):
     request.app.state.db.add_smtp(name, host, port, username, password,
                                    provider_type, daily_limit, proxy, proxy_required)
+    lid = request.app.state.db._conn().execute("SELECT last_insert_rowid()").fetchone()[0]
+    request.app.state.db._conn().execute(
+        "UPDATE smtp_presets SET threads_per_smtp=? WHERE id=?",
+        (max(1, min(threads_per_smtp, 50)), lid))
+    request.app.state.db._conn().commit()
     return RedirectResponse("/smtp", status_code=303)
 
 
@@ -31,19 +37,21 @@ async def save_smtp(request: Request, sid: int,
                     port: int = Form(587), username: str = Form(""),
                     password: str = Form(""), provider_type: str = Form("generic"),
                     daily_limit: int = Form(0), proxy: str = Form(""),
-                    proxy_required: int = Form(0)):
+                    proxy_required: int = Form(0),
+                    threads_per_smtp: int = Form(1)):
     db = request.app.state.db
     c = db._conn()
+    tps = max(1, min(threads_per_smtp, 50))
     if password.strip():
         c.execute("UPDATE smtp_presets SET name=?,host=?,port=?,username=?,password=?,"
-                  "provider_type=?,daily_limit=?,proxy=?,proxy_required=? WHERE id=?",
+                  "provider_type=?,daily_limit=?,proxy=?,proxy_required=?,threads_per_smtp=? WHERE id=?",
                   (name, host, port, username, password, provider_type,
-                   daily_limit, proxy, proxy_required, sid))
+                   daily_limit, proxy, proxy_required, tps, sid))
     else:
         c.execute("UPDATE smtp_presets SET name=?,host=?,port=?,username=?,"
-                  "provider_type=?,daily_limit=?,proxy=?,proxy_required=? WHERE id=?",
+                  "provider_type=?,daily_limit=?,proxy=?,proxy_required=?,threads_per_smtp=? WHERE id=?",
                   (name, host, port, username, provider_type,
-                   daily_limit, proxy, proxy_required, sid))
+                   daily_limit, proxy, proxy_required, tps, sid))
     c.commit()
     return RedirectResponse("/smtp", status_code=303)
 

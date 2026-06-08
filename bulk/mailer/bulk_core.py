@@ -151,6 +151,148 @@ class BulkMailerCore:
         failed = 0
         excluded = 0
 
+        threads_per_smtp = max(1, min(smtp_row.get("threads_per_smtp", 1) or 1, 50))
+        logger.info("Mailing %d: threads_per_smtp=%d", self._mailing_id, threads_per_smtp)
+
+        import queue
+        mail_queue = queue.Queue()
+
+        def _send_one(lead_id, email):
+            """Build + send one mail. Returns ('sent'|'failed'|'transient')."""
+            nonlocal sent, failed
+
+            with self._lock:
+                idx = self._send_count
+
+            remaining = self._db.get_smtp_remaining(smtp_row["id"])
+            if remaining <= 0:
+                self._shutdown.set()
+                return "transient"
+
+            limiter.wait()
+
+            cur_from_name = domain_row["from_name"] or "Newsletter"
+            if sender_list:
+                cur_from_name = engine.get_rotated_value(sender_list, idx, sender_rotate)
+
+            cur_subject = subject_macro
+            cur_subject = engine.process(cur_subject, email)
+
+            html_template = ""
+            if html_contents:
+                html_idx = engine.get_rotated_value(
+                    list(range(len(html_contents))), idx, html_rotate) if html_rotate else 0
+                html_template = html_contents[int(html_idx)] if isinstance(html_idx, (int, float)) else html_contents[0]
+            else:
+                html_template = "<p>Hello {email_user}</p>"
+
+            html_body = engine.process(html_template, email)
+            plain_body = engine.html_to_plaintext(html_body)
+
+            unsub_token = f"{lead_id}-{self._mailing_id}"
+            unsub_domain = domain_row.get("unsub_domain") or f"unsub.{domain}"
+            unsub_url = f"https://{unsub_domain}/u/{unsub_token}"
+            unsub_mailto = f"unsub-{unsub_token}@{domain}"
+
+            feedback_id = f"{feedback_base}:{domain.replace('.', '-')[:15]}"
+
+            attachment = None
+            if pdf_bytes:
+                if pdf_macro_on:
+                    mod_pdf = fill_pdf_macro(pdf_bytes)
+                    attachment = (os.path.basename(pdf_path), mod_pdf)
+                else:
+                    attachment = (os.path.basename(pdf_path), pdf_bytes)
+
+            try:
+                effective_reply = reply_to if reply_to and reply_to != from_email else ""
+                raw_msg, envelope_from, verp_tag = BulkMIMEBuilder.build_email(
+                    from_name=engine.process(cur_from_name, email),
+                    from_email=from_email,
+                    reply_to_name="",
+                    reply_to_email=effective_reply,
+                    to_email=email,
+                    subject=cur_subject,
+                    html_body=html_body,
+                    plain_body=plain_body,
+                    list_id_token=list_id_label,
+                    list_id_name=list_id_label.split(".")[0].title() if list_id_label else "",
+                    unsubscribe_url=unsub_url,
+                    unsubscribe_mailto=unsub_mailto,
+                    feedback_id=feedback_id,
+                    bounce_domain=bounce_domain,
+                    recipient_id=str(lead_id),
+                    attachment=attachment,
+                    provider_type=provider,
+                )
+
+                date_line = f"Date: {formatdate(localtime=True, usegmt=False)}\r\n"
+                raw_msg = date_line + raw_msg
+
+                success, error, code = smtp.send(envelope_from, email, raw_msg)
+
+                if success:
+                    self._db.mark_sent(lead_id)
+                    self._db.increment_smtp_sent(smtp_row["id"])
+                    with self._lock:
+                        sent += 1
+                    logger.info("Mailing %d: sent %d to %s", self._mailing_id, sent, email)
+                    if test_interval > 0 and test_email and sent % test_interval == 0:
+                        try:
+                            test_raw, test_env, _ = BulkMIMEBuilder.build_email(
+                                from_name=engine.process(cur_from_name, test_email),
+                                from_email=from_email,
+                                reply_to_name="", reply_to_email=effective_reply,
+                                to_email=test_email, subject=f"[TEST #{sent}] {cur_subject}",
+                                html_body=html_body, plain_body=plain_body,
+                                list_id_token=list_id_label,
+                                unsubscribe_url=unsub_url, unsubscribe_mailto=unsub_mailto,
+                                feedback_id=feedback_id,
+                                bounce_domain=bounce_domain,
+                                recipient_id="test",
+                                provider_type=provider,
+                            )
+                            test_raw = f"Date: {formatdate(localtime=True, usegmt=False)}\r\n" + test_raw
+                            smtp.send(test_env, test_email, test_raw)
+                        except Exception as te:
+                            logger.error("Test mail failed: %s", te)
+                    return "sent"
+                elif error.startswith("FATAL:"):
+                    self._db.mark_failed(lead_id, error)
+                    with self._lock:
+                        failed += 1
+                    logger.error("Mailing %d: FATAL for %s: %s", self._mailing_id, email, error)
+                    return "failed"
+                else:
+                    self._db._conn().execute(
+                        "UPDATE leads SET state='PENDING' WHERE id=?", (lead_id,))
+                    self._db._conn().commit()
+                    with self._lock:
+                        failed += 1
+                    logger.warning("Mailing %d: transient for %s: %s", self._mailing_id, email, error)
+                    return "transient"
+
+            except Exception as exc:
+                self._db.mark_failed(lead_id, str(exc)[:500])
+                with self._lock:
+                    failed += 1
+                logger.error("Send error: %s", exc)
+                return "failed"
+
+        def _worker_thread():
+            while not self._shutdown.is_set():
+                try:
+                    lead_id, email = mail_queue.get(timeout=2)
+                except queue.Empty:
+                    break
+                try:
+                    _send_one(lead_id, email)
+                except Exception:
+                    pass
+                with self._lock:
+                    self._send_count += 1
+                self._db.update_mailing_counts(self._mailing_id, sent, failed, excluded)
+
         while not self._shutdown.is_set():
             batch = self._db.fetch_pending(list_id_db, exclude_domains, self.BATCH_SIZE)
             logger.info("Mailing %d: fetched batch of %d leads", self._mailing_id, len(batch))
@@ -161,127 +303,18 @@ class BulkMailerCore:
             lead_ids = [r[0] for r in batch]
             self._db.mark_in_progress(lead_ids)
 
-            for lead_id, email in batch:
-                if self._shutdown.is_set():
-                    break
+            for item in batch:
+                mail_queue.put(item)
 
-                remaining = self._db.get_smtp_remaining(smtp_row["id"])
-                if remaining <= 0:
-                    logger.warning("SMTP daily limit reached")
-                    self._shutdown.set()
-                    break
+            threads = []
+            for _ in range(threads_per_smtp):
+                t = threading.Thread(target=_worker_thread, daemon=True)
+                t.start()
+                threads.append(t)
+            for t in threads:
+                t.join()
 
-                limiter.wait()
-
-                with self._lock:
-                    idx = self._send_count
-
-                cur_from_name = domain_row["from_name"] or "Newsletter"
-                if sender_list:
-                    cur_from_name = engine.get_rotated_value(sender_list, idx, sender_rotate)
-
-                cur_subject = subject_macro
-                cur_subject = engine.process(cur_subject, email)
-
-                html_template = ""
-                if html_contents:
-                    html_idx = engine.get_rotated_value(
-                        list(range(len(html_contents))), idx, html_rotate) if html_rotate else 0
-                    html_template = html_contents[int(html_idx)] if isinstance(html_idx, (int, float)) else html_contents[0]
-                else:
-                    html_template = "<p>Hello {email_user}</p>"
-
-                html_body = engine.process(html_template, email)
-                plain_body = engine.html_to_plaintext(html_body)
-
-                unsub_token = f"{lead_id}-{self._mailing_id}"
-                unsub_domain = domain_row.get("unsub_domain") or f"unsub.{domain}"
-                unsub_url = f"https://{unsub_domain}/u/{unsub_token}"
-                unsub_mailto = f"unsub-{unsub_token}@{domain}"
-
-                feedback_id = f"{feedback_base}:{domain.replace('.', '-')[:15]}"
-
-                attachment = None
-                if pdf_bytes:
-                    if pdf_macro_on:
-                        mod_pdf = fill_pdf_macro(pdf_bytes)
-                        attachment = (os.path.basename(pdf_path), mod_pdf)
-                    else:
-                        attachment = (os.path.basename(pdf_path), pdf_bytes)
-
-                try:
-                    effective_reply = reply_to if reply_to and reply_to != from_email else ""
-                    raw_msg, envelope_from, verp_tag = BulkMIMEBuilder.build_email(
-                        from_name=engine.process(cur_from_name, email),
-                        from_email=from_email,
-                        reply_to_name="",
-                        reply_to_email=effective_reply,
-                        to_email=email,
-                        subject=cur_subject,
-                        html_body=html_body,
-                        plain_body=plain_body,
-                        list_id_token=list_id_label,
-                        list_id_name=list_id_label.split(".")[0].title() if list_id_label else "",
-                        unsubscribe_url=unsub_url,
-                        unsubscribe_mailto=unsub_mailto,
-                        feedback_id=feedback_id,
-                        bounce_domain=bounce_domain,
-                        recipient_id=str(lead_id),
-                        attachment=attachment,
-                        provider_type=provider,
-                    )
-
-                    date_line = f"Date: {formatdate(localtime=True, usegmt=False)}\r\n"
-                    raw_msg = date_line + raw_msg
-
-                    logger.info("Mailing %d: sending to %s (lead %d)", self._mailing_id, email, lead_id)
-                    success, error, code = smtp.send(envelope_from, email, raw_msg)
-
-                    if success:
-                        self._db.mark_sent(lead_id)
-                        self._db.increment_smtp_sent(smtp_row["id"])
-                        sent += 1
-                        logger.info("Mailing %d: sent %d/%d to %s", self._mailing_id, sent, pending_count, email)
-                        if test_interval > 0 and test_email and sent % test_interval == 0:
-                            try:
-                                test_raw, test_env, _ = BulkMIMEBuilder.build_email(
-                                    from_name=engine.process(cur_from_name, test_email),
-                                    from_email=from_email,
-                                    reply_to_name="", reply_to_email=effective_reply,
-                                    to_email=test_email, subject=f"[TEST #{sent}] {cur_subject}",
-                                    html_body=html_body, plain_body=plain_body,
-                                    list_id_token=list_id_label,
-                                    unsubscribe_url=unsub_url, unsubscribe_mailto=unsub_mailto,
-                                    feedback_id=feedback_id,
-                                    bounce_domain=bounce_domain,
-                                    recipient_id="test",
-                                    provider_type=provider,
-                                )
-                                test_raw = f"Date: {formatdate(localtime=True, usegmt=False)}\r\n" + test_raw
-                                smtp.send(test_env, test_email, test_raw)
-                                logger.info("Test mail #%d sent to %s", sent, test_email)
-                            except Exception as te:
-                                logger.error("Test mail failed: %s", te)
-                    elif error.startswith("FATAL:"):
-                        self._db.mark_failed(lead_id, error)
-                        failed += 1
-                        logger.error("Mailing %d: FATAL for %s: %s (code %d)", self._mailing_id, email, error, code)
-                    else:
-                        self._db._conn().execute(
-                            "UPDATE leads SET state='PENDING' WHERE id=?", (lead_id,))
-                        self._db._conn().commit()
-                        failed += 1
-                        logger.warning("Mailing %d: transient fail for %s: %s (code %d)", self._mailing_id, email, error, code)
-
-                except Exception as exc:
-                    self._db.mark_failed(lead_id, str(exc)[:500])
-                    failed += 1
-                    logger.error("Send error: %s", exc)
-
-                with self._lock:
-                    self._send_count += 1
-
-                self._db.update_mailing_counts(self._mailing_id, sent, failed, excluded)
+            self._db.update_mailing_counts(self._mailing_id, sent, failed, excluded)
 
         status = "FINISHED" if not self._shutdown.is_set() else "PAUSED"
         logger.info("Mailing %d %s: sent=%d, failed=%d, excluded=%d",
