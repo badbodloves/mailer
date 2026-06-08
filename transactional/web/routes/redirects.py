@@ -246,7 +246,8 @@ async def generate_s3_redirects(request: Request,
                                  count: int = Form(50),
                                  tag: str = Form(""),
                                  region: str = Form("random"),
-                                 pool_id: int = Form(0)):
+                                 pool_id: int = Form(0),
+                                 bot_filter: str = Form("")):
     target = target_url.strip()
     if not target:
         return HTMLResponse('<div class="alert alert-warning">Enter a target URL.</div>')
@@ -277,6 +278,7 @@ async def generate_s3_redirects(request: Request,
     count = max(1, min(count, 5000))
     gen_uid = request.state.user["id"]
 
+    use_bot_filter = bool(bot_filter)
     _s3_progress.update(running=True, total=count, done=0, ok=0, errors=0,
                          bucket="", stage="creating bucket", region=region)
 
@@ -307,11 +309,11 @@ async def generate_s3_redirects(request: Request,
             _s3_progress["stage"] = "uploading"
 
             from mailer.s3_redirect import _redirect_html, _random_suffix
-            body = _redirect_html(target).encode("utf-8")
+            body = _redirect_html(target, bot_filter=use_bot_filter).encode("utf-8")
             ok = 0
             errors = 0
             for i in range(count):
-                key = f"{_random_suffix(10)}.html"
+                key = _random_suffix(10)
                 try:
                     s3.put_object(
                         Bucket=bucket, Key=key, Body=body,
