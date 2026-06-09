@@ -236,19 +236,19 @@ async def clear_templates(request: Request):
 @router.post("/htmlgen/layout/{name}/delete")
 async def delete_layout(request: Request, name: str):
     """Delete one layout file from htmlgen/layouts/. Name is the stem
-    (filename without .html)."""
-    # Defensive — strip any path traversal attempts
+    (filename without .html). Returns 200 OK on success or a 4xx with
+    a short body on refusal so HTMX can render/skip appropriately."""
     safe = "".join(c for c in name if c.isalnum() or c in "-_")
     if not safe:
-        return RedirectResponse("/htmlgen", status_code=303)
+        return HTMLResponse("Invalid name", status_code=400)
     layout_path = _HTMLGEN_BASE / "layouts" / f"{safe}.html"
-    if layout_path.is_file():
-        # Refuse if it's the last remaining layout — generator needs at least one
-        remaining = list((_HTMLGEN_BASE / "layouts").glob("*.html"))
-        if len(remaining) <= 1:
-            return RedirectResponse("/htmlgen?err=last_layout", status_code=303)
-        layout_path.unlink()
-    return RedirectResponse("/htmlgen", status_code=303)
+    if not layout_path.is_file():
+        return HTMLResponse("Already gone", status_code=200)
+    remaining = list((_HTMLGEN_BASE / "layouts").glob("*.html"))
+    if len(remaining) <= 1:
+        return HTMLResponse("Cannot delete the last remaining layout", status_code=400)
+    layout_path.unlink()
+    return HTMLResponse("", status_code=200)
 
 
 # --- Preview placeholder samples ---

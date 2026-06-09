@@ -27,11 +27,11 @@
                             {% for l in layout_names %}
                             <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px">
                                 <span style="font-family:monospace">{{ l }}.html</span>
-                                <form method="post" action="/htmlgen/layout/{{ l }}/delete"
-                                      onsubmit="return confirm('Delete layout {{ l }}.html permanently?')"
-                                      style="display:inline">
-                                    <button class="btn btn-danger btn-xs">Delete</button>
-                                </form>
+                                <button type="button" class="btn btn-danger btn-xs"
+                                        hx-post="/htmlgen/layout/{{ l }}/delete"
+                                        hx-confirm="Delete layout {{ l }}.html permanently?"
+                                        hx-swap="none"
+                                        hx-on::after-request="if(event.detail.successful){this.closest('div').remove()}">Delete</button>
                             </div>
                             {% endfor %}
                             <div class="form-help" style="margin-top:6px">
