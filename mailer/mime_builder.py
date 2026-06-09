@@ -1,28 +1,56 @@
 import mimetypes
+import re
 import secrets
 import time
-import quopri
 import base64
+from email import quoprimime
 from email.utils import formatdate, formataddr, encode_rfc2231
 from email.header import Header
 from typing import Optional, Tuple, List
 
-_CRLF_RE_CHARS = str.maketrans("", "", "\r\n")
+# All C0 control chars (0x00-0x1F) + DEL (0x7F) are forbidden in header
+# values — strip them to close header-injection / truncation vectors.
+_HEADER_FORBIDDEN = dict.fromkeys(list(range(0x00, 0x20)) + [0x7F])
+_EOL_RE = re.compile(r"\r\n|\r|\n")
 
 
 class MIMEBuilder:
 
     @staticmethod
     def _sanitize(value: str) -> str:
-        return value.translate(_CRLF_RE_CHARS).strip()
+        # Strip CR, LF, NUL, TAB, and all other C0 controls + DEL.
+        return value.translate(_HEADER_FORBIDDEN).strip()
 
     @staticmethod
-    def _encode_header_value(value: str) -> str:
+    def _to_crlf(text: str) -> str:
+        # Collapse \r\n, lone \r, lone \n to a single \r\n (no doubling).
+        return _EOL_RE.sub("\r\n", text)
+
+    @staticmethod
+    def _max_line_len(text: str) -> int:
+        # Measured in octets — the 998 SMTP limit is byte-based.
+        return max((len(l.encode("utf-8")) for l in text.splitlines()), default=0)
+
+    @staticmethod
+    def _qp_encode(text: str) -> str:
+        # email.quoprimime.body_encode folds at <=76 and never splits an
+        # =XX escape — unlike quopri.encodestring which does no wrapping.
+        normalized = MIMEBuilder._to_crlf(text)
+        raw = normalized.encode("utf-8").decode("latin-1")
+        return quoprimime.body_encode(raw, maxlinelen=76, eol="\r\n")
+
+    @staticmethod
+    def _fold_header(name: str, value: str) -> str:
+        # Fold long header values on FWS; ASCII stays readable, non-ASCII
+        # becomes folded encoded-words. Accounts for the "Name: " width.
         try:
             value.encode("ascii")
-            return value
+            h = Header(value, "ascii", maxlinelen=78, header_name=name)
         except UnicodeEncodeError:
-            return Header(value, "utf-8", maxlinelen=76).encode()
+            h = Header(value, "utf-8", maxlinelen=78, header_name=name)
+        # Header.encode() folds with bare LF — normalize to CRLF so the
+        # assembled message is uniformly CRLF per RFC 5322 §2.1.
+        return MIMEBuilder._to_crlf(h.encode(splitchars=" ;,"))
 
     @staticmethod
     def generate_message_id(sender_domain: str) -> str:
@@ -38,14 +66,19 @@ class MIMEBuilder:
         rand_hex = secrets.token_hex(8)
         return f"----=_Part_{ts}_{rand_hex}"
 
-    @staticmethod
-    def _get_best_encoding(text: str) -> tuple:
+    @classmethod
+    def _get_best_encoding(cls, text: str) -> tuple:
+        # 7bit is only legal if ASCII AND every line <= 998 octets
+        # (RFC 5321 §4.5.3.1). Otherwise quoted-printable with proper
+        # 76-char soft wrapping, which satisfies the 998 limit too.
+        normalized = cls._to_crlf(text)
         try:
-            text.encode("ascii")
-            return "7bit", text
+            normalized.encode("ascii")
+            if cls._max_line_len(normalized) <= 998:
+                return "7bit", normalized
         except UnicodeEncodeError:
-            encoded = quopri.encodestring(text.encode("utf-8"), quotetabs=True)
-            return "quoted-printable", encoded.decode("ascii").replace("\n", "\r\n")
+            pass
+        return "quoted-printable", cls._qp_encode(text)
 
     @classmethod
     def build_email(
@@ -72,8 +105,11 @@ class MIMEBuilder:
 
         message_id = cls.generate_message_id(sender_domain)
         date_str = formatdate(localtime=True)
-        from_header = formataddr((cls._encode_header_value(from_name), from_email))
-        subject_encoded = cls._encode_header_value(subject)
+        # Pass the RAW display name to formataddr with charset — it does
+        # the RFC 2047 encoding itself. Pre-encoding then re-passing makes
+        # formataddr quote the encoded-word so receivers show it literally.
+        from_header = formataddr((from_name, from_email), charset="utf-8")
+        subject_encoded = cls._fold_header("Subject", subject)
 
         has_inline = bool(inline_images)
         has_attach = bool(attachment)
