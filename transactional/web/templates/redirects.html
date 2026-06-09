@@ -305,15 +305,57 @@
         {% endif %}
     </div>
     {% if redirects %}
+    {% if redirect_pools %}
+    <div style="margin-bottom:10px;padding:8px;border:1px solid var(--border-light);border-radius:var(--radius);background:var(--bg)">
+        <form hx-post="/redirects/bulk-assign-pool"
+              hx-target="#bulk-assign-result"
+              hx-swap="innerHTML"
+              hx-include="[name='link_ids[]']"
+              style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <strong style="font-size:13px">Bulk assign:</strong>
+            <span style="font-size:12px;color:var(--fg2)">tick rows in the table, then choose target pool:</span>
+            <select name="pool_id" style="max-width:200px">
+                <option value="0">— No Pool (clear)</option>
+                {% for p in redirect_pools %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-primary btn-xs" type="submit">Move Selected</button>
+            <span id="bulk-assign-result" style="font-size:12px"></span>
+        </form>
+    </div>
+    {% endif %}
     <table>
-        <thead><tr><th>Short URL</th><th>Target</th><th>Pool</th><th>Created</th><th></th></tr></thead>
+        <thead><tr>
+            <th style="width:24px">
+                {% if redirect_pools %}<input type="checkbox" id="bulk-toggle-all"
+                    onclick="document.querySelectorAll('input[name=\'link_ids[]\']').forEach(c=>c.checked=this.checked)">{% endif %}
+            </th>
+            <th>Short URL</th><th>Target</th><th>Pool</th><th>Created</th><th></th>
+        </tr></thead>
         <tbody>
         {% for r in redirects[:100] %}
         <tr>
+            <td>
+                {% if redirect_pools %}<input type="checkbox" name="link_ids[]" value="{{ r.id }}">{% endif %}
+            </td>
             <td style="font-family:monospace;font-size:12px"><a href="{{ r.short_url }}" target="_blank" style="color:var(--accent)">{{ r.short_url }}</a></td>
             <td style="font-size:11px;color:var(--fg2);max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="{{ r.target_url or '' }}">{{ r.target_url or '—' }}</td>
-            <td style="font-size:12px;color:var(--fg2)">
+            <td id="pool-cell-{{ r.id }}" style="font-size:12px;color:var(--fg2)">
+                {% if redirect_pools %}
+                <select hx-post="/redirects/{{ r.id }}/set-pool"
+                        hx-target="#pool-cell-{{ r.id }}"
+                        hx-swap="innerHTML"
+                        hx-trigger="change"
+                        name="pool_id" style="margin:0;padding:2px 4px;font-size:11px;max-width:160px">
+                    <option value="0" {{ 'selected' if not r.pool_id }}>— No Pool</option>
+                    {% for p in redirect_pools %}
+                    <option value="{{ p.id }}" {{ 'selected' if p.id == r.pool_id }}>{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+                {% else %}
                 {% if r.pool_id %}{% for p in redirect_pools %}{% if p.id == r.pool_id %}{{ p.name }}{% endif %}{% endfor %}{% else %}—{% endif %}
+                {% endif %}
             </td>
             <td style="font-size:11px;color:var(--fg2)">{{ r.created_at }}</td>
             <td style="white-space:nowrap">
@@ -333,12 +375,16 @@
                         <span id="update-result-{{ r.id }}" style="margin-left:6px;font-size:11px"></span>
                     </form>
                 </details>
-                <form method="post" action="/redirects/{{ r.id }}/delete" style="display:inline"><button class="btn btn-danger btn-xs">Del</button></form>
+                <button type="button" class="btn btn-danger btn-xs"
+                        hx-post="/redirects/{{ r.id }}/delete"
+                        hx-confirm="Delete this link?"
+                        hx-swap="none"
+                        hx-on::after-request="if(event.detail.successful){this.closest('tr').remove()}">Del</button>
             </td>
         </tr>
         {% endfor %}
         {% if redirects|length > 100 %}
-        <tr><td colspan="5" style="text-align:center;color:var(--fg2);font-size:12px">Showing first 100 of {{ redirect_count }}</td></tr>
+        <tr><td colspan="6" style="text-align:center;color:var(--fg2);font-size:12px">Showing first 100 of {{ redirect_count }}</td></tr>
         {% endif %}
         </tbody>
     </table>

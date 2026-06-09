@@ -719,7 +719,68 @@ async def bulk_add(request: Request, urls: str = Form("")):
 @router.post("/redirects/{rid}/delete")
 async def delete_redirect(request: Request, rid: int):
     request.app.state.db.delete_redirect(rid)
-    return RedirectResponse("/redirects", status_code=303)
+    return HTMLResponse("", status_code=200)
+
+
+@router.post("/redirects/{rid}/set-pool", response_class=HTMLResponse)
+async def set_redirect_pool(request: Request, rid: int,
+                             pool_id: int = Form(0)):
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    db._conn().execute(
+        "UPDATE trans_redirect_links SET pool_id=? WHERE id=?",
+        (int(pool_id or 0), rid),
+    )
+    db._conn().commit()
+
+    # Re-render the cell with the updated dropdown so the change sticks
+    # visibly and a follow-up change re-submits cleanly.
+    pools = [dict(p) for p in db.get_redirect_pools(uid)]
+    cur = int(pool_id or 0)
+    options = [f'<option value="0"{" selected" if not cur else ""}>— No Pool</option>']
+    for p in pools:
+        sel = " selected" if p["id"] == cur else ""
+        options.append(f'<option value="{p["id"]}"{sel}>{escape(p["name"])}</option>')
+    return HTMLResponse(
+        f'<select hx-post="/redirects/{rid}/set-pool" '
+        f'hx-target="#pool-cell-{rid}" hx-swap="innerHTML" hx-trigger="change" '
+        f'name="pool_id" style="margin:0;padding:2px 4px;font-size:11px;max-width:160px">'
+        + "".join(options) +
+        '</select>'
+    )
+
+
+@router.post("/redirects/bulk-assign-pool", response_class=HTMLResponse)
+async def bulk_assign_pool(request: Request):
+    db = request.app.state.db
+    form = await request.form()
+    pool_id = int(form.get("pool_id", 0) or 0)
+    raw_ids = form.getlist("link_ids[]") or form.getlist("link_ids")
+    ids = []
+    for v in raw_ids:
+        try:
+            ids.append(int(v))
+        except (TypeError, ValueError):
+            pass
+    if not ids:
+        return HTMLResponse('<span style="color:var(--red)">No links selected.</span>')
+    placeholders = ",".join("?" for _ in ids)
+    db._conn().execute(
+        f"UPDATE trans_redirect_links SET pool_id=? WHERE id IN ({placeholders})",
+        [pool_id, *ids],
+    )
+    db._conn().commit()
+    target = "No Pool"
+    if pool_id:
+        row = db._conn().execute(
+            "SELECT name FROM trans_redirect_pools WHERE id=?", (pool_id,)).fetchone()
+        if row:
+            target = dict(row)["name"]
+    return HTMLResponse(
+        f'<span style="color:var(--green)">'
+        f'Moved {len(ids)} link(s) &rarr; <strong>{escape(target)}</strong>. '
+        f'<a href="/redirects" style="color:var(--accent)">Reload</a></span>'
+    )
 
 
 @router.get("/redirects/export")
