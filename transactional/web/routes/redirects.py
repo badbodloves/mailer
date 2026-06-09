@@ -27,7 +27,10 @@ AWS_REGIONS = [
 
 _gen_progress = {"running": False, "total": 0, "done": 0, "ok": 0, "errors": 0}
 _s3_progress = {"running": False, "total": 0, "done": 0, "ok": 0, "errors": 0,
-                "bucket": "", "stage": "", "region": ""}
+                "bucket": "", "stage": "", "region": "",
+                "last_error": "", "aborted": False}
+
+CONSECUTIVE_ERROR_LIMIT = 5
 
 
 @router.get("/redirects", response_class=HTMLResponse)
@@ -399,7 +402,8 @@ async def generate_s3_redirects(request: Request,
     use_bot_filter = bool(bot_filter)
     per_link_bucket = bool(unique_bucket)
     _s3_progress.update(running=True, total=count, done=0, ok=0, errors=0,
-                         bucket="", stage="creating bucket", region=region)
+                         bucket="", stage="creating bucket", region=region,
+                         last_error="", aborted=False)
     logger.info("S3 gen: account=%s region=%s count=%d target=%s",
                 account_label or "(primary)", region, count, target[:80])
 
@@ -438,13 +442,28 @@ async def generate_s3_redirects(request: Request,
 
             ok = 0
             errors = 0
+            consecutive = 0
             for i in range(count):
+                if consecutive >= CONSECUTIVE_ERROR_LIMIT:
+                    _s3_progress["aborted"] = True
+                    _s3_progress["stage"] = (
+                        f"aborted after {consecutive} consecutive errors. "
+                        f"Last: {_s3_progress.get('last_error', '')[:200]}"
+                    )
+                    logger.error(
+                        "S3 gen aborted at %d/%d after %d consecutive errors",
+                        i, count, consecutive,
+                    )
+                    break
+
                 if per_link_bucket:
                     _s3_progress["stage"] = f"creating bucket {i + 1}/{count}"
                     try:
                         bucket = _spawn_bucket()
                     except Exception as e:
                         errors += 1
+                        consecutive += 1
+                        _s3_progress["last_error"] = f"bucket {i+1}: {str(e)[:300]}"
                         logger.warning("Per-link bucket %d failed: %s", i + 1, e)
                         _s3_progress["done"] = i + 1
                         _s3_progress["errors"] = errors
@@ -463,18 +482,24 @@ async def generate_s3_redirects(request: Request,
                     url = f"https://s3.{region}.amazonaws.com/{bucket}/{key}"
                     db.add_redirect(url, target, gen_uid, pool_id)
                     ok += 1
+                    consecutive = 0   # success resets the streak
                 except Exception as e:
                     errors += 1
+                    consecutive += 1
+                    _s3_progress["last_error"] = f"upload {i+1}: {str(e)[:300]}"
                     logger.warning("S3 upload failed (%d/%d): %s", i + 1, count, e)
                 _s3_progress["done"] = i + 1
                 _s3_progress["ok"] = ok
                 _s3_progress["errors"] = errors
 
-            _s3_progress["stage"] = "done"
+            if not _s3_progress["aborted"]:
+                _s3_progress["stage"] = "done"
         except Exception as e:
             logger.error("S3 generation error: %s", e, exc_info=True)
             _s3_progress["errors"] += 1
-            _s3_progress["stage"] = f"error: {e}"
+            _s3_progress["aborted"] = True
+            _s3_progress["last_error"] = str(e)[:400]
+            _s3_progress["stage"] = f"error: {str(e)[:200]}"
         finally:
             _s3_progress["running"] = False
 
@@ -495,6 +520,16 @@ async def s3_gen_status(request: Request):
         region_str = f' <span style="margin-left:6px">Region: <code>{escape(p.get("region", ""))}</code></span>' if p.get("region") else ''
         bucket_str = f'Bucket: <code>{escape(p["bucket"])}</code>' if p["bucket"] else ''
         bucket_html = f'<div style="font-size:11px;color:var(--fg2);margin-bottom:6px">{bucket_str}{region_str}</div>'
+
+    last_err_html = ''
+    if p.get("last_error"):
+        last_err_html = (
+            f'<div style="margin-top:6px;padding:6px;border:1px solid var(--red);'
+            f'border-radius:var(--radius);background:#ffeded;color:#a00;'
+            f'font-family:monospace;font-size:11px;white-space:pre-wrap;max-height:120px;overflow:auto">'
+            f'<strong>Last error:</strong> {escape(p["last_error"])}</div>'
+        )
+
     if p["running"]:
         done = p["done"]
         total = p["total"] or 1
@@ -506,17 +541,29 @@ async def s3_gen_status(request: Request):
             f'<div class="progress-bar" style="width:{pct}%">{done}/{p["total"]}</div></div>'
             f'<p style="font-size:12px;color:var(--fg2)">'
             f'Uploaded: {p["ok"]} OK, {p["errors"]} errors</p>'
+            f'{last_err_html}'
+        )
+
+    if p.get("aborted"):
+        return HTMLResponse(
+            f'{bucket_html}'
+            f'<div class="alert alert-danger">'
+            f'Aborted: {escape(p["stage"])}<br>'
+            f'<strong>{p["ok"]} OK</strong>, {p["errors"]} errors before stopping.'
+            f'</div>{last_err_html}'
         )
     if p["stage"].startswith("error:"):
         return HTMLResponse(
             f'{bucket_html}'
             f'<div class="alert alert-danger">{escape(p["stage"])}</div>'
+            f'{last_err_html}'
         )
     if p["ok"] > 0:
         return HTMLResponse(
             f'{bucket_html}'
             f'<div class="alert alert-success">Done! {p["ok"]} S3 redirect links generated. '
             f'<a href="/redirects" style="color:var(--accent)">Reload page</a></div>'
+            f'{last_err_html if p["errors"] > 0 else ""}'
         )
     return HTMLResponse("")
 
