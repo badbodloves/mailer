@@ -19,6 +19,25 @@
                         {% endfor %}
                     </select>
                     <div class="form-help">All selected = random from those. Deselect layouts you don't want.</div>
+
+                    <details style="margin-top:6px">
+                        <summary style="cursor:pointer;font-size:12px;color:var(--fg2)">Manage layouts (permanent delete)</summary>
+                        <div style="margin-top:6px;padding:8px;border:1px solid var(--border-light);border-radius:var(--radius);background:var(--bg)">
+                            {% for l in layout_names %}
+                            <div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;font-size:12px">
+                                <span style="font-family:monospace">{{ l }}.html</span>
+                                <form method="post" action="/htmlgen/layout/{{ l }}/delete"
+                                      onsubmit="return confirm('Delete layout {{ l }}.html permanently?')"
+                                      style="display:inline">
+                                    <button class="btn btn-danger btn-xs">Delete</button>
+                                </form>
+                            </div>
+                            {% endfor %}
+                            <div class="form-help" style="margin-top:6px">
+                                Last remaining layout cannot be deleted. Files live in <code>htmlgen/layouts/</code>.
+                            </div>
+                        </div>
+                    </details>
                 </div>
                 <div>
                     <label>Primary Color (leave empty = pool)</label>

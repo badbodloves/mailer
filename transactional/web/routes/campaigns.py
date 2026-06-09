@@ -912,6 +912,13 @@ def _run_campaign(db, cid: int):
                 return "connection"
             if "eof" in e or "broken pipe" in e or "connection reset" in e or "unexpectedly closed" in e:
                 return "connection"
+            # smtplib raises this when the socket died mid-session — the
+            # connection is gone, the SMTP server is fine. Worker needs
+            # to drop this connection and acquire a fresh one.
+            if "please run connect" in e or "smtpserverdisconnected" in e:
+                return "connection"
+            if "server not connected" in e or "not connected" in e:
+                return "connection"
 
             # ============================================================
             # RECIPIENT-LEVEL FAILURES — SMTP is fine, just this address
