@@ -10,15 +10,17 @@ import re
 import mimetypes
 import secrets
 import time
-import quopri
 import base64
 import uuid
+from email import quoprimime
 from email.utils import formataddr, encode_rfc2231
 from email.header import Header
 from typing import Optional, Tuple, List, Dict
 
-_CRLF = str.maketrans("", "", "\r\n")
-_LINE_LENGTH_RE = re.compile(r"[^\r\n]{999,}")
+# All C0 control chars (0x00-0x1F) + DEL (0x7F) are forbidden in header
+# values — strip them to close header-injection / truncation vectors.
+_HEADER_FORBIDDEN = dict.fromkeys(list(range(0x00, 0x20)) + [0x7F])
+_EOL_RE = re.compile(r"\r\n|\r|\n")
 _FEEDBACK_RE = re.compile(r"^[\w\-.:]*:[\w\-.:]*:[\w\-.:]*:[\w\-.]{5,15}$")
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]{2,}$")
 _LIST_ID_RE = re.compile(r"^[\w\-]+(\.[\w\-]+)+$")
@@ -33,27 +35,53 @@ class BulkMIMEBuilder:
 
     @staticmethod
     def _sanitize(v: str) -> str:
-        return v.translate(_CRLF).strip()
+        # Strip CR, LF, NUL, TAB, and all other C0 controls + DEL.
+        return v.translate(_HEADER_FORBIDDEN).strip()
 
     @staticmethod
-    def _encode_header(v: str) -> str:
+    def _to_crlf(text: str) -> str:
+        # Collapse \r\n, lone \r, lone \n to a single \r\n (no doubling).
+        return _EOL_RE.sub("\r\n", text)
+
+    @staticmethod
+    def _max_line_len(text: str) -> int:
+        # Measured in octets — the 998 SMTP limit is byte-based.
+        return max((len(l.encode("utf-8")) for l in text.splitlines()), default=0)
+
+    @staticmethod
+    def _qp_encode(text: str) -> str:
+        # email.quoprimime.body_encode folds at <=76 and never splits an
+        # =XX escape — unlike quopri.encodestring which does no wrapping.
+        normalized = BulkMIMEBuilder._to_crlf(text)
+        raw = normalized.encode("utf-8").decode("latin-1")
+        return quoprimime.body_encode(raw, maxlinelen=76, eol="\r\n")
+
+    @staticmethod
+    def _fold_header(name: str, value: str) -> str:
+        # Fold long header values on FWS; ASCII stays readable, non-ASCII
+        # becomes folded encoded-words. Header.encode() folds with bare LF,
+        # so normalize back to CRLF for a uniformly-CRLF message.
         try:
-            v.encode("ascii")
-            return v
+            value.encode("ascii")
+            h = Header(value, "ascii", maxlinelen=78, header_name=name)
         except UnicodeEncodeError:
-            return Header(v, "utf-8", maxlinelen=76).encode()
+            h = Header(value, "utf-8", maxlinelen=78, header_name=name)
+        return BulkMIMEBuilder._to_crlf(h.encode(splitchars=" ;,"))
 
-    @staticmethod
-    def _get_encoding(text: str, force_qp: bool = False) -> tuple:
+    @classmethod
+    def _get_encoding(cls, text: str, force_qp: bool = False) -> tuple:
+        # 7bit is only legal if ASCII AND every line <= 998 octets
+        # (RFC 5321 §4.5.3.1). Otherwise quoted-printable with proper
+        # 76-char soft wrapping, which satisfies the 998 limit too.
+        normalized = cls._to_crlf(text)
         if not force_qp:
             try:
-                text.encode("ascii")
-                if not _LINE_LENGTH_RE.search(text):
-                    return "7bit", text
+                normalized.encode("ascii")
+                if cls._max_line_len(normalized) <= 998:
+                    return "7bit", normalized
             except UnicodeEncodeError:
                 pass
-        enc = quopri.encodestring(text.encode("utf-8"), quotetabs=True)
-        return "quoted-printable", enc.decode("ascii").replace("\n", "\r\n")
+        return "quoted-printable", cls._qp_encode(text)
 
     @staticmethod
     def _boundary() -> str:
@@ -137,8 +165,11 @@ class BulkMIMEBuilder:
             list_id_str = f"<{list_id_token}>"
 
         msg_id = cls._message_id(mid_domain)
-        from_header = formataddr((cls._encode_header(from_name), from_email))
-        subject_enc = cls._encode_header(subject)
+        # Pass the RAW display name to formataddr with charset — it does
+        # the RFC 2047 encoding itself. Pre-encoding then re-passing makes
+        # formataddr quote the encoded-word so receivers show it literally.
+        from_header = formataddr((from_name, from_email), charset="utf-8")
+        subject_enc = cls._fold_header("Subject", subject)
         entity_ref = str(uuid.uuid4())
 
         verp_tag = recipient_id or secrets.token_hex(8)
@@ -152,7 +183,7 @@ class BulkMIMEBuilder:
 
         headers = [f"From: {from_header}"]
         if reply_to_email:
-            reply_header = formataddr((cls._encode_header(reply_to_name), reply_to_email))
+            reply_header = formataddr((reply_to_name, reply_to_email), charset="utf-8")
             headers.append(f"Reply-To: {reply_header}")
 
         if not is_ses:
