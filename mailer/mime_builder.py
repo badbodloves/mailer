@@ -53,6 +53,20 @@ class MIMEBuilder:
         return MIMEBuilder._to_crlf(h.encode(splitchars=" ;,"))
 
     @staticmethod
+    def _fold_addr(name: str, formatted: str) -> str:
+        # Fold an already-formatted address header (output of formataddr).
+        # Header folds on FWS inside the display name and leaves the
+        # angle-addr intact; an existing encoded-word is not re-encoded.
+        return MIMEBuilder._to_crlf(
+            Header(formatted, header_name=name, maxlinelen=78).encode(splitchars=" "))
+
+    @staticmethod
+    def _quote_param(filename: str) -> str:
+        # RFC 2045/2183 quoted-string: escape backslash then quote so a
+        # filename containing " or \ can't break out of the parameter.
+        return filename.replace("\\", "\\\\").replace('"', '\\"')
+
+    @staticmethod
     def generate_message_id(sender_domain: str) -> str:
         if not sender_domain or "." not in sender_domain:
             raise ValueError(f"Invalid sender domain for Message-ID: {sender_domain!r}")
@@ -108,7 +122,7 @@ class MIMEBuilder:
         # Pass the RAW display name to formataddr with charset — it does
         # the RFC 2047 encoding itself. Pre-encoding then re-passing makes
         # formataddr quote the encoded-word so receivers show it literally.
-        from_header = formataddr((from_name, from_email), charset="utf-8")
+        from_header = cls._fold_addr("From", formataddr((from_name, from_email), charset="utf-8"))
         subject_encoded = cls._fold_header("Subject", subject)
 
         has_inline = bool(inline_images)
@@ -168,6 +182,10 @@ class MIMEBuilder:
     def _inline_parts(cls, inline_images) -> list:
         lines = []
         for img_data, cid, mime_type in inline_images:
+            # cid and mime_type are interpolated into header lines — strip
+            # control chars so a stray CR/LF can't inject headers.
+            cid = cls._sanitize(cid)
+            mime_type = cls._sanitize(mime_type) or "application/octet-stream"
             b64 = base64.b64encode(img_data).decode("ascii")
             b64_lines = "\r\n".join(b64[i:i+76] for i in range(0, len(b64), 76))
             lines += [
@@ -184,8 +202,11 @@ class MIMEBuilder:
         mime_type = mimetypes.guess_type(att_filename)[0] or "application/octet-stream"
         try:
             att_filename.encode("ascii")
-            name_p = f'name="{att_filename}"'
-            disp_p = f'filename="{att_filename}"'
+            # Escape " and \ so a filename can't break out of the quoted
+            # parameter and inject extra Content-Type/Disposition params.
+            safe = cls._quote_param(att_filename)
+            name_p = f'name="{safe}"'
+            disp_p = f'filename="{safe}"'
         except UnicodeEncodeError:
             enc = encode_rfc2231(att_filename, "utf-8")
             name_p = f"name*={enc}"

@@ -68,6 +68,20 @@ class BulkMIMEBuilder:
             h = Header(value, "utf-8", maxlinelen=78, header_name=name)
         return BulkMIMEBuilder._to_crlf(h.encode(splitchars=" ;,"))
 
+    @staticmethod
+    def _fold_addr(name: str, formatted: str) -> str:
+        # Fold an already-formatted address header (output of formataddr).
+        # Folds on FWS in the display name, leaves the angle-addr intact,
+        # and does not re-encode an existing encoded-word.
+        return BulkMIMEBuilder._to_crlf(
+            Header(formatted, header_name=name, maxlinelen=78).encode(splitchars=" "))
+
+    @staticmethod
+    def _quote_param(filename: str) -> str:
+        # RFC 2045/2183 quoted-string: escape backslash then quote so a
+        # filename containing " or \ can't break out of the parameter.
+        return filename.replace("\\", "\\\\").replace('"', '\\"')
+
     @classmethod
     def _get_encoding(cls, text: str, force_qp: bool = False) -> tuple:
         # 7bit is only legal if ASCII AND every line <= 998 octets
@@ -168,7 +182,7 @@ class BulkMIMEBuilder:
         # Pass the RAW display name to formataddr with charset — it does
         # the RFC 2047 encoding itself. Pre-encoding then re-passing makes
         # formataddr quote the encoded-word so receivers show it literally.
-        from_header = formataddr((from_name, from_email), charset="utf-8")
+        from_header = cls._fold_addr("From", formataddr((from_name, from_email), charset="utf-8"))
         subject_enc = cls._fold_header("Subject", subject)
         entity_ref = str(uuid.uuid4())
 
@@ -183,7 +197,8 @@ class BulkMIMEBuilder:
 
         headers = [f"From: {from_header}"]
         if reply_to_email:
-            reply_header = formataddr((reply_to_name, reply_to_email), charset="utf-8")
+            reply_header = cls._fold_addr("Reply-To",
+                formataddr((reply_to_name, reply_to_email), charset="utf-8"))
             headers.append(f"Reply-To: {reply_header}")
 
         if not is_ses:
@@ -258,6 +273,10 @@ class BulkMIMEBuilder:
     def _inline_parts(cls, images: List[Tuple[bytes, str, str]]) -> list:
         lines = []
         for data, cid, mime_type in images:
+            # cid and mime_type land in header lines — strip control chars
+            # so a stray CR/LF can't inject headers.
+            cid = cls._sanitize(cid)
+            mime_type = cls._sanitize(mime_type) or "application/octet-stream"
             b64 = base64.b64encode(data).decode("ascii")
             b64_lines = "\r\n".join(b64[i:i+76] for i in range(0, len(b64), 76))
             lines += [
@@ -275,8 +294,11 @@ class BulkMIMEBuilder:
         mime_type = mimetypes.guess_type(filename)[0] or "application/octet-stream"
         try:
             filename.encode("ascii")
-            name_p = f'name="{filename}"'
-            disp_p = f'filename="{filename}"'
+            # Escape " and \ so a filename can't break out of the quoted
+            # parameter and inject extra Content-Type/Disposition params.
+            safe = cls._quote_param(filename)
+            name_p = f'name="{safe}"'
+            disp_p = f'filename="{safe}"'
         except UnicodeEncodeError:
             enc = encode_rfc2231(filename, "utf-8")
             name_p = f"name*={enc}"
