@@ -182,6 +182,13 @@
             </label>
             <label>How many variants per reset</label>
             <input name="freshness_logo_count" type="number" min="1" max="500" value="{{ cfg.freshness_logo_count or 25 }}">
+            <div class="form-help" style="margin-top:4px">
+                Logo regen only fires for image modes <code>cid</code> and <code>url</code>.
+                <code>text</code> mode never reads variants so the reset is skipped.
+                <code>cloudinary</code> mode reads CDN URLs from the logo group and would
+                require re-uploading to Cloudinary, which we don't do here — the reset is
+                skipped too.
+            </div>
         </div>
     </div>
 </div>

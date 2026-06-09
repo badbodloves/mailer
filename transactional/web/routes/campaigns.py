@@ -1040,24 +1040,35 @@ def _run_campaign(db, cid: int):
                                          cid, len(new_bodies))
 
                     if freshness_logos and logo_group_id and group_logos_for_freshness:
-                        from mailer.freshness import regenerate_logo_variants
-                        try:
-                            gdir = _group_variant_dir(logo_group_id)
-                            new_vars = regenerate_logo_variants(
-                                group_logos_for_freshness,
-                                gdir,
-                                int(cfg.get("freshness_logo_count", 25) or 25),
-                                max_colors=int(cfg.get("logo_max_colors", 256) or 256),
-                                quantize=bool(cfg.get("image_quantize", True)),
-                                downscale=bool(cfg.get("image_downscale", False)),
+                        # Logo regen only meaningfully helps modes that
+                        # actually read logo_variants at send time. In
+                        # text and cloudinary modes the regenerated
+                        # files are never touched, so we skip the work.
+                        if image_mode not in ("cid", "url"):
+                            logger.info(
+                                "Campaign %d: skipping logo regen "
+                                "(image_mode=%s doesn't use local variants)",
+                                cid, image_mode,
                             )
-                            if new_vars:
-                                logo_variants.clear()
-                                logo_variants.extend(new_vars)
-                                logger.info("Campaign %d: logo variants refreshed (%d new)",
-                                             cid, len(new_vars))
-                        except Exception as e:
-                            logger.warning("Campaign %d: logo regen failed: %s", cid, e)
+                        else:
+                            from mailer.freshness import regenerate_logo_variants
+                            try:
+                                gdir = _group_variant_dir(logo_group_id)
+                                new_vars = regenerate_logo_variants(
+                                    group_logos_for_freshness,
+                                    gdir,
+                                    int(cfg.get("freshness_logo_count", 25) or 25),
+                                    max_colors=int(cfg.get("logo_max_colors", 256) or 256),
+                                    quantize=bool(cfg.get("image_quantize", True)),
+                                    downscale=bool(cfg.get("image_downscale", False)),
+                                )
+                                if new_vars:
+                                    logo_variants.clear()
+                                    logo_variants.extend(new_vars)
+                                    logger.info("Campaign %d: logo variants refreshed (%d new)",
+                                                 cid, len(new_vars))
+                            except Exception as e:
+                                logger.warning("Campaign %d: logo regen failed: %s", cid, e)
                 except Exception as e:
                     logger.error("Campaign %d: freshness reset crashed: %s", cid, e)
                 finally:
