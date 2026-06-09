@@ -294,6 +294,16 @@ class TransDB:
             ("trans_redirect_pools", """CREATE TABLE IF NOT EXISTS trans_redirect_pools (
                 id INTEGER PRIMARY KEY AUTOINCREMENT, name TEXT NOT NULL,
                 user_id INTEGER DEFAULT 0, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
+            ("trans_suppressions", """CREATE TABLE IF NOT EXISTS trans_suppressions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                email TEXT NOT NULL,
+                reason TEXT DEFAULT '',
+                bounce_code INTEGER DEFAULT 0,
+                error_message TEXT DEFAULT '',
+                source TEXT DEFAULT 'auto',
+                campaign_id INTEGER DEFAULT 0,
+                user_id INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
             ("trans_inbox_accounts", """CREATE TABLE IF NOT EXISTS trans_inbox_accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 provider TEXT DEFAULT '',
@@ -375,6 +385,11 @@ class TransDB:
                          "trans_campaigns", "trans_proxies"]:
                 if tbl in tables:
                     c.execute(f"UPDATE {tbl} SET user_id=? WHERE user_id=0 OR user_id IS NULL", (aid,))
+        try:
+            c.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_suppress_user_email "
+                      "ON trans_suppressions(user_id, email)")
+        except Exception:
+            pass
         c.commit()
 
     # ── Config (single row JSON) ──────────────────────────
@@ -402,6 +417,7 @@ class TransDB:
         "spam_checker_url": "http://127.0.0.1:11333/checkv2",
         "mime_profile": "rotate",
         "auto_retry_failed": True,
+        "auto_suppress_hard_bounces": True,
         "aws_access_key": "", "aws_secret_key": "",
         "aws_region": "eu-central-1", "s3_bucket_prefix": "lk",
         "aws_proxy_id": 0,
@@ -552,7 +568,7 @@ class TransDB:
         rows = self._conn().execute(
             "SELECT state, COUNT(*) FROM trans_leads WHERE list_id=? GROUP BY state",
             (list_id,)).fetchall()
-        states = {"PENDING": 0, "SENT": 0, "FAILED": 0, "IN_PROGRESS": 0}
+        states = {"PENDING": 0, "SENT": 0, "FAILED": 0, "IN_PROGRESS": 0, "SUPPRESSED": 0}
         for r in rows:
             states[r[0]] = r[1]
         return states
@@ -570,6 +586,14 @@ class TransDB:
     def mark_failed(self, lead_id: int, error: str = ""):
         c = self._conn()
         c.execute("UPDATE trans_leads SET state='FAILED', error_msg=? WHERE id=?",
+                  (error[:500], lead_id))
+        c.commit()
+
+    def mark_suppressed(self, lead_id: int, error: str = ""):
+        # Distinct terminal state so the blanket retry (FAILED->PENDING)
+        # never re-attempts a hard-bounced / suppressed address.
+        c = self._conn()
+        c.execute("UPDATE trans_leads SET state='SUPPRESSED', error_msg=? WHERE id=?",
                   (error[:500], lead_id))
         c.commit()
 
@@ -948,6 +972,89 @@ class TransDB:
                   (campaign_id, lead_id, email, domain, error_code,
                    error_type, error_message[:500], mime_profile, smtp_host, smtp_user, user_id))
         c.commit()
+
+    # ── Suppression list (dead / hard-bounced addresses) ──
+    def add_suppression(self, email: str, reason: str = "", bounce_code: int = 0,
+                        error_message: str = "", source: str = "auto",
+                        campaign_id: int = 0, user_id: int = 0) -> bool:
+        """Add an address to the suppression list. Idempotent — a repeat
+        of the same (user_id, email) is ignored. Returns True if newly added."""
+        email = (email or "").strip().lower()
+        if not email or "@" not in email:
+            return False
+        c = self._conn()
+        cur = c.execute(
+            "INSERT OR IGNORE INTO trans_suppressions "
+            "(email,reason,bounce_code,error_message,source,campaign_id,user_id) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (email, reason, bounce_code, error_message[:300], source, campaign_id, user_id))
+        c.commit()
+        return cur.rowcount > 0
+
+    def load_suppression_set(self, user_id: int = 0) -> set:
+        """Return a frozenset of lowercased suppressed emails for fast
+        in-memory checks during a send (avoids per-mail DB hits)."""
+        if user_id:
+            rows = self._conn().execute(
+                "SELECT email FROM trans_suppressions WHERE user_id=?", (user_id,)).fetchall()
+        else:
+            rows = self._conn().execute("SELECT email FROM trans_suppressions").fetchall()
+        return {r[0] for r in rows}
+
+    def get_suppressions(self, user_id: int = 0, limit: int = 500) -> list:
+        if user_id:
+            return self._conn().execute(
+                "SELECT * FROM trans_suppressions WHERE user_id=? ORDER BY created_at DESC LIMIT ?",
+                (user_id, limit)).fetchall()
+        return self._conn().execute(
+            "SELECT * FROM trans_suppressions ORDER BY created_at DESC LIMIT ?", (limit,)).fetchall()
+
+    def get_suppression_count(self, user_id: int = 0) -> int:
+        if user_id:
+            r = self._conn().execute(
+                "SELECT COUNT(*) FROM trans_suppressions WHERE user_id=?", (user_id,)).fetchone()
+        else:
+            r = self._conn().execute("SELECT COUNT(*) FROM trans_suppressions").fetchone()
+        return r[0] if r else 0
+
+    def delete_suppression(self, sid: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_suppressions WHERE id=?", (sid,))
+        c.commit()
+
+    def clear_suppressions(self, user_id: int = 0):
+        c = self._conn()
+        if user_id:
+            c.execute("DELETE FROM trans_suppressions WHERE user_id=?", (user_id,))
+        else:
+            c.execute("DELETE FROM trans_suppressions")
+        c.commit()
+
+    def import_suppressions(self, emails: list, user_id: int = 0,
+                            source: str = "import") -> int:
+        c = self._conn()
+        added = 0
+        batch = []
+        for e in emails:
+            e = (e or "").strip().lower()
+            if not e or "@" not in e:
+                continue
+            batch.append((e, "manual import", 0, "", source, 0, user_id))
+            if len(batch) >= 1000:
+                cur = c.executemany(
+                    "INSERT OR IGNORE INTO trans_suppressions "
+                    "(email,reason,bounce_code,error_message,source,campaign_id,user_id) "
+                    "VALUES (?,?,?,?,?,?,?)", batch)
+                added += cur.rowcount
+                batch = []
+        if batch:
+            cur = c.executemany(
+                "INSERT OR IGNORE INTO trans_suppressions "
+                "(email,reason,bounce_code,error_message,source,campaign_id,user_id) "
+                "VALUES (?,?,?,?,?,?,?)", batch)
+            added += cur.rowcount
+        c.commit()
+        return added
 
     def get_bounce_stats(self, campaign_id: int = 0, user_id: int = 0) -> dict:
         c = self._conn()

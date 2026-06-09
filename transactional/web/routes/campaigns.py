@@ -982,6 +982,13 @@ def _run_campaign(db, cid: int):
         # Which error classes kill the SMTP vs. just the lead.
         SMTP_FATAL     = {"auth_fail", "smtp_suspended", "smtp_blocked"}
         SMTP_TRANSIENT = {"rate_limit", "connection", "timeout"}
+        # Recipient-level errors that mean the address is permanently dead.
+        # These get suppressed so we never hit them again — in this
+        # campaign or any future one. Soft/content rejects are NOT here:
+        # spam_reject can pass on another IP, so it stays retryable.
+        HARD_BOUNCE    = {"mailbox_not_found", "permanent_reject"}
+        suppress_enabled = cfg.get("auto_suppress_hard_bounces", True)
+        suppressed_set = db.load_suppression_set(uid) if suppress_enabled else set()
 
         def _log_bounce(lead_id, email, error_str, code=0, smtp_host="", smtp_user=""):
             etype = _classify_error(error_str, code)
@@ -996,6 +1003,7 @@ def _run_campaign(db, cid: int):
 
         sent = 0
         failed = 0
+        suppressed = 0
         _lock = threading.Lock()
 
         # Freshness reset barrier — workers pause here while a refresh
@@ -1124,7 +1132,15 @@ def _run_campaign(db, cid: int):
 
         def _build_and_send(server_obj, account, lead_id, email):
             """Build email and send over existing connection. Returns True on success."""
-            nonlocal sent, failed
+            nonlocal sent, failed, suppressed
+            # Skip addresses on the suppression list (dead from a prior
+            # campaign). Mark terminal so they aren't retried, don't open
+            # a connection, don't count as a failure.
+            if suppress_enabled and email.strip().lower() in suppressed_set:
+                with _lock:
+                    db.mark_suppressed(lead_id, "suppressed (prior hard bounce)")
+                    suppressed += 1
+                return True
             cur_from_email = from_email_cfg or account.user
             try:
                 cur_from_name = _process(from_name_cfg, email)
@@ -1216,8 +1232,19 @@ def _run_campaign(db, cid: int):
                                   err_str[:500],
                                   mime_profile_mode if mime_profile_mode != "rotate" else "rotated",
                                   account.host, account.user, uid)
-                    db.mark_failed(lead_id, err_str[:500])
-                    failed += 1
+                    if suppress_enabled and etype in HARD_BOUNCE:
+                        # Dead mailbox — suppress globally and mark terminal
+                        # so neither this campaign's retry passes nor any
+                        # future campaign hits it again.
+                        db.add_suppression(email, reason=etype, bounce_code=code,
+                                           error_message=err_str, source="auto",
+                                           campaign_id=campaign_id, user_id=uid)
+                        suppressed_set.add(email.strip().lower())
+                        db.mark_suppressed(lead_id, err_str[:500])
+                        suppressed += 1
+                    else:
+                        db.mark_failed(lead_id, err_str[:500])
+                        failed += 1
 
                 if etype in SMTP_FATAL:
                     # SMTP account is broken — kick it out of the pool
@@ -1370,7 +1397,8 @@ def _run_campaign(db, cid: int):
 
         status = "FINISHED" if cid not in _runners else "PAUSED"
         from datetime import datetime
-        logger.info("Campaign %d %s: sent=%d, failed=%d", cid, status, sent, failed)
+        logger.info("Campaign %d %s: sent=%d, failed=%d, suppressed=%d",
+                     cid, status, sent, failed, suppressed)
         db.update_campaign(cid, status=status, sent=sent, failed=failed,
                            finished_at=datetime.now().isoformat())
         db.reset_in_progress(lead_list_id)

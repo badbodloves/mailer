@@ -1,7 +1,7 @@
 """Bounce Analytics — error tracking, spam rejection stats, ISP/profile analysis."""
 from html import escape
 from fastapi import APIRouter, Request, Form
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 router = APIRouter()
 
@@ -12,9 +12,45 @@ async def bounces_page(request: Request):
     uid = request.state.user["id"]
     campaigns = [dict(c) for c in db.get_campaigns_with_bounces(uid)]
     stats = db.get_bounce_stats(user_id=uid)
+    suppressions = [dict(s) for s in db.get_suppressions(uid, limit=300)]
+    suppress_count = db.get_suppression_count(uid)
     return request.app.state.templates.TemplateResponse(request, "bounces.html", {
         "active": "bounces", "campaigns": campaigns, "stats": stats, "db": db,
+        "suppressions": suppressions, "suppress_count": suppress_count,
     })
+
+
+@router.post("/bounces/suppress/add")
+async def add_suppression(request: Request, emails: str = Form("")):
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    lines = [e for e in emails.replace(",", "\n").splitlines() if e.strip()]
+    db.import_suppressions(lines, user_id=uid, source="manual")
+    return RedirectResponse("/bounces", status_code=303)
+
+
+@router.post("/bounces/suppress/{sid}/delete")
+async def delete_suppression(request: Request, sid: int):
+    request.app.state.db.delete_suppression(sid)
+    return HTMLResponse("", status_code=200)
+
+
+@router.post("/bounces/suppress/clear")
+async def clear_suppressions(request: Request):
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    db.clear_suppressions(uid)
+    return RedirectResponse("/bounces", status_code=303)
+
+
+@router.get("/bounces/suppress/export")
+async def export_suppressions(request: Request):
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    rows = db.get_suppressions(uid, limit=1000000)
+    body = "\n".join(dict(r)["email"] for r in rows)
+    return Response(content=body, media_type="text/plain",
+                    headers={"Content-Disposition": "attachment; filename=suppressions.txt"})
 
 
 @router.post("/bounces/filter", response_class=HTMLResponse)
