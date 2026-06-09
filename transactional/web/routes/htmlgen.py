@@ -68,7 +68,7 @@ async def htmlgen_page(request: Request):
 @router.post("/htmlgen/generate", response_class=HTMLResponse)
 async def generate_templates(request: Request):
     form = await request.form()
-    count = max(1, min(int(form.get("count", 50)), 5000))
+    count = max(1, min(int(form.get("count", 100)), 50000))
     selected_layouts = form.getlist("layouts")
     primary_color = form.get("primary_color", "")
     accent_color = form.get("accent_color", "")
