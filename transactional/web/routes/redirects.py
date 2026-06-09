@@ -440,6 +440,7 @@ async def generate_s3_redirects(request: Request,
             errors = 0
             for i in range(count):
                 if per_link_bucket:
+                    _s3_progress["stage"] = f"creating bucket {i + 1}/{count}"
                     try:
                         bucket = _spawn_bucket()
                     except Exception as e:
@@ -449,6 +450,7 @@ async def generate_s3_redirects(request: Request,
                         _s3_progress["errors"] = errors
                         continue
                     _s3_progress["bucket"] = bucket
+                    _s3_progress["stage"] = f"uploading object {i + 1}/{count}"
                 else:
                     bucket = shared_bucket
                 key = _random_suffix(10)

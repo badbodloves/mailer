@@ -189,24 +189,38 @@ def make_s3_client(access_key: str, secret_key: str, region: str,
                     proxy: str = ""):
     """Build a boto3 S3 client. `proxy` accepts both URL- and SMTP-style
     strings and supports http://, https://, socks4://, socks5:// schemes.
-    SOCKS routing requires PySocks (ships with urllib3[socks])."""
+    SOCKS routing requires PySocks (ships with urllib3[socks]).
+
+    A short timeout (10s connect, 30s read) + low retries are configured
+    so a single bad bucket operation can't stall the generator for
+    minutes — the caller already retries the propagation-sensitive
+    calls with its own short backoff."""
     import boto3
-    kwargs = dict(
-        aws_access_key_id=access_key,
-        aws_secret_access_key=secret_key,
-        region_name=region,
-    )
+    from botocore.config import Config
+
     proxy = _normalize_proxy(proxy)
+    cfg_kwargs = {
+        "connect_timeout": 10,
+        "read_timeout": 30,
+        "retries": {"max_attempts": 3, "mode": "standard"},
+    }
     if proxy:
         if proxy.startswith(("socks4://", "socks4a://", "socks5://", "socks5h://")):
             _patch_botocore_socks()
-        from botocore.config import Config
-        kwargs["config"] = Config(proxies={"http": proxy, "https": proxy})
-    return boto3.client("s3", **kwargs)
+        cfg_kwargs["proxies"] = {"http": proxy, "https": proxy}
+
+    return boto3.client(
+        "s3",
+        aws_access_key_id=access_key,
+        aws_secret_access_key=secret_key,
+        region_name=region,
+        config=Config(**cfg_kwargs),
+    )
 
 
 def create_public_bucket(s3, bucket: str, region: str):
     """Create bucket and configure for public-read static hosting."""
+    import time as _t
     if region == "us-east-1":
         s3.create_bucket(Bucket=bucket)
     else:
@@ -215,12 +229,38 @@ def create_public_bucket(s3, bucket: str, region: str):
             CreateBucketConfiguration={"LocationConstraint": region},
         )
 
-    s3.delete_public_access_block(Bucket=bucket)
+    # Wait for AWS's regional control plane to acknowledge the new
+    # bucket. Without this delay the next API call (put_bucket_policy
+    # etc.) often hits "NoSuchBucket" briefly and triggers boto3's
+    # default retry chain, which makes single-bucket creation feel
+    # like it's hanging. head_bucket polls cheaply until the bucket
+    # is visible.
+    waiter_max = 8
+    for i in range(waiter_max):
+        try:
+            s3.head_bucket(Bucket=bucket)
+            break
+        except Exception:
+            _t.sleep(0.4)
 
-    s3.put_bucket_ownership_controls(
+    # Each of the following calls can still fail with NoSuchBucket on
+    # an unlucky propagation window. Retry each one a couple of times.
+    def _retry(fn, attempts: int = 3, delay: float = 0.5):
+        last = None
+        for _ in range(attempts):
+            try:
+                return fn()
+            except Exception as e:
+                last = e
+                _t.sleep(delay)
+        if last:
+            raise last
+
+    _retry(lambda: s3.delete_public_access_block(Bucket=bucket))
+    _retry(lambda: s3.put_bucket_ownership_controls(
         Bucket=bucket,
         OwnershipControls={"Rules": [{"ObjectOwnership": "BucketOwnerPreferred"}]},
-    )
+    ))
 
     import json as _json
     policy = {
@@ -233,7 +273,7 @@ def create_public_bucket(s3, bucket: str, region: str):
             "Resource": f"arn:aws:s3:::{bucket}/*",
         }],
     }
-    s3.put_bucket_policy(Bucket=bucket, Policy=_json.dumps(policy))
+    _retry(lambda: s3.put_bucket_policy(Bucket=bucket, Policy=_json.dumps(policy)))
 
 
 def generate_links(
