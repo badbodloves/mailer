@@ -134,11 +134,16 @@
             </div>
             <label style="margin-top:8px">Region</label>
             <select name="region">
-                <option value="random" selected>&#127922; Random (any region)</option>
+                <option value="random" selected>&#127922; Random — popular regions only</option>
                 {% for r in aws_regions %}
                 <option value="{{ r }}">{{ r }}</option>
                 {% endfor %}
             </select>
+            <div class="form-help" style="margin-top:4px">
+                Random pool: us-east-1/2, us-west-1/2, eu-west-1/2/3, eu-central-1,
+                eu-north-1, ca-central-1, ap-northeast-1, ap-southeast-1/2.
+                With <em>Unique bucket per link</em> on, each bucket draws a fresh region from this pool.
+            </div>
             <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-weight:400;cursor:pointer">
                 <input type="checkbox" name="bot_filter" value="1" checked style="margin:0;width:auto">
                 <span>Bot Filter</span>

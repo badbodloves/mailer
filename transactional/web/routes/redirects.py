@@ -25,6 +25,17 @@ AWS_REGIONS = [
     "il-central-1",
 ]
 
+# Subset used when picking a fresh region per-bucket. Restricted to
+# regions with broad CDN propagation and zero opt-in friction — leaves
+# out Brazil, Israel, Middle East, South Africa, opt-in APAC etc.
+POPULAR_AWS_REGIONS = [
+    "us-east-1", "us-east-2", "us-west-1", "us-west-2",
+    "eu-west-1", "eu-west-2", "eu-west-3",
+    "eu-central-1", "eu-north-1",
+    "ca-central-1",
+    "ap-northeast-1", "ap-southeast-1", "ap-southeast-2",
+]
+
 _gen_progress = {"running": False, "total": 0, "done": 0, "ok": 0, "errors": 0}
 _s3_progress = {"running": False, "total": 0, "done": 0, "ok": 0, "errors": 0,
                 "bucket": "", "stage": "", "region": "",
@@ -374,8 +385,9 @@ async def generate_s3_redirects(request: Request,
     db = request.app.state.db
     uid = request.state.user["id"]
     region_override = (region or "").strip().lower()
-    if region_override == "random" or not region_override:
-        chosen_region = random.choice(AWS_REGIONS)
+    region_was_random = region_override in ("random", "")
+    if region_was_random:
+        chosen_region = random.choice(POPULAR_AWS_REGIONS)
     elif region_override not in AWS_REGIONS:
         return HTMLResponse(f'<div class="alert alert-warning">Unknown region: {escape(region_override)}</div>')
     else:
@@ -401,30 +413,44 @@ async def generate_s3_redirects(request: Request,
 
     use_bot_filter = bool(bot_filter)
     per_link_bucket = bool(unique_bucket)
+    # Each fresh bucket picks its own region from POPULAR_AWS_REGIONS
+    # only when the user asked for "Random" — if they picked a specific
+    # region we respect it across the whole batch.
+    region_per_bucket = per_link_bucket and region_was_random
     _s3_progress.update(running=True, total=count, done=0, ok=0, errors=0,
                          bucket="", stage="creating bucket", region=region,
                          last_error="", aborted=False)
-    logger.info("S3 gen: account=%s region=%s count=%d target=%s",
-                account_label or "(primary)", region, count, target[:80])
+    logger.info("S3 gen: account=%s region=%s region_per_bucket=%s count=%d target=%s",
+                account_label or "(primary)", region, region_per_bucket, count, target[:80])
 
     def worker():
         try:
             from mailer.s3_redirect import _new_bucket_name, make_s3_client, create_public_bucket
             from mailer.s3_redirect import _redirect_html, _random_suffix
 
-            s3 = make_s3_client(access_key, secret_key, region, proxy=proxy)
+            # Cache one S3 client per region. With region_per_bucket=False
+            # this is just a single client; with True we lazily build one
+            # for every region we hit, but no more than ~12 ever exist.
+            s3_clients = {}
+            def _client_for(r: str):
+                if r not in s3_clients:
+                    s3_clients[r] = make_s3_client(
+                        access_key, secret_key, r, proxy=proxy)
+                return s3_clients[r]
+
             body = _redirect_html(target, bot_filter=use_bot_filter).encode("utf-8")
 
-            def _spawn_bucket():
-                """Create one fresh bucket, return its name (retries on collision)."""
+            def _spawn_bucket(r: str):
+                """Create one fresh bucket in region r, return its name."""
+                cli = _client_for(r)
                 b = _new_bucket_name(bucket_prefix, tag)
                 for attempt in range(3):
                     try:
-                        create_public_bucket(s3, b, region)
+                        create_public_bucket(cli, b, r)
                         return b
-                    except s3.exceptions.BucketAlreadyOwnedByYou:
+                    except cli.exceptions.BucketAlreadyOwnedByYou:
                         return b
-                    except s3.exceptions.BucketAlreadyExists:
+                    except cli.exceptions.BucketAlreadyExists:
                         b = _new_bucket_name(bucket_prefix, tag)
                     except Exception as e:
                         if attempt == 2:
@@ -435,7 +461,7 @@ async def generate_s3_redirects(request: Request,
 
             shared_bucket = None
             if not per_link_bucket:
-                shared_bucket = _spawn_bucket()
+                shared_bucket = _spawn_bucket(region)
                 _s3_progress["bucket"] = shared_bucket
 
             _s3_progress["stage"] = "uploading" if not per_link_bucket else "creating buckets + uploading"
@@ -457,29 +483,43 @@ async def generate_s3_redirects(request: Request,
                     break
 
                 if per_link_bucket:
-                    _s3_progress["stage"] = f"creating bucket {i + 1}/{count}"
+                    this_region = (
+                        random.choice(POPULAR_AWS_REGIONS)
+                        if region_per_bucket else region
+                    )
+                    _s3_progress["region"] = this_region
+                    _s3_progress["stage"] = (
+                        f"creating bucket {i + 1}/{count} in {this_region}"
+                    )
                     try:
-                        bucket = _spawn_bucket()
+                        bucket = _spawn_bucket(this_region)
                     except Exception as e:
                         errors += 1
                         consecutive += 1
-                        _s3_progress["last_error"] = f"bucket {i+1}: {str(e)[:300]}"
-                        logger.warning("Per-link bucket %d failed: %s", i + 1, e)
+                        _s3_progress["last_error"] = (
+                            f"bucket {i+1} ({this_region}): {str(e)[:300]}"
+                        )
+                        logger.warning("Per-link bucket %d in %s failed: %s",
+                                        i + 1, this_region, e)
                         _s3_progress["done"] = i + 1
                         _s3_progress["errors"] = errors
                         continue
                     _s3_progress["bucket"] = bucket
-                    _s3_progress["stage"] = f"uploading object {i + 1}/{count}"
+                    _s3_progress["stage"] = (
+                        f"uploading object {i + 1}/{count} ({this_region})"
+                    )
                 else:
                     bucket = shared_bucket
+                    this_region = region
                 key = _random_suffix(10)
                 try:
-                    s3.put_object(
+                    cli = _client_for(this_region)
+                    cli.put_object(
                         Bucket=bucket, Key=key, Body=body,
                         ContentType="text/html; charset=utf-8",
                         CacheControl="no-cache",
                     )
-                    url = f"https://s3.{region}.amazonaws.com/{bucket}/{key}"
+                    url = f"https://s3.{this_region}.amazonaws.com/{bucket}/{key}"
                     db.add_redirect(url, target, gen_uid, pool_id)
                     ok += 1
                     consecutive = 0   # success resets the streak
