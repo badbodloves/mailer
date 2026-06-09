@@ -32,7 +32,8 @@ async def save_config(request: Request):
 
     for key in ["threads", "warmup_count", "smtp_timeout", "test_interval",
                  "logo_max_colors", "logo_rotate_every", "redirect_rotate_every",
-                 "redirect_gen_threads", "proxy_rotate_every", "html_rotate_every"]:
+                 "redirect_gen_threads", "proxy_rotate_every", "html_rotate_every",
+                 "freshness_every_n_mails", "freshness_html_count", "freshness_logo_count"]:
         if key in form:
             try:
                 cfg[key] = int(form[key])
@@ -48,7 +49,8 @@ async def save_config(request: Request):
 
     for key in ["ignore_ssl_errors", "antifingerprint_classes",
                  "advanced_antifingerprint", "image_enabled", "image_quantize",
-                 "image_downscale", "redirect_enabled", "auto_retry_failed"]:
+                 "image_downscale", "redirect_enabled", "auto_retry_failed",
+                 "freshness_reset_html", "freshness_reset_logos"]:
         cfg[key] = key in form
 
     db.save_config(cfg)

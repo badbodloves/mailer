@@ -772,7 +772,10 @@ def _run_campaign(db, cid: int):
             afp = None
 
         campaign_template_id = camp.get("template_id", 0) or 0
-        html_bodies = db.get_all_template_htmls(uid, template_id=campaign_template_id)
+        # html_bodies + logo_variants are kept as mutable lists so the
+        # freshness monitor can swap their contents in-place during the
+        # send (workers read via random.choice which sees the swap).
+        html_bodies = list(db.get_all_template_htmls(uid, template_id=campaign_template_id))
 
         macros = {}
         for m in db.get_active_macros(uid):
@@ -785,13 +788,16 @@ def _run_campaign(db, cid: int):
         from_email_cfg = cfg.get("from_email", "")
         subject_cfg = cfg.get("subject", "") or "Notification"
 
-        # Logo setup — load from template's logo group variant dir
+        # Logo setup — load from template's logo group variant dir.
+        # logo_variants stays mutable so freshness reset can swap it.
         logo_variants = []
         logo_cdn_urls = []
+        logo_group_id = 0
+        group_logos_for_freshness = []   # source logos so freshness can re-derive
+        _group_variant_dir = None        # only defined when image_enabled
         if cfg.get("image_enabled"):
             import glob
             from .logos import VARIANT_DIR, UPLOAD_DIR, _group_variant_dir, _resolve_path as _resolve_logo
-            logo_group_id = 0
             if campaign_template_id:
                 tpl_row = db.get_template(campaign_template_id)
                 if tpl_row:
@@ -801,13 +807,18 @@ def _run_campaign(db, cid: int):
                 gdir = _group_variant_dir(logo_group_id)
                 variant_files = sorted(glob.glob(os.path.join(gdir, "*")))
                 if variant_files:
-                    logo_variants = variant_files
+                    logo_variants = list(variant_files)
                     logger.info("Campaign %d: %d variants from group %d", cid, len(logo_variants), logo_group_id)
                 else:
                     group_logos = db.get_logos_by_group(logo_group_id)
                     logo_variants = [_resolve_logo(dict(l)["file_path"]) for l in group_logos]
                     logo_variants = [p for p in logo_variants if os.path.isfile(p)]
                     logger.info("Campaign %d: %d source logos from group %d (no variants)", cid, len(logo_variants), logo_group_id)
+                # Cache source logos as dicts so freshness can pass them in
+                try:
+                    group_logos_for_freshness = [dict(l) for l in db.get_logos_by_group(logo_group_id)]
+                except Exception:
+                    group_logos_for_freshness = []
 
             if not logo_variants:
                 variant_files = sorted(glob.glob(os.path.join(VARIANT_DIR, "v_*")))
@@ -980,6 +991,72 @@ def _run_campaign(db, cid: int):
         failed = 0
         _lock = threading.Lock()
 
+        # Freshness reset barrier — workers pause here while a refresh
+        # of the HTML pool and/or logo variant set happens mid-send.
+        freshness_barrier = threading.Event()
+        freshness_barrier.set()
+        freshness_every = int(cfg.get("freshness_every_n_mails", 0) or 0)
+        freshness_html  = bool(cfg.get("freshness_reset_html", False))
+        freshness_logos = bool(cfg.get("freshness_reset_logos", False))
+
+        def _freshness_monitor():
+            """Watches the global `sent` counter and triggers a refresh
+            every `freshness_every` successful mails. Runs in its own
+            daemon thread; failures are logged but never bubble up."""
+            if freshness_every <= 0 or not (freshness_html or freshness_logos):
+                return
+            next_reset_at = freshness_every
+            while campaign_id in _runners:
+                time.sleep(2)
+                with _lock:
+                    cur_sent = sent
+                if cur_sent < next_reset_at:
+                    continue
+                logger.info("Campaign %d: freshness reset triggered at sent=%d",
+                             cid, cur_sent)
+                freshness_barrier.clear()
+                # Give in-flight builds a moment to finish before we swap
+                time.sleep(0.5)
+                try:
+                    if freshness_html:
+                        new_bodies = []
+                        from mailer.freshness import regenerate_html_pool
+                        try:
+                            new_bodies = regenerate_html_pool(
+                                count=int(cfg.get("freshness_html_count", 25) or 25))
+                        except Exception as e:
+                            logger.warning("Campaign %d: html regen failed: %s", cid, e)
+                        if new_bodies:
+                            html_bodies.clear()
+                            html_bodies.extend(new_bodies)
+                            logger.info("Campaign %d: html pool refreshed (%d new bodies)",
+                                         cid, len(new_bodies))
+
+                    if freshness_logos and logo_group_id and group_logos_for_freshness:
+                        from mailer.freshness import regenerate_logo_variants
+                        try:
+                            gdir = _group_variant_dir(logo_group_id)
+                            new_vars = regenerate_logo_variants(
+                                group_logos_for_freshness,
+                                gdir,
+                                int(cfg.get("freshness_logo_count", 25) or 25),
+                                max_colors=int(cfg.get("logo_max_colors", 256) or 256),
+                                quantize=bool(cfg.get("image_quantize", True)),
+                                downscale=bool(cfg.get("image_downscale", False)),
+                            )
+                            if new_vars:
+                                logo_variants.clear()
+                                logo_variants.extend(new_vars)
+                                logger.info("Campaign %d: logo variants refreshed (%d new)",
+                                             cid, len(new_vars))
+                        except Exception as e:
+                            logger.warning("Campaign %d: logo regen failed: %s", cid, e)
+                except Exception as e:
+                    logger.error("Campaign %d: freshness reset crashed: %s", cid, e)
+                finally:
+                    next_reset_at = cur_sent + freshness_every
+                    freshness_barrier.set()
+
         test_interval = cfg.get("test_interval", 0)
         interval_recips_raw = cfg.get("interval_recipients", "") or cfg.get("test_recipients", "")
         interval_recips = [r.strip() for r in interval_recips_raw.split(",") if r.strip()]
@@ -996,6 +1073,7 @@ def _run_campaign(db, cid: int):
                 last_t, last_s = now_t, sent
 
         threading.Thread(target=speed_tracker, daemon=True).start()
+        threading.Thread(target=_freshness_monitor, daemon=True).start()
 
         def _process(text, email):
             user = email.split("@")[0] if "@" in email else email
@@ -1174,6 +1252,11 @@ def _run_campaign(db, cid: int):
 
                 try:
                     while campaign_id in _runners:
+                        # Block here while a freshness reset swaps the
+                        # html_bodies / logo_variants under us. Returns
+                        # immediately when the barrier is set (default).
+                        freshness_barrier.wait(timeout=30)
+
                         try:
                             lead_id, email = mail_queue.get(timeout=2)
                         except queue.Empty:

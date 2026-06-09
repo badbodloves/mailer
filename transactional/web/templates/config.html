@@ -162,6 +162,27 @@
             <label>MXToolbox API Key</label>
             <input name="mxtoolbox_api_key" value="{{ cfg.mxtoolbox_api_key or '' }}" placeholder="For pre-flight IP check">
         </div>
+        <div class="card">
+            <h3>Auto-Freshness Reset</h3>
+            <div class="form-help" style="margin-bottom:8px">
+                During long campaigns, periodically pause sending and regenerate the HTML template pool
+                and/or logo variants. Each reset takes 5-15 seconds. 0 = off.
+            </div>
+            <label>Reset every N mails (0 = disabled)</label>
+            <input name="freshness_every_n_mails" type="number" min="0" max="100000" value="{{ cfg.freshness_every_n_mails or 0 }}" placeholder="e.g. 500">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px">
+                <input type="checkbox" name="freshness_reset_html" {{ 'checked' if cfg.freshness_reset_html }} style="width:auto">
+                <span>Regenerate HTML templates (random layouts)</span>
+            </label>
+            <label>How many HTMLs per reset</label>
+            <input name="freshness_html_count" type="number" min="1" max="500" value="{{ cfg.freshness_html_count or 25 }}">
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px">
+                <input type="checkbox" name="freshness_reset_logos" {{ 'checked' if cfg.freshness_reset_logos }} style="width:auto">
+                <span>Regenerate logo variants (wipe and re-derive from source logos)</span>
+            </label>
+            <label>How many variants per reset</label>
+            <input name="freshness_logo_count" type="number" min="1" max="500" value="{{ cfg.freshness_logo_count or 25 }}">
+        </div>
     </div>
 </div>
 <div style="margin-top:16px"><button class="btn btn-primary" style="padding:12px 24px">Save All Settings</button></div>

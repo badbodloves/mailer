@@ -352,6 +352,17 @@ class TransDB:
                 user_id INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 finished_at TIMESTAMP)"""),
+            ("trans_s3_accounts", """CREATE TABLE IF NOT EXISTS trans_s3_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                access_key TEXT NOT NULL,
+                secret_key TEXT NOT NULL,
+                region TEXT DEFAULT 'eu-central-1',
+                bucket_prefix TEXT DEFAULT 'lk',
+                proxy_id INTEGER DEFAULT 0,
+                is_primary INTEGER DEFAULT 0,
+                user_id INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
         ]:
             if new_tbl not in tables:
                 c.execute(create_sql)
@@ -394,6 +405,11 @@ class TransDB:
         "aws_access_key": "", "aws_secret_key": "",
         "aws_region": "eu-central-1", "s3_bucket_prefix": "lk",
         "aws_proxy_id": 0,
+        "freshness_every_n_mails": 0,
+        "freshness_reset_html": False,
+        "freshness_reset_logos": False,
+        "freshness_html_count": 25,
+        "freshness_logo_count": 25,
     }
 
     def get_config(self) -> dict:
@@ -1237,4 +1253,80 @@ class TransDB:
     def delete_export_job(self, jid: int):
         c = self._conn()
         c.execute("DELETE FROM trans_export_jobs WHERE id=?", (jid,))
+        c.commit()
+
+    # ── S3 Accounts ──────────────────────────────────────
+    def add_s3_account(self, name, access_key, secret_key,
+                        region="eu-central-1", bucket_prefix="lk",
+                        proxy_id=0, user_id=0):
+        c = self._conn()
+        existing = c.execute("SELECT COUNT(*) FROM trans_s3_accounts WHERE user_id=?",
+                              (user_id,)).fetchone()[0]
+        is_primary = 1 if existing == 0 else 0
+        c.execute("INSERT INTO trans_s3_accounts "
+                  "(name,access_key,secret_key,region,bucket_prefix,proxy_id,is_primary,user_id) "
+                  "VALUES (?,?,?,?,?,?,?,?)",
+                  (name, access_key, secret_key, region, bucket_prefix,
+                   proxy_id, is_primary, user_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_s3_accounts(self, user_id=0):
+        if user_id:
+            return self._conn().execute(
+                "SELECT * FROM trans_s3_accounts WHERE user_id=? ORDER BY is_primary DESC, name",
+                (user_id,)).fetchall()
+        return self._conn().execute(
+            "SELECT * FROM trans_s3_accounts ORDER BY is_primary DESC, name").fetchall()
+
+    def get_s3_account(self, aid):
+        return self._conn().execute(
+            "SELECT * FROM trans_s3_accounts WHERE id=?", (aid,)).fetchone()
+
+    def get_primary_s3_account(self, user_id=0):
+        if user_id:
+            row = self._conn().execute(
+                "SELECT * FROM trans_s3_accounts WHERE user_id=? AND is_primary=1 LIMIT 1",
+                (user_id,)).fetchone()
+            if row:
+                return row
+            return self._conn().execute(
+                "SELECT * FROM trans_s3_accounts WHERE user_id=? ORDER BY id LIMIT 1",
+                (user_id,)).fetchone()
+        row = self._conn().execute(
+            "SELECT * FROM trans_s3_accounts WHERE is_primary=1 LIMIT 1").fetchone()
+        if row:
+            return row
+        return self._conn().execute(
+            "SELECT * FROM trans_s3_accounts ORDER BY id LIMIT 1").fetchone()
+
+    def set_primary_s3_account(self, aid):
+        c = self._conn()
+        row = c.execute("SELECT user_id FROM trans_s3_accounts WHERE id=?", (aid,)).fetchone()
+        if not row:
+            return
+        c.execute("UPDATE trans_s3_accounts SET is_primary=0 WHERE user_id=?", (row["user_id"],))
+        c.execute("UPDATE trans_s3_accounts SET is_primary=1 WHERE id=?", (aid,))
+        c.commit()
+
+    def update_s3_account(self, aid, **fields):
+        if not fields:
+            return
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in fields)
+        c.execute(f"UPDATE trans_s3_accounts SET {sets} WHERE id=?",
+                  list(fields.values()) + [aid])
+        c.commit()
+
+    def delete_s3_account(self, aid):
+        c = self._conn()
+        was_primary = c.execute(
+            "SELECT is_primary, user_id FROM trans_s3_accounts WHERE id=?", (aid,)).fetchone()
+        c.execute("DELETE FROM trans_s3_accounts WHERE id=?", (aid,))
+        if was_primary and was_primary[0]:
+            first = c.execute(
+                "SELECT id FROM trans_s3_accounts WHERE user_id=? ORDER BY id LIMIT 1",
+                (was_primary["user_id"],)).fetchone()
+            if first:
+                c.execute("UPDATE trans_s3_accounts SET is_primary=1 WHERE id=?", (first[0],))
         c.commit()

@@ -38,7 +38,8 @@ async def redirects_page(request: Request):
     count = db.get_redirect_count(uid)
     redirect_pools = [dict(p, count=db.get_redirect_pool_count(p["id"])) for p in db.get_redirect_pools(uid)]
     cfg = db.get_config()
-    s3_configured = bool(cfg.get("aws_access_key") and cfg.get("aws_secret_key"))
+    s3_accounts = [dict(a) for a in db.get_s3_accounts(uid)]
+    s3_configured = bool(s3_accounts) or bool(cfg.get("aws_access_key") and cfg.get("aws_secret_key"))
     proxies = [dict(p) for p in db.get_proxies(uid)]
     return request.app.state.templates.TemplateResponse(request, "redirects.html", {
         "active": "redirects", "redirects": redirects, "db": db,
@@ -47,6 +48,7 @@ async def redirects_page(request: Request):
         "s3_configured": s3_configured, "cfg": cfg,
         "aws_regions": AWS_REGIONS,
         "proxies": proxies,
+        "s3_accounts": s3_accounts,
     })
 
 
@@ -60,6 +62,48 @@ def _resolve_proxy(db, cfg: dict) -> str:
     if not row:
         return ""
     return (dict(row).get("value") or "").strip()
+
+
+def _resolve_proxy_by_id(db, proxy_id: int) -> str:
+    if not proxy_id:
+        return ""
+    row = db.get_proxy(proxy_id)
+    if not row:
+        return ""
+    return (dict(row).get("value") or "").strip()
+
+
+def _resolve_s3_account(db, uid: int, account_id: int = 0,
+                        region_override: str = "") -> dict:
+    """Return {name, access_key, secret_key, region, bucket_prefix, proxy_val}.
+    Picks the specified account or the primary if 0. Falls back to the
+    legacy flat config if no accounts exist."""
+    row = None
+    if account_id:
+        row = db.get_s3_account(account_id)
+    if row is None:
+        row = db.get_primary_s3_account(uid)
+    if row is not None:
+        r = dict(row)
+        region = (region_override or r.get("region") or "eu-central-1").strip()
+        return {
+            "name": r.get("name", ""),
+            "access_key": (r.get("access_key") or "").strip(),
+            "secret_key": (r.get("secret_key") or "").strip(),
+            "region": region or "eu-central-1",
+            "bucket_prefix": (r.get("bucket_prefix") or "lk").strip() or "lk",
+            "proxy_val": _resolve_proxy_by_id(db, r.get("proxy_id", 0) or 0),
+        }
+    # Legacy fall-through
+    cfg = db.get_config()
+    return {
+        "name": "(legacy)",
+        "access_key": (cfg.get("aws_access_key") or "").strip(),
+        "secret_key": (cfg.get("aws_secret_key") or "").strip(),
+        "region": (region_override or cfg.get("aws_region") or "eu-central-1").strip() or "eu-central-1",
+        "bucket_prefix": (cfg.get("s3_bucket_prefix") or "lk").strip() or "lk",
+        "proxy_val": _resolve_proxy(db, cfg),
+    }
 
 
 def _parse_s3_url(url: str) -> tuple:
@@ -82,6 +126,60 @@ async def toggle_append_ref(request: Request, append_ref: str = Form("")):
     return RedirectResponse("/redirects", status_code=303)
 
 
+@router.post("/redirects/s3-accounts/add")
+async def add_s3_account(request: Request,
+                          name: str = Form(""),
+                          access_key: str = Form(""),
+                          secret_key: str = Form(""),
+                          region: str = Form("eu-central-1"),
+                          bucket_prefix: str = Form("lk"),
+                          proxy_id: int = Form(0)):
+    if not (name.strip() and access_key.strip() and secret_key.strip()):
+        return RedirectResponse("/redirects", status_code=303)
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    db.add_s3_account(name.strip(), access_key.strip(), secret_key.strip(),
+                      region.strip() or "eu-central-1",
+                      bucket_prefix.strip() or "lk",
+                      int(proxy_id or 0), uid)
+    return RedirectResponse("/redirects", status_code=303)
+
+
+@router.post("/redirects/s3-accounts/{aid}/update")
+async def update_s3_account(request: Request, aid: int,
+                             name: str = Form(""),
+                             access_key: str = Form(""),
+                             secret_key: str = Form(""),
+                             region: str = Form("eu-central-1"),
+                             bucket_prefix: str = Form("lk"),
+                             proxy_id: int = Form(0)):
+    fields = {}
+    if name.strip():
+        fields["name"] = name.strip()
+    if access_key.strip():
+        fields["access_key"] = access_key.strip()
+    if secret_key.strip():
+        fields["secret_key"] = secret_key.strip()
+    if region.strip():
+        fields["region"] = region.strip()
+    fields["bucket_prefix"] = bucket_prefix.strip() or "lk"
+    fields["proxy_id"] = int(proxy_id or 0)
+    request.app.state.db.update_s3_account(aid, **fields)
+    return RedirectResponse("/redirects", status_code=303)
+
+
+@router.post("/redirects/s3-accounts/{aid}/set-primary")
+async def set_primary_s3_account(request: Request, aid: int):
+    request.app.state.db.set_primary_s3_account(aid)
+    return RedirectResponse("/redirects", status_code=303)
+
+
+@router.post("/redirects/s3-accounts/{aid}/delete")
+async def delete_s3_account(request: Request, aid: int):
+    request.app.state.db.delete_s3_account(aid)
+    return RedirectResponse("/redirects", status_code=303)
+
+
 @router.post("/redirects/s3-config")
 async def save_s3_config(request: Request,
                           aws_access_key: str = Form(""),
@@ -99,25 +197,26 @@ async def save_s3_config(request: Request,
 
 
 @router.post("/redirects/s3-test", response_class=HTMLResponse)
-async def test_s3_connection(request: Request):
-    """Run a fast list_buckets to verify creds + proxy."""
+async def test_s3_connection(request: Request,
+                              s3_account_id: int = Form(0)):
+    """Run a fast list_buckets to verify creds + proxy for the chosen
+    (or primary) S3 account."""
     db = request.app.state.db
-    cfg = db.get_config()
-    access = cfg.get("aws_access_key", "").strip()
-    secret = cfg.get("aws_secret_key", "").strip()
-    region = cfg.get("aws_region", "eu-central-1").strip() or "eu-central-1"
-    proxy = _resolve_proxy(db, cfg)
-    if not access or not secret:
-        return HTMLResponse('<div class="alert alert-warning">Missing credentials.</div>')
+    uid = request.state.user["id"]
+    acc = _resolve_s3_account(db, uid, int(s3_account_id or 0))
+    if not acc["access_key"] or not acc["secret_key"]:
+        return HTMLResponse('<div class="alert alert-warning">Missing credentials for this account.</div>')
     try:
         from mailer.s3_redirect import make_s3_client
-        s3 = make_s3_client(access, secret, region, proxy=proxy)
+        s3 = make_s3_client(acc["access_key"], acc["secret_key"],
+                            acc["region"], proxy=acc["proxy_val"])
         resp = s3.list_buckets()
         n = len(resp.get("Buckets", []))
-        proxy_str = f" via proxy <code>{escape(proxy)}</code>" if proxy else ""
+        proxy_str = f" via proxy <code>{escape(acc['proxy_val'])}</code>" if acc["proxy_val"] else ""
+        label = f" [{escape(acc['name'])}]" if acc.get("name") else ""
         return HTMLResponse(
-            f'<div class="alert alert-success">OK — {n} bucket(s) visible '
-            f'(region {escape(region)}){proxy_str}.</div>'
+            f'<div class="alert alert-success">OK{label} — {n} bucket(s) visible '
+            f'(region {escape(acc["region"])}){proxy_str}.</div>'
         )
     except Exception as e:
         return HTMLResponse(
@@ -259,7 +358,8 @@ async def generate_s3_redirects(request: Request,
                                  region: str = Form("random"),
                                  pool_id: int = Form(0),
                                  bot_filter: str = Form(""),
-                                 unique_bucket: str = Form("")):
+                                 unique_bucket: str = Form(""),
+                                 s3_account_id: int = Form(0)):
     target = target_url.strip()
     if not target:
         return HTMLResponse('<div class="alert alert-warning">Enter a target URL.</div>')
@@ -269,31 +369,39 @@ async def generate_s3_redirects(request: Request,
         return HTMLResponse('<div class="alert alert-warning">S3 generation already running.</div>')
 
     db = request.app.state.db
-    cfg = db.get_config()
-    access_key = cfg.get("aws_access_key", "").strip()
-    secret_key = cfg.get("aws_secret_key", "").strip()
-    bucket_prefix = cfg.get("s3_bucket_prefix", "lk").strip() or "lk"
-    proxy = _resolve_proxy(db, cfg)
+    uid = request.state.user["id"]
+    region_override = (region or "").strip().lower()
+    if region_override == "random" or not region_override:
+        chosen_region = random.choice(AWS_REGIONS)
+    elif region_override not in AWS_REGIONS:
+        return HTMLResponse(f'<div class="alert alert-warning">Unknown region: {escape(region_override)}</div>')
+    else:
+        chosen_region = region_override
+
+    acc = _resolve_s3_account(db, uid, int(s3_account_id or 0),
+                               region_override=chosen_region)
+    access_key = acc["access_key"]
+    secret_key = acc["secret_key"]
+    bucket_prefix = acc["bucket_prefix"]
+    proxy = acc["proxy_val"]
+    region = acc["region"]
+    account_label = acc.get("name", "")
 
     if not access_key or not secret_key:
         return HTMLResponse(
-            '<div class="alert alert-warning">AWS credentials missing. '
-            'Save them in the S3 Settings box above.</div>'
+            '<div class="alert alert-warning">AWS credentials missing for the selected account. '
+            'Add an S3 account in the S3 Accounts box below.</div>'
         )
 
-    region = (region or "").strip().lower()
-    if region == "random" or not region:
-        region = random.choice(AWS_REGIONS)
-    elif region not in AWS_REGIONS:
-        return HTMLResponse(f'<div class="alert alert-warning">Unknown region: {escape(region)}</div>')
-
     count = max(1, min(count, 5000))
-    gen_uid = request.state.user["id"]
+    gen_uid = uid
 
     use_bot_filter = bool(bot_filter)
     per_link_bucket = bool(unique_bucket)
     _s3_progress.update(running=True, total=count, done=0, ok=0, errors=0,
                          bucket="", stage="creating bucket", region=region)
+    logger.info("S3 gen: account=%s region=%s count=%d target=%s",
+                account_label or "(primary)", region, count, target[:80])
 
     def worker():
         try:

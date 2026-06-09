@@ -111,6 +111,14 @@
         </div>
         {% endif %}
         <form hx-post="/redirects/generate-s3" hx-target="#s3-result" hx-swap="innerHTML">
+            {% if s3_accounts %}
+            <label>S3 Account</label>
+            <select name="s3_account_id">
+                {% for a in s3_accounts %}
+                <option value="{{ a.id }}" {{ 'selected' if a.is_primary }}>{{ a.name }}{{ ' (Primary)' if a.is_primary }} — {{ a.region }}</option>
+                {% endfor %}
+            </select>
+            {% endif %}
             <label>Pool (optional)</label>
             <select name="pool_id">
                 <option value="0">No Pool (global)</option>
@@ -151,49 +159,114 @@
 </div>
 
 <div class="card">
-    <div class="card-header"><h3>S3 Settings</h3></div>
-    <form method="post" action="/redirects/s3-config">
-        <div class="form-row">
-            <div>
-                <label>AWS Access Key ID</label>
-                <input name="aws_access_key" value="{{ cfg.aws_access_key or '' }}" placeholder="AKIA...">
+    <div class="card-header"><h3>S3 Accounts</h3></div>
+    {% if s3_accounts %}
+    <table style="margin-bottom:12px">
+        <thead><tr><th>Name</th><th>Access Key</th><th>Region</th><th>Prefix</th><th>Proxy</th><th>Primary</th><th></th></tr></thead>
+        <tbody>
+        {% for a in s3_accounts %}
+        <tr>
+            <td style="font-weight:500">{{ a.name }}</td>
+            <td style="font-family:monospace;font-size:11px">{{ a.access_key[:8] }}…{{ a.access_key[-4:] }}</td>
+            <td><span class="badge badge-info">{{ a.region }}</span></td>
+            <td style="font-family:monospace;font-size:11px">{{ a.bucket_prefix }}</td>
+            <td style="font-size:11px;color:var(--fg2)">
+                {% if a.proxy_id %}
+                {% for p in proxies %}{% if p.id == a.proxy_id %}{{ p.name }}{% endif %}{% endfor %}
+                {% else %}—{% endif %}
+            </td>
+            <td>
+                {% if a.is_primary %}<span class="badge badge-running">Primary</span>
+                {% else %}
+                <form method="post" action="/redirects/s3-accounts/{{ a.id }}/set-primary" style="display:inline">
+                    <button class="btn btn-secondary btn-xs">Set Primary</button>
+                </form>
+                {% endif %}
+            </td>
+            <td style="white-space:nowrap">
+                <details style="display:inline-block;vertical-align:middle">
+                    <summary class="btn btn-secondary btn-xs" style="display:inline-block">Edit</summary>
+                    <form method="post" action="/redirects/s3-accounts/{{ a.id }}/update"
+                          style="margin-top:6px;padding:8px;border:1px solid var(--border-light);border-radius:var(--radius);min-width:300px">
+                        <label style="font-size:11px">Name</label>
+                        <input name="name" value="{{ a.name }}">
+                        <label style="font-size:11px">Access Key</label>
+                        <input name="access_key" value="{{ a.access_key }}">
+                        <label style="font-size:11px">Secret Key</label>
+                        <input name="secret_key" type="password" placeholder="(leave empty to keep)">
+                        <div class="form-row" style="margin-top:4px">
+                            <div>
+                                <label style="font-size:11px">Region</label>
+                                <select name="region">
+                                    {% for r in aws_regions %}
+                                    <option value="{{ r }}" {{ 'selected' if a.region == r }}>{{ r }}</option>
+                                    {% endfor %}
+                                </select>
+                            </div>
+                            <div>
+                                <label style="font-size:11px">Bucket Prefix</label>
+                                <input name="bucket_prefix" value="{{ a.bucket_prefix }}">
+                            </div>
+                        </div>
+                        <label style="font-size:11px">Proxy</label>
+                        <select name="proxy_id">
+                            <option value="0">No Proxy</option>
+                            {% for p in proxies %}
+                            <option value="{{ p.id }}" {{ 'selected' if a.proxy_id == p.id }}>{{ p.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <button class="btn btn-primary btn-xs" style="margin-top:6px">Save</button>
+                    </form>
+                </details>
+                <button class="btn btn-secondary btn-xs" type="button"
+                        hx-post="/redirects/s3-test"
+                        hx-vals='{"s3_account_id":"{{ a.id }}"}'
+                        hx-target="#s3-test-result"
+                        hx-swap="innerHTML">Test</button>
+                <form method="post" action="/redirects/s3-accounts/{{ a.id }}/delete" onsubmit="return confirm('Delete account?')" style="display:inline">
+                    <button class="btn btn-danger btn-xs">Del</button>
+                </form>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    <div id="s3-test-result" style="margin-bottom:12px"></div>
+    {% endif %}
+
+    <details {% if not s3_accounts %}open{% endif %}>
+        <summary class="btn btn-primary btn-sm" style="display:inline-block">Add S3 Account</summary>
+        <form method="post" action="/redirects/s3-accounts/add" style="margin-top:10px;max-width:560px">
+            <div class="form-row">
+                <div><label>Account Name</label><input name="name" placeholder="Main / Backup / EU-Pool" required></div>
+                <div>
+                    <label>Region</label>
+                    <select name="region">
+                        {% for r in aws_regions %}
+                        <option value="{{ r }}" {{ 'selected' if r == 'eu-central-1' }}>{{ r }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
             </div>
-            <div>
-                <label>AWS Secret Access Key</label>
-                <input name="aws_secret_key" type="password" value="{{ cfg.aws_secret_key or '' }}" placeholder="{% if cfg.aws_secret_key %}(saved){% endif %}">
+            <div class="form-row" style="margin-top:6px">
+                <div><label>Access Key ID</label><input name="access_key" placeholder="AKIA..." required></div>
+                <div><label>Secret Access Key</label><input name="secret_key" type="password" required></div>
             </div>
-        </div>
-        <div class="form-row" style="margin-top:8px">
-            <div>
-                <label>Bucket Prefix</label>
-                <input name="s3_bucket_prefix" value="{{ cfg.s3_bucket_prefix or 'lk' }}" placeholder="lk">
+            <div class="form-row" style="margin-top:6px">
+                <div><label>Bucket Prefix</label><input name="bucket_prefix" value="lk"></div>
+                <div>
+                    <label>Proxy</label>
+                    <select name="proxy_id">
+                        <option value="0">No Proxy</option>
+                        {% for p in proxies %}
+                        <option value="{{ p.id }}">{{ p.name }}</option>
+                        {% endfor %}
+                    </select>
+                </div>
             </div>
-            <div>
-                <label>Proxy (from <a href="/proxies" style="color:var(--accent)">/proxies</a>)</label>
-                <select name="aws_proxy_id">
-                    <option value="0">No Proxy (direct)</option>
-                    {% for p in proxies %}
-                    <option value="{{ p.id }}" {{ 'selected' if cfg.aws_proxy_id == p.id }}>
-                        {{ p.name }} — {{ p.value[:40] }}{{ '...' if p.value and p.value|length > 40 else '' }}
-                    </option>
-                    {% endfor %}
-                </select>
-            </div>
-        </div>
-        <div style="margin-top:8px;display:flex;gap:8px;align-items:center">
-            <button class="btn btn-primary btn-sm">Save S3 Settings</button>
-            <button class="btn btn-secondary btn-sm" type="button"
-                    hx-post="/redirects/s3-test"
-                    hx-target="#s3-test-result"
-                    hx-swap="innerHTML">Test Connection</button>
-            <span id="s3-test-result" style="margin-left:4px"></span>
-        </div>
-        <div class="form-help" style="margin-top:6px">
-            Credentials stored locally. Region is picked per generation. Proxy list managed in
-            <a href="/proxies" style="color:var(--accent)">/proxies</a> — boto3 needs HTTP/HTTPS proxies
-            (<code>host:port</code> or <code>http://user:pass@host:port</code>).
-        </div>
-    </form>
+            <div style="margin-top:10px"><button class="btn btn-primary btn-sm">Add Account</button></div>
+        </form>
+    </details>
 </div>
 
 <div class="card">
