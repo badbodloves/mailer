@@ -10,6 +10,45 @@ _BASE = Path(__file__).parent
 MAX_RETRIES = 200
 BLOCK_NAMES = ["logo", "referenz", "satz", "hinweis", "frist", "link", "gruss", "footer"]
 
+# A theme constrains the *color personality* of a generated template so
+# the footer, frist and link blocks don't drift into three competing
+# colour regions. Each entry lists, per block, which variant tags are
+# allowed; an empty list means "no constraint".
+#
+# - clean_light: white-card classic. No red accent in Frist, no dark or
+#   coloured Footer, soft Link styles. The look the old engine had.
+# - dark_footer: contrast look. Allows the red accent Frist *because*
+#   the dark footer balances it; pill/outline Links.
+# - primary_band: a band of {pc} somewhere in the layout — Footer keeps
+#   to a light or primary-bordered style, Frist stays on the primary
+#   side (no red), Link mirrors.
+# Per-theme rules for footer / frist / link block selection.
+# "allow" is a positive filter (variant must have at least one matching tag),
+# "forbid" is a hard negative filter (variant must NOT have any of these).
+# forbid wins over allow.
+_THEMES = {
+    "clean_light": {
+        # Calm white-card look. No red accent in Frist, no dark Footer,
+        # no full coloured Footer background.
+        "footer":  {"allow": set(),                 "forbid": {"dark", "colored"}},
+        "frist":   {"allow": {"colored", "grey"},   "forbid": {"accent", "yellow"}},
+        "link":    {"allow": set(),                 "forbid": {"pill"}},
+    },
+    "dark_footer": {
+        # Contrast look. Dark footer paired with the red accent Frist.
+        "footer":  {"allow": {"dark"},              "forbid": set()},
+        "frist":   {"allow": {"accent", "colored"}, "forbid": {"yellow"}},
+        "link":    {"allow": {"pill", "outline"},   "forbid": set()},
+    },
+    "primary_band": {
+        # Layouts that already paint a {pc} band. Keep everything on the
+        # primary side — no red, no dark, no yellow.
+        "footer":  {"allow": set(),                 "forbid": {"dark"}},
+        "frist":   {"allow": {"colored", "grey"},   "forbid": {"accent", "yellow"}},
+        "link":    {"allow": set(),                 "forbid": {"pill"}},
+    },
+}
+
 
 def _load_variants(block_name: str, base_dir: Path | None = None) -> list[dict]:
     """Load all HTML variant files for a block."""
@@ -40,6 +79,7 @@ def _load_layouts(base_dir: Path | None = None) -> list[dict]:
         content = f.read_text(encoding="utf-8")
         layouts.append({
             "name": f.stem,
+            "tags": parse_tags(content),
             "html": content,
         })
     return layouts
@@ -55,14 +95,56 @@ def _load_all(base_dir: Path | None = None) -> tuple[dict, list]:
     return block_variants, layouts
 
 
-def _pick_blocks(block_variants: dict, disabled: set, constraints: list) -> dict:
-    """Pick one variant per enabled block, respecting constraints."""
+def _pick_theme(layout: dict) -> str:
+    """Choose a color theme. Layouts tagged with `band` (the ones that
+    already paint a {pc} region themselves) are locked to primary_band
+    so we don't add yet another competing colour region. Others get a
+    weighted random pick that mostly stays clean."""
+    layout_tags = layout.get("tags", set())
+    if "band" in layout_tags:
+        return "primary_band"
+    if "dark_friendly" in layout_tags:
+        # Layouts that visually carry a dark footer well.
+        return random.choices(
+            ["clean_light", "dark_footer"], weights=[1, 1])[0]
+    # Default mix — favour the calm look.
+    return random.choices(
+        ["clean_light", "dark_footer", "primary_band"],
+        weights=[6, 2, 2])[0]
+
+
+def _filter_by_theme(variants: list, theme: str, block_name: str) -> list:
+    """Return variants compatible with the theme for this block.
+    Forbid wins over allow; if `allow` is empty there is no positive
+    filter (any non-forbidden variant is fine)."""
+    rule = _THEMES.get(theme, {}).get(block_name)
+    if not rule:
+        return variants
+    allow, forbid = rule.get("allow", set()), rule.get("forbid", set())
+
+    def ok(v: dict) -> bool:
+        tags = v["tags"]
+        if forbid and tags & forbid:
+            return False
+        if allow and not (tags & allow):
+            return False
+        return True
+
+    keep = [v for v in variants if ok(v)]
+    return keep or variants  # fall back rather than fail to generate
+
+
+def _pick_blocks(block_variants: dict, disabled: set, constraints: list,
+                  theme: str = "") -> dict:
+    """Pick one variant per enabled block, respecting constraints
+    and (if given) the theme's per-block tag filter."""
     for _ in range(MAX_RETRIES):
         selection = {}
         for block_name, variants in block_variants.items():
             if block_name in disabled or not variants:
                 continue
-            v = random.choice(variants)
+            pool = _filter_by_theme(variants, theme, block_name) if theme else variants
+            v = random.choice(pool)
             selection[block_name] = v
 
         if check_constraints(selection, constraints):
@@ -116,7 +198,12 @@ def generate_one(cfg: dict, base_dir: Path | None = None,
     disabled = {name for name, enabled in blocks_cfg.items() if not enabled}
     constraints = cfg.get("constraints", [])
 
-    selection = _pick_blocks(block_variants, disabled, constraints)
+    # Choose a color theme for this template so the footer/frist/link
+    # blocks land in one coherent palette instead of three competing
+    # colour regions. Can be disabled per config for the old behaviour.
+    theme = "" if cfg.get("disable_theme") else _pick_theme(layout)
+
+    selection = _pick_blocks(block_variants, disabled, constraints, theme=theme)
     return _assemble(cfg, layout, selection)
 
 
