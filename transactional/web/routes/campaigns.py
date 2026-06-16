@@ -1318,30 +1318,29 @@ def _run_campaign(db, cid: int):
         def _worker_thread():
             """Each thread grabs an SMTP, connects, sends many mails."""
             nonlocal sent, failed
-            # Use mail_queue.qsize() as a hint only — the authoritative
-            # signal that there is no more work is queue.Empty raised by
-            # get(timeout=...). The previous `not mail_queue.empty()` in
-            # the loop guard caused workers to exit prematurely whenever
-            # a transient drain coincided with their iteration boundary.
+            # Robust loop semantics: the only authoritative "done"
+            # signal is queue.Empty raised repeatedly from get(timeout=2)
+            # in the inner loop. Checking mail_queue.empty() at the
+            # outer loop head races with other workers and causes
+            # workers to die before the queue is actually drained —
+            # which produced campaigns ending at "0/N sent, FINISHED".
             no_smtp_strikes = 0
             while campaign_id in _runners:
-                if mail_queue.empty():
-                    # Nothing left and nothing in flight on this thread
-                    # → done. (Other threads still in flight will keep
-                    # going independently; their leads are already off
-                    # the queue.)
-                    break
                 account = pool.acquire()
                 if account is None:
                     no_smtp_strikes += 1
+                    if no_smtp_strikes == 1:
+                        logger.info(
+                            "Campaign %d: no SMTPs available, waiting...",
+                            campaign_id,
+                        )
                     if no_smtp_strikes >= 60:
-                        # 60s of no-available-SMTP — pool is dead or
-                        # fully cooled down; give up. The retry pass
-                        # will pick the leftover IN_PROGRESS leads up.
                         logger.warning(
                             "Campaign %d: no SMTPs available for 60s, "
-                            "exiting worker", campaign_id)
-                        break
+                            "exiting worker — retry pass will resume.",
+                            campaign_id,
+                        )
+                        return
                     time.sleep(1)
                     continue
                 no_smtp_strikes = 0
@@ -1350,12 +1349,13 @@ def _run_campaign(db, cid: int):
                     server_obj = pool.connect(account)
                 except Exception as e:
                     logger.warning("Campaign %d: connect failed %s: %s", campaign_id, account.user, e)
-                    # connect-time failure is transient: cooldown via pool
                     pool.suspend(account, "connect_failed")
                     time.sleep(1)
                     continue
 
                 warmup_wait = pool.get_warmup_delay(account)
+                empty_strikes = 0
+                inner_done = False
 
                 try:
                     while campaign_id in _runners:
@@ -1366,8 +1366,17 @@ def _run_campaign(db, cid: int):
 
                         try:
                             lead_id, email = mail_queue.get(timeout=2)
+                            empty_strikes = 0
                         except queue.Empty:
-                            break
+                            empty_strikes += 1
+                            # 3 consecutive 2s timeouts = 6s of confirmed
+                            # empty queue. Other workers don't have items
+                            # in flight that need to come back to us, so
+                            # we're really done.
+                            if empty_strikes >= 3:
+                                inner_done = True
+                                break
+                            continue
 
                         if warmup_wait > 0:
                             time.sleep(warmup_wait)
@@ -1392,6 +1401,11 @@ def _run_campaign(db, cid: int):
                         server_obj.quit()
                     except Exception:
                         pass
+                # Inner loop confirmed the queue is empty — really done.
+                # If we just broke out because the SMTP died mid-stream,
+                # loop back and acquire a fresh one.
+                if inner_done:
+                    return
 
         def _run_send_pass():
             """Fill queue from DB, run worker threads."""
@@ -1406,7 +1420,14 @@ def _run_campaign(db, cid: int):
                 "SELECT id, email FROM trans_leads WHERE list_id=? AND state='PENDING' ORDER BY id",
                 (lead_list_id,)).fetchall()
             if not leads:
+                logger.warning(
+                    "Campaign %d: send pass requested but 0 PENDING leads. "
+                    "Lead state breakdown: %s",
+                    cid, db.get_lead_states(lead_list_id),
+                )
                 return
+            logger.info("Campaign %d: send pass queuing %d leads across %d threads",
+                         cid, len(leads), thread_count)
 
             for lead in leads:
                 db._conn().execute("UPDATE trans_leads SET state='IN_PROGRESS' WHERE id=?", (lead["id"],))
