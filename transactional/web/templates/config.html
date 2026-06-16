@@ -196,6 +196,29 @@
                 skipped too.
             </div>
         </div>
+        <div class="card">
+            <h3>Gradual Send (Warm-up Ramp)</h3>
+            <div class="form-help" style="margin-bottom:8px">
+                Instead of hitting full sending speed immediately, linearly ramp from
+                a small starting fraction up to 100% over a configurable window. Helps
+                with cold-IP warm-up and avoids tripping per-hour ESP rate limits when
+                a fresh campaign starts. Only affects the per-mail sleep delay — thread
+                count and SMTP-pool cooldowns are unchanged.
+            </div>
+            <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
+                <input type="checkbox" name="gradual_send_enabled" {{ 'checked' if cfg.gradual_send_enabled }} style="width:auto">
+                <span>Enable Gradual Send</span>
+            </label>
+            <label>Ramp duration (minutes to reach full speed)</label>
+            <input name="gradual_send_ramp_minutes" type="number" min="5" max="1440" value="{{ cfg.gradual_send_ramp_minutes or 180 }}">
+            <div class="form-help">Default 180 = 3 hours. Effective range 5 min – 24 h.</div>
+            <label>Starting speed factor (0.01 – 1.0)</label>
+            <input name="gradual_send_start_factor" type="number" step="0.01" min="0.01" max="1" value="{{ cfg.gradual_send_start_factor or 0.05 }}">
+            <div class="form-help">
+                Fraction of full speed at t=0. 0.05 = start at 5% of full throughput.
+                Lower = slower start. At configured ramp time, speed reaches 100%.
+            </div>
+        </div>
     </div>
 </div>
 <div style="margin-top:16px"><button class="btn btn-primary" style="padding:12px 24px">Save All Settings</button></div>

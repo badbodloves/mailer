@@ -33,14 +33,16 @@ async def save_config(request: Request):
     for key in ["threads", "warmup_count", "smtp_timeout", "test_interval",
                  "logo_max_colors", "logo_rotate_every", "redirect_rotate_every",
                  "redirect_gen_threads", "proxy_rotate_every", "html_rotate_every",
-                 "freshness_every_n_mails", "freshness_html_count", "freshness_logo_count"]:
+                 "freshness_every_n_mails", "freshness_html_count", "freshness_logo_count",
+                 "gradual_send_ramp_minutes"]:
         if key in form:
             try:
                 cfg[key] = int(form[key])
             except (ValueError, TypeError):
                 pass
 
-    for key in ["normal_delay", "provider_delay", "warmup_delay", "structure_variation"]:
+    for key in ["normal_delay", "provider_delay", "warmup_delay", "structure_variation",
+                 "gradual_send_start_factor"]:
         if key in form:
             try:
                 cfg[key] = float(form[key])
@@ -51,7 +53,8 @@ async def save_config(request: Request):
                  "advanced_antifingerprint", "image_enabled", "image_quantize",
                  "image_downscale", "redirect_enabled", "auto_retry_failed",
                  "auto_suppress_hard_bounces",
-                 "freshness_reset_html", "freshness_reset_logos"]:
+                 "freshness_reset_html", "freshness_reset_logos",
+                 "gradual_send_enabled"]:
         cfg[key] = key in form
 
     db.save_config(cfg)

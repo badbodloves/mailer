@@ -1003,6 +1003,33 @@ def _run_campaign(db, cid: int):
         logger.info("Campaign %d starting: %d pending, %d SMTPs, %d threads",
                      cid, pending, pool.size, thread_count)
 
+        # Gradual send: linearly ramp the effective send rate from
+        # `start_factor` of full speed up to 100% over `ramp_minutes`.
+        # Implemented by scaling per-mail sleep inversely with the
+        # current ramp factor — at 5% factor each mail waits 20x the
+        # configured delay; at 100% it's the configured delay.
+        gradual_enabled = bool(cfg.get("gradual_send_enabled", False))
+        ramp_seconds    = max(60.0, float(cfg.get("gradual_send_ramp_minutes", 180) or 180) * 60.0)
+        start_factor    = max(0.01, min(1.0, float(cfg.get("gradual_send_start_factor", 0.05) or 0.05)))
+        base_delay      = float(cfg.get("normal_delay", 0.3) or 0.3)
+        campaign_start_mono = time.monotonic()
+
+        def _effective_delay() -> float:
+            if not gradual_enabled:
+                return base_delay
+            elapsed = time.monotonic() - campaign_start_mono
+            frac = min(1.0, elapsed / ramp_seconds)
+            factor = start_factor + (1.0 - start_factor) * frac
+            return base_delay / factor
+
+        if gradual_enabled:
+            logger.info(
+                "Campaign %d: gradual send ENABLED — %.0f%% -> 100%% over %.0f min "
+                "(base_delay=%.2fs, initial effective=%.2fs)",
+                cid, start_factor * 100, ramp_seconds / 60, base_delay,
+                base_delay / start_factor,
+            )
+
         sent = 0
         failed = 0
         suppressed = 0
@@ -1324,7 +1351,7 @@ def _run_campaign(db, cid: int):
                             # Pool was already notified via suspend/mark_dead.
                             break
 
-                        time.sleep(cfg.get("normal_delay", 0.3))
+                        time.sleep(_effective_delay())
                 except Exception:
                     pass
                 finally:
