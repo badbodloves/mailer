@@ -418,6 +418,7 @@ class TransDB:
         "mime_profile": "rotate",
         "auto_retry_failed": True,
         "auto_suppress_hard_bounces": True,
+        "logo_static_url": "",
         "gradual_send_enabled": False,
         "gradual_send_ramp_minutes": 180,
         "gradual_send_start_factor": 0.05,

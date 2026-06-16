@@ -103,16 +103,26 @@
                 <span>Enable Logo Embedding</span>
             </label>
             <label>Mode</label>
-            <select name="image_mode">
+            <select name="image_mode" onchange="
+                document.getElementById('url-logo-config').style.display=this.value==='url'?'':'none';
+                document.getElementById('text-logo-config').style.display=this.value==='text'?'':'none';
+                document.getElementById('static-logo-config').style.display=this.value==='static_url'?'':'none';
+            ">
                 <option value="cid" {{ 'selected' if cfg.image_mode == 'cid' }}>CID Inline (embedded in email)</option>
                 <option value="url" {{ 'selected' if cfg.image_mode == 'url' }}>URL (pre-uploaded to domain)</option>
                 <option value="cloudinary" {{ 'selected' if cfg.image_mode == 'cloudinary' }}>Cloudinary CDN</option>
                 <option value="text" {{ 'selected' if cfg.image_mode == 'text' }}>Text Logo</option>
+                <option value="static_url" {{ 'selected' if cfg.image_mode == 'static_url' }}>Static URL (single fixed image)</option>
             </select>
             <div id="url-logo-config" style="margin-top:8px;{{ '' if cfg.image_mode == 'url' else 'display:none' }}">
                 <label>Logo Base URL</label>
                 <input name="logo_base_url" value="{{ cfg.get('logo_base_url', '') }}" placeholder="https://logos.domain.de">
                 <div class="form-help">Variants are served as {base_url}/{filename}.</div>
+            </div>
+            <div id="static-logo-config" style="margin-top:8px;{{ '' if cfg.image_mode == 'static_url' else 'display:none' }}">
+                <label>Logo Image URL</label>
+                <input name="logo_static_url" value="{{ cfg.get('logo_static_url', '') }}" placeholder="https://cdn.example.com/logo.png">
+                <div class="form-help">One fixed URL for every mail. No variants, no upload, no CID — just a direct <code>&lt;img src&gt;</code>.</div>
             </div>
             <div id="text-logo-config" style="margin-top:8px;{{ '' if cfg.image_mode == 'text' else 'display:none' }}">
                 <label>Logo Text</label>

@@ -441,7 +441,15 @@ async def test_send(request: Request, cid: int):
                 except Exception:
                     html = html.replace("{Logo}", "")
             elif "{Logo}" in html:
-                html = html.replace("{Logo}", "")
+                if cfg.get("image_mode") == "static_url":
+                    static_logo = cfg.get("logo_static_url", "").strip()
+                    if static_logo:
+                        html = html.replace("{Logo}",
+                            f'<img src="{static_logo}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
+                    else:
+                        html = html.replace("{Logo}", "")
+                else:
+                    html = html.replace("{Logo}", "")
 
             if afp:
                 html = afp.transform(html)
@@ -1186,7 +1194,14 @@ def _run_campaign(db, cid: int):
 
                 inline_images = None
                 if "{Logo}" in html:
-                    if image_mode == "text":
+                    if image_mode == "static_url":
+                        static_logo = cfg.get("logo_static_url", "").strip()
+                        if static_logo:
+                            html = html.replace("{Logo}",
+                                f'<img src="{static_logo}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
+                        else:
+                            html = html.replace("{Logo}", "")
+                    elif image_mode == "text":
                         logo_text = _process(cfg.get("logo_text", "{Logo}"), email)
                         html = html.replace("{Logo}",
                             f'<span style="font-weight:bold;font-size:16px;color:{cfg.get("logo_text_color", "#333333")};">{logo_text}</span>')
