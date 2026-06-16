@@ -1318,13 +1318,33 @@ def _run_campaign(db, cid: int):
         def _worker_thread():
             """Each thread grabs an SMTP, connects, sends many mails."""
             nonlocal sent, failed
-            while campaign_id in _runners and not mail_queue.empty():
+            # Use mail_queue.qsize() as a hint only — the authoritative
+            # signal that there is no more work is queue.Empty raised by
+            # get(timeout=...). The previous `not mail_queue.empty()` in
+            # the loop guard caused workers to exit prematurely whenever
+            # a transient drain coincided with their iteration boundary.
+            no_smtp_strikes = 0
+            while campaign_id in _runners:
+                if mail_queue.empty():
+                    # Nothing left and nothing in flight on this thread
+                    # → done. (Other threads still in flight will keep
+                    # going independently; their leads are already off
+                    # the queue.)
+                    break
                 account = pool.acquire()
                 if account is None:
-                    if mail_queue.empty():
+                    no_smtp_strikes += 1
+                    if no_smtp_strikes >= 60:
+                        # 60s of no-available-SMTP — pool is dead or
+                        # fully cooled down; give up. The retry pass
+                        # will pick the leftover IN_PROGRESS leads up.
+                        logger.warning(
+                            "Campaign %d: no SMTPs available for 60s, "
+                            "exiting worker", campaign_id)
                         break
                     time.sleep(1)
                     continue
+                no_smtp_strikes = 0
 
                 try:
                     server_obj = pool.connect(account)
@@ -1332,8 +1352,6 @@ def _run_campaign(db, cid: int):
                     logger.warning("Campaign %d: connect failed %s: %s", campaign_id, account.user, e)
                     # connect-time failure is transient: cooldown via pool
                     pool.suspend(account, "connect_failed")
-                    if mail_queue.empty():
-                        break
                     time.sleep(1)
                     continue
 
@@ -1439,7 +1457,12 @@ def _run_campaign(db, cid: int):
         finally:
             db.reset_in_progress(lead_list_id)
 
-        status = "FINISHED" if cid not in _runners else "PAUSED"
+        # cid stays in _runners for the whole _run_campaign run; it's
+        # only removed when the user calls stop_campaign or when the
+        # outer run() wrapper's finally block fires after we return.
+        # So "still in runners" here = normal completion; "missing" = the
+        # user pressed Pause.
+        status = "FINISHED" if cid in _runners else "PAUSED"
         from datetime import datetime
         logger.info("Campaign %d %s: sent=%d, failed=%d, suppressed=%d",
                      cid, status, sent, failed, suppressed)
