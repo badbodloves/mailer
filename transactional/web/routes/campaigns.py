@@ -952,20 +952,30 @@ def _run_campaign(db, cid: int):
                         return "rate_limit"
                     if "spam" in inner_msg or "blacklist" in inner_msg or "dnsbl" in inner_msg:
                         return "spam_reject"
-                    if "no such user" in inner_msg or "mailbox not found" in inner_msg or \
-                       "does not exist" in inner_msg or "unknown user" in inner_msg or \
-                       "user unknown" in inner_msg or "invalid recipient" in inner_msg or \
-                       "recipient rejected" in inner_msg or "addressee unknown" in inner_msg:
+                    if "5.1.1" in inner_msg or "5.1.10" in inner_msg:
+                        return "mailbox_not_found"
+                    if "no such user" in inner_msg or "no such mailbox" in inner_msg or \
+                       "no such recipient" in inner_msg or "user unknown" in inner_msg or \
+                       "unknown user" in inner_msg or "mailbox not found" in inner_msg or \
+                       "mailbox unavailable" in inner_msg or "addressee unknown" in inner_msg:
                         return "mailbox_not_found"
                     if "blocked" in inner_msg or "rejected" in inner_msg:
                         return "spam_reject"
                 return "spam_reject"
 
-            # Mailbox truly doesn't exist
-            if "no such user" in e or "mailbox not found" in e or \
-               "does not exist" in e or "unknown user" in e or \
-               "user unknown" in e or "invalid recipient" in e or \
-               "addressee unknown" in e or "recipient rejected" in e:
+            # Mailbox truly doesn't exist. Strict — only the DSN 5.1.1
+            # code and very specific "no such user / mailbox" phrases.
+            # Generic phrases like "recipient rejected", "does not
+            # exist" or "invalid recipient" are excluded: those are
+            # also emitted for greylisting, IP-rep checks, content
+            # filters and routing problems and would falsely add live
+            # addresses to the suppression list.
+            if "5.1.1" in e or "5.1.10" in e:
+                return "mailbox_not_found"
+            if "no such user" in e or "no such mailbox" in e or \
+               "no such recipient" in e or "user unknown" in e or \
+               "unknown user" in e or "mailbox not found" in e or \
+               "mailbox unavailable" in e or "addressee unknown" in e:
                 return "mailbox_not_found"
 
             # Spam/content rejection (recipient-side content decision)
@@ -992,11 +1002,14 @@ def _run_campaign(db, cid: int):
         # Which error classes kill the SMTP vs. just the lead.
         SMTP_FATAL     = {"auth_fail", "smtp_suspended", "smtp_blocked"}
         SMTP_TRANSIENT = {"rate_limit", "connection", "timeout"}
-        # Recipient-level errors that mean the address is permanently dead.
-        # These get suppressed so we never hit them again — in this
-        # campaign or any future one. Soft/content rejects are NOT here:
-        # spam_reject can pass on another IP, so it stays retryable.
-        HARD_BOUNCE    = {"mailbox_not_found", "permanent_reject"}
+        # Addresses we permanently suppress. Only mailbox_not_found —
+        # i.e. the classifier matched a specific "no such user" phrase
+        # or a 5.1.1 DSN. permanent_reject is the catch-all for every
+        # other 5xx and is too broad: content-filter rejects, SMTP
+        # config issues, header problems all surface as 5xx and would
+        # otherwise pollute the suppression list with addresses that
+        # work fine on another SMTP / next mailing.
+        HARD_BOUNCE    = {"mailbox_not_found"}
         suppress_enabled = cfg.get("auto_suppress_hard_bounces", True)
         suppressed_set = db.load_suppression_set(uid) if suppress_enabled else set()
 

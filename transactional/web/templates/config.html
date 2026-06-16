@@ -44,11 +44,16 @@
                 <span>Auto-Retry Failed Mails</span>
             </label>
             <label style="display:flex;align-items:center;gap:8px;margin-top:8px;cursor:pointer">
-                <input type="checkbox" name="auto_suppress_hard_bounces" {{ 'checked' if cfg.get('auto_suppress_hard_bounces', True) }} style="width:auto">
+                <input type="checkbox" name="auto_suppress_hard_bounces" {{ 'checked' if cfg.get('auto_suppress_hard_bounces', False) }} style="width:auto">
                 <span>Auto-Suppress Hard Bounces</span>
             </label>
-            <div class="form-help">Dead mailboxes (5.1.1 / permanent reject) go to the suppression list on
-                <a href="/bounces" style="color:var(--accent)">Bounces</a> and are never mailed again.</div>
+            <div class="form-help">
+                Off by default. When on, addresses flagged as <code>mailbox_not_found</code>
+                (specific "no such user" phrases / 5.1.1 DSN) go to the suppression list on
+                <a href="/bounces" style="color:var(--accent)">Bounces</a>. Other 5xx
+                rejects (content filter, SMTP config issues) are <em>not</em> suppressed —
+                they retry on the next pass instead.
+            </div>
         </div>
         <div class="card">
             <h3>Test</h3>

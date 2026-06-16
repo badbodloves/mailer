@@ -417,7 +417,7 @@ class TransDB:
         "spam_checker_url": "http://127.0.0.1:11333/checkv2",
         "mime_profile": "rotate",
         "auto_retry_failed": True,
-        "auto_suppress_hard_bounces": True,
+        "auto_suppress_hard_bounces": False,
         "logo_static_url": "",
         "gradual_send_enabled": False,
         "gradual_send_ramp_minutes": 180,
