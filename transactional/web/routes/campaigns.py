@@ -15,13 +15,15 @@ router = APIRouter()
 
 
 def _append_ref(url: str, email: str) -> str:
-    """Append ?ref=email (URL-encoded) to a redirect link. Uses & if the
-    URL already has a query string. @ . + - _ are kept literal so the
-    address remains human-readable in tracking logs."""
+    """Append ?ref=<base64url(email)> to a redirect link. Uses & if the
+    URL already has a query string. The email is base64url-encoded so it
+    never appears in cleartext in URLs, logs, or CDN access records."""
     if not url or not email:
         return url
+    import base64
+    token = base64.urlsafe_b64encode(email.encode("utf-8")).rstrip(b"=").decode("ascii")
     sep = "&" if "?" in url else "?"
-    return f"{url}{sep}ref={quote(email, safe='@.+-_')}"
+    return f"{url}{sep}ref={token}"
 
 
 _runners = {}

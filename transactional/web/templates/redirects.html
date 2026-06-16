@@ -58,7 +58,7 @@
         <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;margin:0">
             <input type="checkbox" name="append_ref" value="1" style="margin:0;width:auto"
                     {{ 'checked' if cfg.redirect_append_ref }}>
-            <span><strong>Append <code>?ref=&lt;recipient_email&gt;</code> to every {RedirectLink}</strong></span>
+            <span><strong>Append <code>?ref=&lt;base64(email)&gt;</code> to every {RedirectLink}</strong></span>
         </label>
         <button class="btn btn-primary btn-sm">Save</button>
         <span style="font-size:11px;color:var(--fg2)">
@@ -70,9 +70,10 @@
         </span>
     </form>
     <div class="form-help" style="margin-top:6px">
-        Example: <code>https://share.google/abc123</code> &rarr; <code>https://share.google/abc123?ref=jane@example.de</code>.
-        Uses <code>&amp;ref=</code> if the link already has a query string (e.g. google.xx format).
-        Affects both campaign sends and test mails. Macros like <code>{Name}</code> stay untouched.
+        Example: <code>https://share.google/abc123</code> &rarr; <code>https://share.google/abc123?ref=amFuZUBleGFtcGxlLmRl</code>.
+        The recipient email is base64url-encoded — never visible in cleartext in URLs, CDN logs, or browser history.
+        Decode: <code>echo amFuZUBleGFtcGxlLmRl | base64 -d</code> &rarr; <code>jane@example.de</code>.
+        Uses <code>&amp;ref=</code> if the link already has a query string. Works with S3 + Google Share links.
     </div>
 </div>
 
