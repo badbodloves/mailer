@@ -310,6 +310,23 @@
         </div>
         {% endif %}
     </div>
+    {% if redirects and redirect_pools %}
+    <div style="margin-bottom:10px;padding:8px;border:1px solid var(--border-light);border-radius:var(--radius);background:var(--bg);display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+        <form hx-post="/redirects/move-latest" hx-target="#move-latest-result" hx-swap="innerHTML"
+              style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <strong style="font-size:13px">Move latest</strong>
+            <input name="count" type="number" value="100" min="1" max="50000" style="width:80px;margin:0">
+            <span style="font-size:12px;color:var(--fg2)">unassigned links &rarr;</span>
+            <select name="pool_id" style="max-width:200px;margin:0">
+                {% for p in redirect_pools %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-primary btn-xs" type="submit">Move</button>
+        </form>
+        <span id="move-latest-result" style="font-size:12px"></span>
+    </div>
+    {% endif %}
     {% if redirects %}
     {% if redirect_pools %}
     <div style="margin-bottom:10px;padding:8px;border:1px solid var(--border-light);border-radius:var(--radius);background:var(--bg)">

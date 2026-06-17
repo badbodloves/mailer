@@ -790,6 +790,39 @@ async def set_redirect_pool(request: Request, rid: int,
     )
 
 
+@router.post("/redirects/move-latest", response_class=HTMLResponse)
+async def move_latest_to_pool(request: Request,
+                               count: int = Form(100),
+                               pool_id: int = Form(0)):
+    """Move the N most recent unassigned (pool_id=0) links to a pool."""
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    count = max(1, min(int(count or 100), 50000))
+    if not pool_id:
+        return HTMLResponse('<span style="color:var(--red)">Pick a pool.</span>')
+    rows = db._conn().execute(
+        "SELECT id FROM trans_redirect_links "
+        "WHERE user_id=? AND (pool_id IS NULL OR pool_id=0) "
+        "ORDER BY id DESC LIMIT ?",
+        (uid, count)).fetchall()
+    if not rows:
+        return HTMLResponse('<span style="color:var(--fg2)">No unassigned links found.</span>')
+    ids = [r[0] for r in rows]
+    ph = ",".join("?" for _ in ids)
+    db._conn().execute(
+        f"UPDATE trans_redirect_links SET pool_id=? WHERE id IN ({ph})",
+        [pool_id, *ids])
+    db._conn().commit()
+    pool_row = db._conn().execute(
+        "SELECT name FROM trans_redirect_pools WHERE id=?", (pool_id,)).fetchone()
+    pname = dict(pool_row)["name"] if pool_row else str(pool_id)
+    return HTMLResponse(
+        f'<span style="color:var(--green)">'
+        f'Moved {len(ids)} link(s) &rarr; <strong>{escape(pname)}</strong>. '
+        f'<a href="/redirects" style="color:var(--accent)">Reload</a></span>'
+    )
+
+
 @router.post("/redirects/bulk-assign-pool", response_class=HTMLResponse)
 async def bulk_assign_pool(request: Request):
     db = request.app.state.db
