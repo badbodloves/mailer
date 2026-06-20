@@ -284,6 +284,32 @@ class BulkDBManager:
                 c.execute("ALTER TABLE dynadot_accounts ADD COLUMN secret TEXT DEFAULT ''")
             if "send_currency" not in da_cols:
                 c.execute("ALTER TABLE dynadot_accounts ADD COLUMN send_currency INTEGER DEFAULT 0")
+        # Cloudinary
+        if "bulk_cloudinary_config" not in tables:
+            c.execute("""CREATE TABLE bulk_cloudinary_config (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                cloud_name TEXT DEFAULT '',
+                api_key TEXT DEFAULT '',
+                api_secret TEXT DEFAULT ''
+            )""")
+        if "bulk_cloudinary_uploads" not in tables:
+            c.execute("""CREATE TABLE bulk_cloudinary_uploads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_filename TEXT NOT NULL,
+                base_public_id TEXT NOT NULL,
+                folder TEXT DEFAULT '',
+                count INTEGER DEFAULT 1,
+                pixel_tweak INTEGER DEFAULT 1,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+        if "bulk_cloudinary_links" not in tables:
+            c.execute("""CREATE TABLE bulk_cloudinary_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                upload_id INTEGER REFERENCES bulk_cloudinary_uploads(id) ON DELETE CASCADE,
+                public_id TEXT NOT NULL,
+                secure_url TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
         c.commit()
 
     # --- Users / Auth ---
@@ -911,3 +937,54 @@ class BulkDBManager:
         if hasattr(self._local, "conn") and self._local.conn:
             self._local.conn.close()
             self._local.conn = None
+
+    # ── Cloudinary (bulk) ────────────────────────────────
+    def get_cloudinary_config(self) -> dict:
+        c = self._conn()
+        r = c.execute("SELECT * FROM bulk_cloudinary_config WHERE id=1").fetchone()
+        if not r:
+            c.execute("INSERT OR IGNORE INTO bulk_cloudinary_config (id) VALUES (1)")
+            c.commit()
+            return {"cloud_name": "", "api_key": "", "api_secret": ""}
+        return dict(r)
+
+    def save_cloudinary_config(self, cloud_name: str, api_key: str, api_secret: str):
+        c = self._conn()
+        c.execute(
+            "INSERT OR REPLACE INTO bulk_cloudinary_config (id, cloud_name, api_key, api_secret) "
+            "VALUES (1, ?, ?, ?)",
+            (cloud_name, api_key, api_secret))
+        c.commit()
+
+    def add_cloudinary_upload(self, source_filename: str, base_public_id: str,
+                               folder: str, count: int, pixel_tweak: int) -> int:
+        c = self._conn()
+        c.execute(
+            "INSERT INTO bulk_cloudinary_uploads "
+            "(source_filename, base_public_id, folder, count, pixel_tweak) "
+            "VALUES (?,?,?,?,?)",
+            (source_filename, base_public_id, folder, count, pixel_tweak))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def add_cloudinary_link(self, upload_id: int, public_id: str, secure_url: str):
+        c = self._conn()
+        c.execute(
+            "INSERT INTO bulk_cloudinary_links (upload_id, public_id, secure_url) VALUES (?,?,?)",
+            (upload_id, public_id, secure_url))
+        c.commit()
+
+    def get_cloudinary_uploads(self) -> list:
+        return self._conn().execute(
+            "SELECT * FROM bulk_cloudinary_uploads ORDER BY id DESC").fetchall()
+
+    def get_cloudinary_links(self, upload_id: int) -> list:
+        return self._conn().execute(
+            "SELECT * FROM bulk_cloudinary_links WHERE upload_id=? ORDER BY id",
+            (upload_id,)).fetchall()
+
+    def delete_cloudinary_upload(self, upload_id: int):
+        c = self._conn()
+        c.execute("DELETE FROM bulk_cloudinary_links WHERE upload_id=?", (upload_id,))
+        c.execute("DELETE FROM bulk_cloudinary_uploads WHERE id=?", (upload_id,))
+        c.commit()
