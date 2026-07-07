@@ -373,6 +373,22 @@ class TransDB:
                 is_primary INTEGER DEFAULT 0,
                 user_id INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
+            ("trans_cloudinary_uploads", """CREATE TABLE IF NOT EXISTS trans_cloudinary_uploads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                source_filename TEXT NOT NULL,
+                base_public_id TEXT NOT NULL,
+                folder TEXT DEFAULT '',
+                count INTEGER DEFAULT 1,
+                pixel_tweak INTEGER DEFAULT 1,
+                proxy_id INTEGER DEFAULT 0,
+                user_id INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
+            ("trans_cloudinary_links", """CREATE TABLE IF NOT EXISTS trans_cloudinary_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                upload_id INTEGER NOT NULL,
+                public_id TEXT NOT NULL,
+                secure_url TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
         ]:
             if new_tbl not in tables:
                 c.execute(create_sql)
@@ -1440,4 +1456,48 @@ class TransDB:
                 (was_primary["user_id"],)).fetchone()
             if first:
                 c.execute("UPDATE trans_s3_accounts SET is_primary=1 WHERE id=?", (first[0],))
+        c.commit()
+
+    # ── Cloudinary (transactional) ──────────────────────────
+    def add_cloudinary_upload(self, source_filename: str, base_public_id: str,
+                               folder: str, count: int, pixel_tweak: int,
+                               proxy_id: int, user_id: int) -> int:
+        c = self._conn()
+        c.execute(
+            "INSERT INTO trans_cloudinary_uploads "
+            "(source_filename, base_public_id, folder, count, pixel_tweak, proxy_id, user_id) "
+            "VALUES (?,?,?,?,?,?,?)",
+            (source_filename, base_public_id, folder, count, pixel_tweak, proxy_id, user_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def add_cloudinary_link(self, upload_id: int, public_id: str, secure_url: str):
+        c = self._conn()
+        c.execute(
+            "INSERT INTO trans_cloudinary_links (upload_id, public_id, secure_url) VALUES (?,?,?)",
+            (upload_id, public_id, secure_url))
+        c.commit()
+
+    def get_cloudinary_uploads(self, user_id: int) -> list:
+        return self._conn().execute(
+            "SELECT * FROM trans_cloudinary_uploads WHERE user_id=? ORDER BY id DESC",
+            (user_id,)).fetchall()
+
+    def get_cloudinary_upload(self, upload_id: int, user_id: int):
+        return self._conn().execute(
+            "SELECT * FROM trans_cloudinary_uploads WHERE id=? AND user_id=?",
+            (upload_id, user_id)).fetchone()
+
+    def get_cloudinary_links(self, upload_id: int) -> list:
+        return self._conn().execute(
+            "SELECT * FROM trans_cloudinary_links WHERE upload_id=? ORDER BY id",
+            (upload_id,)).fetchall()
+
+    def delete_cloudinary_upload(self, upload_id: int, user_id: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_cloudinary_links WHERE upload_id IN "
+                  "(SELECT id FROM trans_cloudinary_uploads WHERE id=? AND user_id=?)",
+                  (upload_id, user_id))
+        c.execute("DELETE FROM trans_cloudinary_uploads WHERE id=? AND user_id=?",
+                  (upload_id, user_id))
         c.commit()
