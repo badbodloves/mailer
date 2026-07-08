@@ -53,6 +53,63 @@
 </div>
 
 <div class="card">
+    <div class="card-header">
+        <h3>Bulk Re-Point (all S3 links)</h3>
+    </div>
+    <p style="font-size:12px;color:var(--fg2);margin:0 0 8px">
+        Re-uploads the redirect HTML for <strong>every S3-backed link you own</strong> so
+        it points at a new destination. Google Share links and pasted URLs are skipped
+        (there's nothing on our end to modify). Runs in the background — safe to close
+        the page.
+    </p>
+    <form hx-post="/redirects/update-all-targets"
+          hx-target="#global-update-result"
+          hx-swap="innerHTML"
+          hx-confirm="Re-upload every S3 redirect object to this new target? This overwrites all existing S3 pages."
+          style="display:grid;gap:8px">
+        <div class="grid-2">
+            <div>
+                <label>New Target URL</label>
+                <input name="new_target" placeholder="https://newdest.example.com" required>
+            </div>
+            <div>
+                <label>Scope</label>
+                <select name="scope">
+                    <option value="all" selected>All my S3 links</option>
+                    <option value="pooled">Only pooled links</option>
+                    <option value="unassigned">Only unassigned links</option>
+                </select>
+            </div>
+        </div>
+        {% if s3_accounts %}
+        <div>
+            <label>S3 Account (creds used for the re-upload)</label>
+            <select name="s3_account_id">
+                {% for a in s3_accounts %}
+                <option value="{{ a.id }}" {{ 'selected' if a.is_primary }}>
+                    {{ a.name }}{{ ' (Primary)' if a.is_primary }} — {{ a.region }}
+                </option>
+                {% endfor %}
+            </select>
+            <div class="form-help">
+                Buckets in any region are reachable from a single account's keys.
+            </div>
+        </div>
+        {% endif %}
+        <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer">
+            <input type="checkbox" name="bot_filter" value="1" checked style="margin:0;width:auto">
+            <span>Use bot filter on the new page</span>
+        </label>
+        <div>
+            <button class="btn btn-danger btn-sm" {% if not s3_configured %}disabled{% endif %}>
+                Re-point all S3 links
+            </button>
+        </div>
+    </form>
+    <div id="global-update-result" style="margin-top:10px"></div>
+</div>
+
+<div class="card">
     <div class="card-header"><h3>Per-Recipient Ref Parameter</h3></div>
     <form method="post" action="/redirects/append-ref-toggle" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;margin:0">

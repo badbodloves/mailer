@@ -608,20 +608,24 @@ async def s3_gen_status(request: Request):
     return HTMLResponse("")
 
 
-def _re_upload_redirect(db, cfg, link_row: dict, new_target: str,
-                         bot_filter: bool) -> tuple:
-    """Re-PUT the HTML for one stored redirect link with a new destination.
+def _re_upload_redirect(link_row: dict, new_target: str, bot_filter: bool,
+                         access: str, secret: str, proxy: str,
+                         client_cache: dict = None) -> tuple:
+    """Re-PUT the HTML for one stored redirect link with a new destination
+    using the given AWS credentials. client_cache maps region → boto client
+    so a bulk pass doesn't rebuild one per object.
     Returns (ok: bool, error_msg: str)."""
     from mailer.s3_redirect import make_s3_client, _redirect_html
     region, bucket, key = _parse_s3_url(link_row.get("short_url", ""))
     if not bucket or not key or not region:
         return False, "URL not parseable as S3"
-    access = cfg.get("aws_access_key", "").strip()
-    secret = cfg.get("aws_secret_key", "").strip()
     if not access or not secret:
         return False, "AWS credentials missing"
-    proxy = _resolve_proxy(db, cfg)
-    s3 = make_s3_client(access, secret, region, proxy=proxy)
+    if client_cache is None:
+        client_cache = {}
+    if region not in client_cache:
+        client_cache[region] = make_s3_client(access, secret, region, proxy=proxy)
+    s3 = client_cache[region]
     body = _redirect_html(new_target, bot_filter=bot_filter).encode("utf-8")
     try:
         s3.put_object(Bucket=bucket, Key=key, Body=body,
@@ -635,18 +639,22 @@ def _re_upload_redirect(db, cfg, link_row: dict, new_target: str,
 @router.post("/redirects/{rid}/update-target", response_class=HTMLResponse)
 async def update_link_target(request: Request, rid: int,
                               new_target: str = Form(""),
-                              bot_filter: str = Form("")):
+                              bot_filter: str = Form(""),
+                              s3_account_id: int = Form(0)):
     new_target = new_target.strip()
     if not new_target:
         return HTMLResponse('<span style="color:var(--red)">Empty target</span>')
     if not (new_target.startswith("http://") or new_target.startswith("https://")):
         return HTMLResponse('<span style="color:var(--red)">Target must start with http:// or https://</span>')
     db = request.app.state.db
+    uid = request.state.user["id"]
     row = db._conn().execute("SELECT * FROM trans_redirect_links WHERE id=?", (rid,)).fetchone()
     if not row:
         return HTMLResponse('<span style="color:var(--red)">Not found</span>')
-    cfg = db.get_config()
-    ok, err = _re_upload_redirect(db, cfg, dict(row), new_target, bool(bot_filter))
+    acc = _resolve_s3_account(db, uid, int(s3_account_id or 0))
+    ok, err = _re_upload_redirect(dict(row), new_target, bool(bot_filter),
+                                    acc["access_key"], acc["secret_key"],
+                                    acc["proxy_val"])
     if not ok:
         return HTMLResponse(f'<span style="color:var(--red)">Failed: {escape(err)}</span>')
     db._conn().execute("UPDATE trans_redirect_links SET target_url=? WHERE id=?",
@@ -662,7 +670,8 @@ _pool_update_progress = {"running": False, "total": 0, "done": 0,
 @router.post("/redirects/pool/{pid}/update-targets", response_class=HTMLResponse)
 async def update_pool_targets(request: Request, pid: int,
                                new_target: str = Form(""),
-                               bot_filter: str = Form("")):
+                               bot_filter: str = Form(""),
+                               s3_account_id: int = Form(0)):
     new_target = new_target.strip()
     if not new_target:
         return HTMLResponse('<div class="alert alert-warning">Empty target.</div>')
@@ -672,7 +681,10 @@ async def update_pool_targets(request: Request, pid: int,
         return HTMLResponse('<div class="alert alert-warning">Pool update already running.</div>')
 
     db = request.app.state.db
-    cfg = db.get_config()
+    uid = request.state.user["id"]
+    acc = _resolve_s3_account(db, uid, int(s3_account_id or 0))
+    if not acc["access_key"] or not acc["secret_key"]:
+        return HTMLResponse('<div class="alert alert-warning">AWS credentials missing.</div>')
     use_bot_filter = bool(bot_filter)
     rows = [dict(r) for r in db.get_redirects_by_pool(pid)]
     if not rows:
@@ -683,8 +695,11 @@ async def update_pool_targets(request: Request, pid: int,
 
     def worker():
         try:
+            client_cache = {}
             for r in rows:
-                ok, err = _re_upload_redirect(db, cfg, r, new_target, use_bot_filter)
+                ok, err = _re_upload_redirect(r, new_target, use_bot_filter,
+                                                acc["access_key"], acc["secret_key"],
+                                                acc["proxy_val"], client_cache)
                 if ok:
                     db._conn().execute("UPDATE trans_redirect_links SET target_url=? WHERE id=?",
                                         (new_target, r["id"]))
@@ -720,6 +735,113 @@ async def pool_update_status(request: Request, pid: int):
     if p["ok"] > 0 or p["errors"] > 0:
         return HTMLResponse(
             f'<div class="alert alert-success">Done. {p["ok"]} updated, {p["errors"]} errors. '
+            f'<a href="/redirects" style="color:var(--accent)">Reload</a></div>'
+        )
+    return HTMLResponse("")
+
+
+_global_update_progress = {"running": False, "total": 0, "done": 0,
+                            "ok": 0, "errors": 0, "skipped": 0}
+
+
+@router.post("/redirects/update-all-targets", response_class=HTMLResponse)
+async def update_all_targets(request: Request,
+                              new_target: str = Form(""),
+                              bot_filter: str = Form(""),
+                              s3_account_id: int = Form(0),
+                              scope: str = Form("all")):
+    """Re-PUT the redirect HTML for every S3-backed link the user owns to
+    point at `new_target`. Non-S3 links (Google Share, manually pasted URLs)
+    are silently skipped — they can't be repointed remotely.
+
+    scope=all         → every user link
+    scope=pooled      → only links assigned to any pool
+    scope=unassigned  → only links with pool_id=0
+    """
+    new_target = new_target.strip()
+    if not new_target:
+        return HTMLResponse('<div class="alert alert-warning">Empty target.</div>')
+    if not (new_target.startswith("http://") or new_target.startswith("https://")):
+        return HTMLResponse('<div class="alert alert-warning">Target must start with http:// or https://</div>')
+    if _global_update_progress["running"]:
+        return HTMLResponse('<div class="alert alert-warning">Global update already running.</div>')
+
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    acc = _resolve_s3_account(db, uid, int(s3_account_id or 0))
+    if not acc["access_key"] or not acc["secret_key"]:
+        return HTMLResponse(
+            '<div class="alert alert-warning">AWS credentials missing for the selected S3 account.</div>')
+
+    use_bot_filter = bool(bot_filter)
+    if scope == "pooled":
+        where = "user_id=? AND pool_id IS NOT NULL AND pool_id!=0"
+    elif scope == "unassigned":
+        where = "user_id=? AND (pool_id IS NULL OR pool_id=0)"
+    else:
+        where = "user_id=?"
+    rows = [dict(r) for r in db._conn().execute(
+        f"SELECT * FROM trans_redirect_links WHERE {where}", (uid,)).fetchall()]
+    # Skip anything that isn't a path-style S3 URL
+    s3_rows = [r for r in rows if _parse_s3_url(r.get("short_url", ""))[0]]
+    skipped_upfront = len(rows) - len(s3_rows)
+    if not s3_rows:
+        return HTMLResponse(
+            f'<div class="alert alert-warning">No S3-backed links found in this scope '
+            f'({len(rows)} total, {skipped_upfront} non-S3 skipped).</div>')
+
+    _global_update_progress.update(running=True, total=len(s3_rows), done=0,
+                                    ok=0, errors=0, skipped=skipped_upfront)
+
+    def worker():
+        try:
+            client_cache = {}
+            for r in s3_rows:
+                ok, err = _re_upload_redirect(r, new_target, use_bot_filter,
+                                                acc["access_key"], acc["secret_key"],
+                                                acc["proxy_val"], client_cache)
+                if ok:
+                    db._conn().execute(
+                        "UPDATE trans_redirect_links SET target_url=? WHERE id=?",
+                        (new_target, r["id"]))
+                    db._conn().commit()
+                    _global_update_progress["ok"] += 1
+                else:
+                    _global_update_progress["errors"] += 1
+                    logger.warning("Global target update failed for %d: %s",
+                                    r["id"], err)
+                _global_update_progress["done"] += 1
+        finally:
+            _global_update_progress["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    proxy_str = f" via <code>{escape(acc['proxy_val'])}</code>" if acc["proxy_val"] else ""
+    return HTMLResponse(
+        f'<div class="alert alert-info">Re-pointing {len(s3_rows)} S3 link(s) '
+        f'({skipped_upfront} non-S3 skipped) to <code>{escape(new_target)}</code>'
+        f'{proxy_str}…</div>'
+        f'<div hx-get="/redirects/update-all-status" hx-trigger="every 2s" hx-swap="outerHTML"></div>'
+    )
+
+
+@router.get("/redirects/update-all-status", response_class=HTMLResponse)
+async def global_update_status(request: Request):
+    p = _global_update_progress
+    if p["running"]:
+        pct = int(p["done"] / p["total"] * 100) if p["total"] else 0
+        return HTMLResponse(
+            f'<div hx-get="/redirects/update-all-status" hx-trigger="every 2s" hx-swap="outerHTML">'
+            f'<div class="progress" style="margin-bottom:6px">'
+            f'<div class="progress-bar" style="width:{pct}%">{p["done"]}/{p["total"]}</div></div>'
+            f'<p style="font-size:12px;color:var(--fg2)">'
+            f'{p["ok"]} re-uploaded, {p["errors"]} errors</p></div>'
+        )
+    if p["ok"] > 0 or p["errors"] > 0:
+        skipped_note = (f' · {p["skipped"]} non-S3 skipped'
+                        if p.get("skipped") else '')
+        return HTMLResponse(
+            f'<div class="alert alert-success">Done — {p["ok"]} updated, '
+            f'{p["errors"]} errors{skipped_note}. '
             f'<a href="/redirects" style="color:var(--accent)">Reload</a></div>'
         )
     return HTMLResponse("")
