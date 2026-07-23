@@ -389,6 +389,37 @@ class TransDB:
                 public_id TEXT NOT NULL,
                 secure_url TEXT NOT NULL,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
+            ("trans_smtp_check_jobs", """CREATE TABLE IF NOT EXISTS trans_smtp_check_jobs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT DEFAULT '',
+                source_list_id INTEGER DEFAULT 0,
+                receiver_account_id INTEGER DEFAULT 0,
+                receiver_email TEXT DEFAULT '',
+                proxy_id INTEGER DEFAULT 0,
+                subject TEXT DEFAULT '',
+                body_text TEXT DEFAULT '',
+                from_name TEXT DEFAULT '',
+                wait_seconds INTEGER DEFAULT 90,
+                status TEXT DEFAULT 'RUNNING',
+                total INTEGER DEFAULT 0,
+                delivered INTEGER DEFAULT 0,
+                conn_errors INTEGER DEFAULT 0,
+                invalid INTEGER DEFAULT 0,
+                user_id INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                finished_at TIMESTAMP)"""),
+            ("trans_smtp_check_results", """CREATE TABLE IF NOT EXISTS trans_smtp_check_results (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                job_id INTEGER NOT NULL,
+                smtp_id INTEGER DEFAULT 0,
+                host TEXT DEFAULT '',
+                port INTEGER DEFAULT 0,
+                username TEXT DEFAULT '',
+                password TEXT DEFAULT '',
+                marker TEXT DEFAULT '',
+                status TEXT DEFAULT 'pending',
+                error TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
         ]:
             if new_tbl not in tables:
                 c.execute(create_sql)
@@ -1500,4 +1531,63 @@ class TransDB:
                   (upload_id, user_id))
         c.execute("DELETE FROM trans_cloudinary_uploads WHERE id=? AND user_id=?",
                   (upload_id, user_id))
+        c.commit()
+
+    # ── SMTP Check (send-test + IMAP delivery verify) ───────
+    def create_smtp_check_job(self, **kw) -> int:
+        c = self._conn()
+        cols = list(kw.keys())
+        vals = list(kw.values())
+        ph = ",".join("?" for _ in vals)
+        c.execute(f"INSERT INTO trans_smtp_check_jobs ({','.join(cols)}) VALUES ({ph})", vals)
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def update_smtp_check_job(self, job_id: int, **kw):
+        if not kw:
+            return
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in kw)
+        c.execute(f"UPDATE trans_smtp_check_jobs SET {sets} WHERE id=?",
+                  list(kw.values()) + [job_id])
+        c.commit()
+
+    def get_smtp_check_jobs(self, user_id: int) -> list:
+        return self._conn().execute(
+            "SELECT * FROM trans_smtp_check_jobs WHERE user_id=? ORDER BY id DESC",
+            (user_id,)).fetchall()
+
+    def get_smtp_check_job(self, job_id: int, user_id: int):
+        return self._conn().execute(
+            "SELECT * FROM trans_smtp_check_jobs WHERE id=? AND user_id=?",
+            (job_id, user_id)).fetchone()
+
+    def add_smtp_check_result(self, job_id: int, smtp_id: int, host: str, port: int,
+                               username: str, password: str, marker: str) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO trans_smtp_check_results "
+                  "(job_id, smtp_id, host, port, username, password, marker) "
+                  "VALUES (?,?,?,?,?,?,?)",
+                  (job_id, smtp_id, host, port, username, password, marker))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def update_smtp_check_result(self, rid: int, status: str, error: str = ""):
+        c = self._conn()
+        c.execute("UPDATE trans_smtp_check_results SET status=?, error=? WHERE id=?",
+                  (status, error, rid))
+        c.commit()
+
+    def get_smtp_check_results(self, job_id: int) -> list:
+        return self._conn().execute(
+            "SELECT * FROM trans_smtp_check_results WHERE job_id=? ORDER BY id",
+            (job_id,)).fetchall()
+
+    def delete_smtp_check_job(self, job_id: int, user_id: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_smtp_check_results WHERE job_id IN "
+                  "(SELECT id FROM trans_smtp_check_jobs WHERE id=? AND user_id=?)",
+                  (job_id, user_id))
+        c.execute("DELETE FROM trans_smtp_check_jobs WHERE id=? AND user_id=?",
+                  (job_id, user_id))
         c.commit()
