@@ -174,15 +174,24 @@ EOF
 
 # ─── 7. Caddyfile ───────────────────────────────────────────
 log "7/10  Caddyfile"
+# Global options block als Multiline — Caddy stolpert bei manchen
+# Versionen ueber die Einzeiler-Form.
 {
-    if [ $INSTALL_TRANS -eq 1 ] && [ $INSTALL_BULK -eq 1 ]; then
-        echo "{ email admin@${DOMAIN_TRANS#*.} }"
-    elif [ $INSTALL_TRANS -eq 1 ]; then
-        echo "{ email admin@${DOMAIN_TRANS#*.} }"
+    if [ $INSTALL_TRANS -eq 1 ]; then
+        cat <<GLOBAL
+{
+    email admin@${DOMAIN_TRANS#*.}
+}
+
+GLOBAL
     else
-        echo "{ email admin@${DOMAIN_BULK#*.} }"
+        cat <<GLOBAL
+{
+    email admin@${DOMAIN_BULK#*.}
+}
+
+GLOBAL
     fi
-    echo
 
     write_vhost() {
         local domain="$1" port="$2"
