@@ -218,6 +218,10 @@ VHOST
 mkdir -p /var/log/caddy && chown caddy:caddy /var/log/caddy
 
 # ─── 8. UFW Firewall ─────────────────────────────────────────
+# WICHTIG: SSH-Regel MUSS vor 'ufw enable' stehen, sonst sperrt sich
+# UFW beim Aktivieren selber aus. Manche Cloud-Kernel droppen zusaetzlich
+# bestehende SSH-Sessions beim iptables-flush — falls dir das passiert,
+# einfach reconnecten und dieses Script nochmal starten (idempotent).
 log "8/10  UFW Firewall (nur 22 / 80 / 443)"
 ufw --force reset >/dev/null
 ufw default deny incoming
