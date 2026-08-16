@@ -326,26 +326,22 @@ check() {
 [ $INSTALL_TRANS -eq 1 ] && check transmailer "$TRANS_PORT"
 [ $INSTALL_BULK -eq 1 ]  && check bulkmailer  "$BULK_PORT"
 
-# ─── Abschluss ───────────────────────────────────────────────
-cat <<EOF
-
-┌──────────────────────────────────────────────────────────────
-│  ✅  Deploy fertig.
-│
-EOF
-[ $INSTALL_TRANS -eq 1 ] && printf '│  Trans :  https://%s\n' "$DOMAIN_TRANS"
-[ $INSTALL_BULK -eq 1 ]  && printf '│  Bulk  :  https://%s\n' "$DOMAIN_BULK"
-cat <<EOF
-│
-│  DNS-Check: die Domains oben müssen bereits auf diesen
-│  Server zeigen (A-/AAAA-Record). Beim ersten Aufruf
-│  holt Caddy Let's Encrypt automatisch.
-│
-│  Updates ab jetzt (in SSH-Session als '$APP_USER'):
-│      bash ~/mailer/deploy/update.sh
-│
-│  Logs:    journalctl -u transmailer -f   (oder bulkmailer)
-│  Caddy:   journalctl -u caddy -f
-│  Audit:   systemd-analyze security transmailer
-└──────────────────────────────────────────────────────────────
-EOF
+# ─── Abschluss (ASCII-only damit LANG=C-Server nicht meckern) ─
+echo
+echo "=============================================================="
+echo "  Deploy fertig."
+echo
+[ $INSTALL_TRANS -eq 1 ] && echo "  Trans :  https://${DOMAIN_TRANS}"
+[ $INSTALL_BULK -eq 1 ]  && echo "  Bulk  :  https://${DOMAIN_BULK}"
+echo
+echo "  DNS-Check: die Domains oben muessen bereits auf diesen"
+echo "  Server zeigen (A-/AAAA-Record). Beim ersten Aufruf"
+echo "  holt Caddy Let's Encrypt automatisch."
+echo
+echo "  Updates ab jetzt (in SSH-Session als '$APP_USER'):"
+echo "      bash ~/mailer/deploy/update.sh"
+echo
+echo "  Logs:    journalctl -u transmailer -f   (oder bulkmailer)"
+echo "  Caddy:   journalctl -u caddy -f"
+echo "  Audit:   systemd-analyze security transmailer"
+echo "=============================================================="
