@@ -1,34 +1,32 @@
 #!/usr/bin/env bash
 # ─────────────────────────────────────────────────────────────
-# Transactional Mailer — full-auto installer + hardening
+# Mailer — full-auto installer + hardening (trans + bulk)
 #
 # Runs on a fresh Debian 12 / Ubuntu 22.04+ box, as root.
-# End state: hardened non-root systemd service reachable via
-# Caddy-terminated HTTPS on $DOMAIN, protected by UFW + fail2ban,
-# with automatic security updates on. Idempotent — safe to re-run.
+# End state: hardened non-root systemd services reachable via
+# Caddy-terminated HTTPS on the domains you set, protected by
+# UFW + fail2ban with automatic security updates. Idempotent.
 #
-# Usage (edit the CONFIG block below, or pass via env):
-#
-#   ssh root@your-new-server
+# Usage:
 #   apt install -y curl
-#   curl -fsSL https://raw.githubusercontent.com/badbodloves/mailer/claude/mass-email-sender-bkzIN/deploy/install-trans.sh \
-#       | DOMAIN=trans.example.com bash
+#   curl -fsSL https://raw.githubusercontent.com/badbodloves/mailer/claude/mass-email-sender-bkzIN/deploy/install.sh \
+#       | DOMAIN_TRANS=trans.deinedomain.de DOMAIN_BULK=bulk.deinedomain.de bash
 #
-# Or clone first, edit, then run:
-#   git clone https://github.com/badbodloves/mailer /tmp/mailer && \
-#     bash /tmp/mailer/deploy/install-trans.sh
+# Nur eine der beiden Domains setzen → nur dieses Panel wird installiert.
 # ─────────────────────────────────────────────────────────────
 
 set -euo pipefail
 
 # ─── CONFIG ──────────────────────────────────────────────────
-: "${DOMAIN:=trans.example.com}"                                  # → Let's Encrypt cert wird hierfür geholt
-: "${REPO_URL:=https://github.com/badbodloves/mailer.git}"        # → public HTTPS clone
-: "${BRANCH:=claude/mass-email-sender-bkzIN}"                     # → branch to check out
-: "${APP_USER:=mailer}"                                           # → system user the app runs as
-: "${APP_DIR:=/home/${APP_USER}/mailer}"                          # → checkout location
-: "${APP_PORT:=8001}"                                             # → local uvicorn port
-: "${HARDEN_SSH:=auto}"                                           # → auto | yes | no  (disables PW auth if keys exist)
+: "${DOMAIN_TRANS:=}"                                             # leer = trans nicht installieren
+: "${DOMAIN_BULK:=}"                                              # leer = bulk nicht installieren
+: "${REPO_URL:=https://github.com/badbodloves/mailer.git}"
+: "${BRANCH:=claude/mass-email-sender-bkzIN}"
+: "${APP_USER:=mailer}"
+: "${APP_DIR:=/home/${APP_USER}/mailer}"
+: "${TRANS_PORT:=8001}"
+: "${BULK_PORT:=8000}"
+: "${HARDEN_SSH:=auto}"                                           # auto | yes | no
 : "${TIMEZONE:=Europe/Berlin}"
 
 # ─── HELPERS ─────────────────────────────────────────────────
@@ -44,13 +42,19 @@ case "${ID:-}${ID_LIKE:-}" in
     *) die "Nur Debian/Ubuntu unterstützt (gefunden: ${ID:-?}).";;
 esac
 
-if [ "$DOMAIN" = "trans.example.com" ]; then
-    die "DOMAIN ist noch der Platzhalter — bitte oben eintragen oder als env setzen (DOMAIN=... bash install-trans.sh)."
+INSTALL_TRANS=0; INSTALL_BULK=0
+[ -n "$DOMAIN_TRANS" ] && INSTALL_TRANS=1
+[ -n "$DOMAIN_BULK" ]  && INSTALL_BULK=1
+if [ $INSTALL_TRANS -eq 0 ] && [ $INSTALL_BULK -eq 0 ]; then
+    die "Setze mindestens DOMAIN_TRANS oder DOMAIN_BULK (oder beide)."
 fi
 
 export DEBIAN_FRONTEND=noninteractive
+plan=""; [ $INSTALL_TRANS -eq 1 ] && plan+="trans (${DOMAIN_TRANS}:${TRANS_PORT}) "
+[ $INSTALL_BULK -eq 1 ]  && plan+="bulk (${DOMAIN_BULK}:${BULK_PORT})"
+log "Plan: $plan"
 
-# ─── 1. System aktualisieren + Zeit setzen ───────────────────
+# ─── 1. System-Update + Zeitzone ─────────────────────────────
 log "1/10  System-Update + Zeitzone $TIMEZONE"
 apt-get update -qq
 apt-get -yqq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
@@ -64,7 +68,7 @@ apt-get install -yqq \
     ufw fail2ban unattended-upgrades apt-listchanges \
     debian-keyring debian-archive-keyring apt-transport-https
 
-# ─── 3. Caddy Repo + Install ─────────────────────────────────
+# ─── 3. Caddy ────────────────────────────────────────────────
 if ! command -v caddy >/dev/null; then
     log "3/10  Caddy installieren"
     curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' \
@@ -82,8 +86,6 @@ log "4/10  User '$APP_USER' + Repo"
 if ! id -u "$APP_USER" >/dev/null 2>&1; then
     useradd --system --create-home --shell /bin/bash "$APP_USER"
 fi
-
-# Nur clonen wenn's noch nicht existiert; sonst fetch+reset auf $BRANCH
 if [ ! -d "$APP_DIR/.git" ]; then
     sudo -u "$APP_USER" git clone --branch "$BRANCH" "$REPO_URL" "$APP_DIR"
 else
@@ -99,21 +101,30 @@ if [ ! -d "$APP_DIR/venv" ]; then
     sudo -u "$APP_USER" python3 -m venv "$APP_DIR/venv"
 fi
 sudo -u "$APP_USER" "$APP_DIR/venv/bin/pip" install --upgrade pip -q
-# requirements.txt hat die Grund-Deps; die Web-Extras hängen wir dran
 sudo -u "$APP_USER" "$APP_DIR/venv/bin/pip" install -q -r "$APP_DIR/requirements.txt"
+# bulk/requirements.txt zieht PySide6 rein (GUI, unnötig fürs Web-Panel)
+# — die restlichen Web-Deps holen wir explizit
 sudo -u "$APP_USER" "$APP_DIR/venv/bin/pip" install -q \
     fastapi 'uvicorn[standard]' jinja2 python-multipart boto3 pypdf
 
-# Import-Smoke-Test
-if ! sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && '$APP_DIR/venv/bin/python' -c 'from transactional.web.main import app'"; then
-    die "Import von transactional.web.main:app fehlgeschlagen — check dependencies."
+# Import-Smoke-Tests für alles was installiert wird
+if [ $INSTALL_TRANS -eq 1 ]; then
+    sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && '$APP_DIR/venv/bin/python' -c 'from transactional.web.main import app'" \
+        || die "transactional.web.main:app import fehlgeschlagen."
+fi
+if [ $INSTALL_BULK -eq 1 ]; then
+    sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && '$APP_DIR/venv/bin/python' -c 'from bulk.web.main import app'" \
+        || die "bulk.web.main:app import fehlgeschlagen."
 fi
 
-# ─── 6. Gehärteter systemd Service ──────────────────────────
-log "6/10  systemd Unit (hardened, non-root)"
-cat > /etc/systemd/system/transmailer.service <<EOF
+# ─── 6. Systemd Units (gehärtet, non-root) ───────────────────
+log "6/10  systemd Units"
+
+write_unit() {
+    local name="$1" module="$2" port="$3"
+    cat > "/etc/systemd/system/${name}.service" <<EOF
 [Unit]
-Description=Transactional Mailer Web UI
+Description=${name} Web UI
 After=network-online.target
 Wants=network-online.target
 
@@ -122,14 +133,14 @@ Type=simple
 User=${APP_USER}
 Group=${APP_USER}
 WorkingDirectory=${APP_DIR}
-ExecStart=${APP_DIR}/venv/bin/python -m uvicorn transactional.web.main:app --host 127.0.0.1 --port ${APP_PORT}
+ExecStart=${APP_DIR}/venv/bin/python -m uvicorn ${module}:app --host 127.0.0.1 --port ${port}
 Restart=on-failure
 RestartSec=5
 
 Environment=PYTHONUNBUFFERED=1
 Environment=TZ=${TIMEZONE}
 
-# ── Hardening (systemd-analyze security transmailer sollte ≤ 3.0 sein) ──
+# ── Hardening ──
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
@@ -156,17 +167,28 @@ UMask=0077
 [Install]
 WantedBy=multi-user.target
 EOF
-
-# ─── 7. Caddyfile ───────────────────────────────────────────
-log "7/10  Caddyfile für ${DOMAIN}"
-cat > /etc/caddy/Caddyfile <<EOF
-{
-    email admin@${DOMAIN#*.}
 }
 
-${DOMAIN} {
-    encode gzip zstd
+[ $INSTALL_TRANS -eq 1 ] && write_unit transmailer transactional.web.main "$TRANS_PORT"
+[ $INSTALL_BULK -eq 1 ]  && write_unit bulkmailer  bulk.web.main          "$BULK_PORT"
 
+# ─── 7. Caddyfile ───────────────────────────────────────────
+log "7/10  Caddyfile"
+{
+    if [ $INSTALL_TRANS -eq 1 ] && [ $INSTALL_BULK -eq 1 ]; then
+        echo "{ email admin@${DOMAIN_TRANS#*.} }"
+    elif [ $INSTALL_TRANS -eq 1 ]; then
+        echo "{ email admin@${DOMAIN_TRANS#*.} }"
+    else
+        echo "{ email admin@${DOMAIN_BULK#*.} }"
+    fi
+    echo
+
+    write_vhost() {
+        local domain="$1" port="$2"
+        cat <<VHOST
+${domain} {
+    encode gzip zstd
     header {
         Strict-Transport-Security "max-age=31536000; includeSubDomains"
         X-Content-Type-Options    "nosniff"
@@ -175,22 +197,25 @@ ${DOMAIN} {
         Permissions-Policy        "geolocation=(), microphone=(), camera=()"
         -Server
     }
-
-    reverse_proxy 127.0.0.1:${APP_PORT} {
+    reverse_proxy 127.0.0.1:${port} {
         header_up X-Real-IP        {remote_host}
         header_up X-Forwarded-For  {remote_host}
         header_up X-Forwarded-Host {host}
     }
-
     log {
-        output file /var/log/caddy/access.log {
-            roll_size 10MiB
-            roll_keep 5
-        }
+        output file /var/log/caddy/${domain}.log { roll_size 10MiB roll_keep 5 }
         format json
     }
 }
-EOF
+
+VHOST
+    }
+
+    [ $INSTALL_TRANS -eq 1 ] && write_vhost "$DOMAIN_TRANS" "$TRANS_PORT"
+    [ $INSTALL_BULK -eq 1 ]  && write_vhost "$DOMAIN_BULK"  "$BULK_PORT"
+} > /etc/caddy/Caddyfile
+
+mkdir -p /var/log/caddy && chown caddy:caddy /var/log/caddy
 
 # ─── 8. UFW Firewall ─────────────────────────────────────────
 log "8/10  UFW Firewall (nur 22 / 80 / 443)"
@@ -231,7 +256,7 @@ Unattended-Upgrade::Remove-Unused-Dependencies "true";
 EOF
 systemctl enable --now unattended-upgrades
 
-# ─── 10. SSH-Hardening (nur wenn ein Key hinterlegt ist) ─────
+# ─── 10. SSH-Hardening ──────────────────────────────────────
 log "10/10 SSH-Hardening ($HARDEN_SSH)"
 should_harden=0
 case "$HARDEN_SSH" in
@@ -243,7 +268,7 @@ case "$HARDEN_SSH" in
             should_harden=1
         else
             warn "Kein SSH-Key gefunden — SSH-Hardening übersprungen, sonst sperrst du dich aus."
-            warn "Wenn du einen Key hast: install-trans.sh nochmal mit HARDEN_SSH=yes laufen lassen."
+            warn "Später mit HARDEN_SSH=yes nachziehen wenn du einen Key hinterlegt hast."
         fi
         ;;
 esac
@@ -269,43 +294,58 @@ EOF
     fi
 fi
 
-# ─── sudoers: NOPASSWD für den Restart, damit update-trans.sh ohne PW läuft ─
-cat > /etc/sudoers.d/transmailer <<EOF
-${APP_USER} ALL=(root) NOPASSWD: /bin/systemctl restart transmailer, /bin/systemctl status transmailer, /bin/systemctl reload transmailer
+# ─── sudoers: NOPASSWD restart für installierte Services ────
+sudo_cmds=()
+[ $INSTALL_TRANS -eq 1 ] && sudo_cmds+=("/bin/systemctl restart transmailer" "/bin/systemctl reload transmailer" "/bin/systemctl status transmailer")
+[ $INSTALL_BULK -eq 1 ]  && sudo_cmds+=("/bin/systemctl restart bulkmailer"  "/bin/systemctl reload bulkmailer"  "/bin/systemctl status bulkmailer")
+IFS=, ; cmd_list="${sudo_cmds[*]}" ; unset IFS
+cat > /etc/sudoers.d/mailer <<EOF
+${APP_USER} ALL=(root) NOPASSWD: ${cmd_list}
 EOF
-chmod 0440 /etc/sudoers.d/transmailer
+chmod 0440 /etc/sudoers.d/mailer
 
 # ─── Services scharfschalten ─────────────────────────────────
 log "Services enablen + starten"
-mkdir -p /var/log/caddy && chown caddy:caddy /var/log/caddy
 systemctl daemon-reload
-systemctl enable --now transmailer
+[ $INSTALL_TRANS -eq 1 ] && systemctl enable --now transmailer
+[ $INSTALL_BULK -eq 1 ]  && systemctl enable --now bulkmailer
 systemctl reload caddy 2>/dev/null || systemctl restart caddy
 
-# ─── Healthcheck ─────────────────────────────────────────────
+# ─── Healthchecks ────────────────────────────────────────────
 sleep 3
-HTTP_LOCAL=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${APP_PORT}/" || echo "000")
-[ "$HTTP_LOCAL" = "303" ] || [ "$HTTP_LOCAL" = "200" ] || warn "App antwortet nicht sauber (HTTP $HTTP_LOCAL) — check: journalctl -u transmailer -n 40"
+check() {
+    local name="$1" port="$2"
+    local code
+    code=$(curl -s -o /dev/null -w "%{http_code}" "http://127.0.0.1:${port}/" || echo "000")
+    if [ "$code" = "303" ] || [ "$code" = "200" ] || [ "$code" = "307" ]; then
+        printf '  ✓ %-10s HTTP %s on :%s\n' "$name" "$code" "$port"
+    else
+        warn "$name antwortet nicht sauber (HTTP $code) — journalctl -u ${name} -n 40"
+    fi
+}
+[ $INSTALL_TRANS -eq 1 ] && check transmailer "$TRANS_PORT"
+[ $INSTALL_BULK -eq 1 ]  && check bulkmailer  "$BULK_PORT"
 
+# ─── Abschluss ───────────────────────────────────────────────
 cat <<EOF
 
 ┌──────────────────────────────────────────────────────────────
 │  ✅  Deploy fertig.
 │
-│  Panel :  https://${DOMAIN}
-│  Local :  http://127.0.0.1:${APP_PORT}  (HTTP $HTTP_LOCAL)
-│  App   :  systemctl status transmailer
-│  Logs  :  journalctl -u transmailer -f
-│  Caddy :  journalctl -u caddy -f
+EOF
+[ $INSTALL_TRANS -eq 1 ] && printf '│  Trans :  https://%s\n' "$DOMAIN_TRANS"
+[ $INSTALL_BULK -eq 1 ]  && printf '│  Bulk  :  https://%s\n' "$DOMAIN_BULK"
+cat <<EOF
 │
-│  DNS-Check: für automatisches Zertifikat muss ${DOMAIN}
-│  bereits auf diesen Server zeigen (A-/AAAA-Record).
-│  Beim ersten Aufruf holt Caddy Let's Encrypt automatisch.
+│  DNS-Check: die Domains oben müssen bereits auf diesen
+│  Server zeigen (A-/AAAA-Record). Beim ersten Aufruf
+│  holt Caddy Let's Encrypt automatisch.
 │
-│  Updates ab jetzt:
-│      sudo -u ${APP_USER} bash ${APP_DIR}/deploy/update-trans.sh
+│  Updates ab jetzt (in SSH-Session als '$APP_USER'):
+│      bash ~/mailer/deploy/update.sh
 │
-│  security audit:
-│      systemd-analyze security transmailer
+│  Logs:    journalctl -u transmailer -f   (oder bulkmailer)
+│  Caddy:   journalctl -u caddy -f
+│  Audit:   systemd-analyze security transmailer
 └──────────────────────────────────────────────────────────────
 EOF
