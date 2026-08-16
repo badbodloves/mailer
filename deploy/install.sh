@@ -212,7 +212,10 @@ ${domain} {
         header_up X-Forwarded-Host {host}
     }
     log {
-        output file /var/log/caddy/${domain}.log { roll_size 10MiB roll_keep 5 }
+        output file /var/log/caddy/${domain}.log {
+            roll_size 10MiB
+            roll_keep 5
+        }
         format json
     }
 }
