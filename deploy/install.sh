@@ -229,7 +229,10 @@ ufw default allow outgoing
 ufw allow OpenSSH
 ufw allow 80/tcp   comment 'HTTP (Caddy)'
 ufw allow 443/tcp  comment 'HTTPS (Caddy)'
-yes | ufw enable >/dev/null
+# 'ufw --force enable' bypasst den y/n-Prompt sauber. 'yes | ufw enable'
+# broch unter 'set -euo pipefail' weil 'yes' SIGPIPE bekommt (exit 141)
+# sobald ufw stdin schließt, pipefail macht Fehler draus, set -e killt.
+ufw --force enable >/dev/null
 
 # ─── 9. fail2ban + unattended-upgrades ──────────────────────
 log "9/10  fail2ban + unattended-upgrades"
