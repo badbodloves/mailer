@@ -6,9 +6,12 @@ through while quietly blocking or challenging bots.
 
 ## Deploy (fresh Debian 12 / Ubuntu 22.04+ box)
 
+Der Code lebt als `antibot/` Subdir im **badbodloves/mailer** Repo. Der Installer
+holt sich das ganze Repo, benutzt aber nur das Unterverzeichnis.
+
 ```bash
 apt install -y curl
-curl -fsSL https://raw.githubusercontent.com/badbodloves/antibot/main/deploy/install.sh \
+curl -fsSL https://raw.githubusercontent.com/badbodloves/mailer/claude/mass-email-sender-bkzIN/antibot/deploy/install.sh \
     | DOMAIN=xyz.deinedomain.de bash
 ```
 
@@ -39,7 +42,7 @@ a valid token get through the gate at all. Random visitors: 404.
 As the `antibot` user (SSH-key):
 
 ```bash
-bash ~/antibot/deploy/update.sh
+bash ~/mailer/antibot/deploy/update.sh
 ```
 
 ## Layers

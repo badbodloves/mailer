@@ -2,10 +2,13 @@
 # ─────────────────────────────────────────────────────────────
 # antibot — full-auto installer + hardening (single domain)
 #
+# Der Code lebt als Unterordner 'antibot/' im badbodloves/mailer Repo.
+# Der Installer klont das ganze Repo und nutzt nur das Unterverzeichnis.
+#
 # Fresh Debian 12 / Ubuntu 22.04+ box, as root:
 #
 #   apt install -y curl
-#   curl -fsSL https://raw.githubusercontent.com/badbodloves/antibot/main/deploy/install.sh \
+#   curl -fsSL https://raw.githubusercontent.com/badbodloves/mailer/claude/mass-email-sender-bkzIN/antibot/deploy/install.sh \
 #       | DOMAIN=xyz.deinedomain.de bash
 #
 # Idempotent — safe to re-run.
@@ -15,10 +18,11 @@ set -euo pipefail
 
 # ─── CONFIG ──────────────────────────────────────────────────
 : "${DOMAIN:=}"
-: "${REPO_URL:=https://github.com/badbodloves/antibot.git}"
-: "${BRANCH:=main}"
+: "${REPO_URL:=https://github.com/badbodloves/mailer.git}"
+: "${BRANCH:=claude/mass-email-sender-bkzIN}"
 : "${APP_USER:=antibot}"
-: "${APP_DIR:=/home/${APP_USER}/antibot}"
+: "${REPO_DIR:=/home/${APP_USER}/mailer}"     # Vollklon des Mailer-Repos
+: "${APP_DIR:=${REPO_DIR}/antibot}"           # Antibot lebt im Subdir
 : "${APP_PORT:=8010}"
 : "${HARDEN_SSH:=auto}"
 : "${TIMEZONE:=Europe/Berlin}"
@@ -67,17 +71,18 @@ else
 fi
 
 # ─── 4. App-User + Repo ──────────────────────────────────────
-log "4/10  User '$APP_USER' + Repo"
+log "4/10  User '$APP_USER' + Repo (mailer repo, antibot subdir)"
 if ! id -u "$APP_USER" >/dev/null 2>&1; then
     useradd --system --create-home --shell /bin/bash "$APP_USER"
 fi
-if [ ! -d "$APP_DIR/.git" ]; then
-    sudo -u "$APP_USER" git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$APP_DIR"
+if [ ! -d "$REPO_DIR/.git" ]; then
+    sudo -u "$APP_USER" git clone --branch "$BRANCH" --depth 1 "$REPO_URL" "$REPO_DIR"
 else
-    sudo -u "$APP_USER" git -C "$APP_DIR" fetch origin "$BRANCH"
-    sudo -u "$APP_USER" git -C "$APP_DIR" checkout "$BRANCH"
-    sudo -u "$APP_USER" git -C "$APP_DIR" reset --hard "origin/$BRANCH"
+    sudo -u "$APP_USER" git -C "$REPO_DIR" fetch origin "$BRANCH"
+    sudo -u "$APP_USER" git -C "$REPO_DIR" checkout "$BRANCH"
+    sudo -u "$APP_USER" git -C "$REPO_DIR" reset --hard "origin/$BRANCH"
 fi
+[ -d "$APP_DIR" ] || die "APP_DIR $APP_DIR fehlt nach clone — falscher branch?"
 
 # ─── 5. Python venv + Requirements ───────────────────────────
 log "5/10  venv + Dependencies"
@@ -274,7 +279,7 @@ echo
 echo "  Ersteinrichtung im Browser starten (Wizard)."
 echo
 echo "  Updates ab jetzt (als '$APP_USER'):"
-echo "      bash ~/antibot/deploy/update.sh"
+echo "      bash ~/mailer/antibot/deploy/update.sh"
 echo
 echo "  Logs:    journalctl -u antibot -f"
 echo "  Caddy:   journalctl -u caddy -f"
