@@ -477,6 +477,10 @@ class TransDB:
         "freshness_reset_logos": False,
         "freshness_html_count": 25,
         "freshness_logo_count": 25,
+        "antibot_enabled": False,
+        "antibot_base_url": "",
+        "antibot_hmac_secret": "",
+        "antibot_token_ttl_hours": 168,
     }
 
     def get_config(self) -> dict:

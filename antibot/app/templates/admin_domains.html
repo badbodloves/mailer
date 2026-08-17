@@ -1,0 +1,156 @@
+{% extends "base.html" %}
+{% set active = "domains" %}
+{% block content %}
+<div class="page-header"><h1>Domains</h1></div>
+
+<div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border-light);padding-bottom:6px">
+    <a href="/admin/domains?tab=dynadot"    class="btn btn-secondary btn-sm{% if tab == 'dynadot' %} btn-primary{% endif %}">Dynadot</a>
+    <a href="/admin/domains?tab=cloudflare" class="btn btn-secondary btn-sm{% if tab == 'cloudflare' %} btn-primary{% endif %}">Cloudflare</a>
+    <a href="/admin/domains?tab=combined"   class="btn btn-secondary btn-sm{% if tab == 'combined' %} btn-primary{% endif %}">Buy &amp; Connect</a>
+</div>
+
+{% if tab == 'dynadot' %}
+<div class="grid-2" style="align-items:start">
+    <div class="card">
+        <h3>Dynadot API</h3>
+        <form method="post" action="/admin/domains/dynadot/save">
+            <label>API-Key <span class="muted">(Dynadot → My Account → API-Zugang)</span></label>
+            <input name="api_key" type="password" value="{{ cfg.dynadot_api_key }}">
+            <label>Kauf-Währung</label>
+            <select name="buy_currency">
+                {% for c in ['USD','EUR','GBP','JPY','CNY','CAD','AUD'] %}
+                <option value="{{ c }}" {% if cfg.buy_currency == c %}selected{% endif %}>{{ c }}</option>
+                {% endfor %}
+            </select>
+            <button class="btn btn-primary btn-sm" style="margin-top:8px">Speichern</button>
+        </form>
+        {% if cfg.dynadot_api_key %}
+        <p class="muted" style="margin-top:12px">Kontostand: <strong>{{ dyn_balance }}</strong></p>
+        {% endif %}
+    </div>
+
+    <div class="card">
+        <h3>Domain-Suche + Kauf</h3>
+        {% if cfg.dynadot_api_key %}
+        <form hx-post="/admin/domains/dynadot/search" hx-target="#dyn-search-result" hx-swap="innerHTML">
+            <label>Domains (eine pro Zeile oder kommagetrennt, max 20)</label>
+            <textarea name="domains" rows="4" placeholder="deinedomain.de&#10;anotherone.com" style="font-family:monospace"></textarea>
+            <button class="btn btn-primary btn-sm">Prüfen</button>
+        </form>
+        <div id="dyn-search-result" style="margin-top:12px"></div>
+        {% else %}
+        <p class="muted">Erst API-Key speichern.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% if dyn_domains %}
+<div class="card" style="margin-top:16px">
+    <h3>Deine Dynadot-Domains ({{ dyn_domains|length }})</h3>
+    <table style="font-size:12px">
+        <thead><tr><th>Domain</th><th>Expiry</th><th>Status</th></tr></thead>
+        <tbody>
+        {% for d in dyn_domains[:100] %}
+        <tr>
+            <td style="font-family:monospace">{{ d.get('Name', d.get('name', '?')) }}</td>
+            <td>{{ d.get('Expiration', d.get('expiration', '')) }}</td>
+            <td>{{ d.get('Status', d.get('status', '')) }}</td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+{% endif %}
+
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+{% endif %}
+
+{% if tab == 'cloudflare' %}
+<div class="grid-2" style="align-items:start">
+    <div class="card">
+        <h3>Cloudflare API</h3>
+        <form method="post" action="/admin/domains/cf/save">
+            <label>API-Token <span class="muted">(Zone.Zone Edit + Zone.DNS Edit + Account.Zone Create)</span></label>
+            <input name="api_token" type="password" value="{{ cfg.cloudflare_api_token }}">
+            <label>Account-ID <span class="muted">(nur nötig um neue Zonen anzulegen)</span></label>
+            <input name="account_id" value="{{ cfg.cloudflare_account_id }}">
+            <button class="btn btn-primary btn-sm" style="margin-top:8px">Speichern</button>
+        </form>
+    </div>
+
+    <div class="card">
+        <h3>Bestehende Domain als CF-Zone hinzufügen</h3>
+        {% if cfg.cloudflare_api_token %}
+        <form hx-post="/admin/domains/cf/add-zone" hx-target="#cf-add-result" hx-swap="innerHTML">
+            <label>Domain (bei anderem Registrar liegend)</label>
+            <input name="name" placeholder="deinedomain.de" required>
+            <button class="btn btn-primary btn-sm">Zone anlegen</button>
+        </form>
+        <div id="cf-add-result" style="margin-top:8px"></div>
+        {% else %}
+        <p class="muted">Erst API-Token speichern.</p>
+        {% endif %}
+    </div>
+</div>
+
+{% if cf_zones %}
+<div class="card" style="margin-top:16px">
+    <h3>Zones ({{ cf_zones|length }})</h3>
+    <table style="font-size:12px">
+        <thead><tr><th>Domain</th><th>Status</th><th>Plan</th><th>Nameserver</th><th></th></tr></thead>
+        <tbody>
+        {% for z in cf_zones %}
+        <tr>
+            <td style="font-family:monospace">{{ z.name }}</td>
+            <td>{% if z.status == 'active' %}<span class="v-allow">active</span>{% else %}<span class="v-chal">{{ z.status }}</span>{% endif %}</td>
+            <td>{{ z.plan.name if z.plan else '—' }}</td>
+            <td style="font-family:monospace;font-size:10px">
+                {% for ns in z.name_servers %}{{ ns }}<br>{% endfor %}
+            </td>
+            <td>
+                <button class="btn btn-secondary btn-xs"
+                        hx-get="/admin/domains/cf/zone/{{ z.id }}"
+                        hx-target="#zone-view" hx-swap="innerHTML">Records</button>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+</div>
+<div id="zone-view" class="card" style="margin-top:12px"></div>
+{% endif %}
+
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+{% endif %}
+
+{% if tab == 'combined' %}
+<div class="card">
+    <h3>Domain kaufen + gleich mit Server verbinden</h3>
+    <p class="muted">Workflow: (1) Domain via Dynadot kaufen im Tab „Dynadot".
+    (2) Bei Dynadot Nameserver auf Cloudflare umstellen (kommt automatisch nach dem CF-Zone-Anlegen).
+    (3) Hier unten Domain + Ziel-IP eingeben — antibot legt die CF-Zone an (falls noch nicht) und setzt A-Record @ + www.</p>
+    <form hx-post="/admin/domains/combined/connect" hx-target="#combined-result" hx-swap="innerHTML">
+        <div class="grid-2">
+            <div>
+                <label>Domain</label>
+                <input name="domain" placeholder="deinedomain.de"
+                    value="{{ request.query_params.get('connect', '') }}" required>
+            </div>
+            <div>
+                <label>Ziel-Server IP</label>
+                <input name="ip" placeholder="1.2.3.4" required>
+            </div>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;margin-top:6px">
+            <input type="checkbox" name="add_www" value="1" checked>
+            <span>www.-Subdomain auch anlegen</span>
+        </label>
+        <div style="margin-top:12px">
+            <button class="btn btn-primary btn-sm">Verbinden</button>
+        </div>
+    </form>
+    <div id="combined-result" style="margin-top:12px"></div>
+</div>
+<script src="https://unpkg.com/htmx.org@2.0.4"></script>
+{% endif %}
+{% endblock %}

@@ -111,6 +111,10 @@ class DB:
         "pow_difficulty": "5",             # leading nibbles → 5 = 20 zero bits
         "wait_seconds": "0",               # extra delay before verify (0 = off)
         "setup_done": "0",
+        "dynadot_api_key": "",
+        "cloudflare_api_token": "",
+        "cloudflare_account_id": "",       # optional, only for some endpoints
+        "buy_currency": "USD",
     }
 
     def get_config(self) -> dict:

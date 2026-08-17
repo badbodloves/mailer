@@ -13,7 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.db import DB
-from app.routes import auth, setup, gate, admin, settings as settings_route
+from app.routes import auth, setup, gate, admin, settings as settings_route, domains
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -82,6 +82,7 @@ app.include_router(setup.router)
 app.include_router(gate.router)
 app.include_router(admin.router)
 app.include_router(settings_route.router)
+app.include_router(domains.router)
 
 
 @app.get("/health")

