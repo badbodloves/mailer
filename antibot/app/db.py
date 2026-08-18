@@ -112,8 +112,11 @@ class DB:
         "wait_seconds": "0",               # extra delay before verify (0 = off)
         "setup_done": "0",
         "dynadot_api_key": "",
-        "cloudflare_api_token": "",
-        "cloudflare_account_id": "",       # optional, only for some endpoints
+        "dynadot_api_secret": "",          # some Dynadot endpoints require it
+        "cloudflare_api_token": "",        # Bearer token (Zone-scoped)
+        "cloudflare_global_api_key": "",   # optional — full-account global key
+        "cloudflare_auth_email": "",       # required when global key is used
+        "cloudflare_account_id": "",       # needed only to create new zones
         "buy_currency": "USD",
     }
 

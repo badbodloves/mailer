@@ -16,6 +16,8 @@
         <form method="post" action="/admin/domains/dynadot/save">
             <label>API-Key <span class="muted">(Dynadot → My Account → API-Zugang)</span></label>
             <input name="api_key" type="password" value="{{ cfg.dynadot_api_key }}">
+            <label>API-Secret <span class="muted">(nötig wenn dein Dynadot-Konto „API secret" aktiv hat — sonst leer lassen)</span></label>
+            <input name="api_secret" type="password" value="{{ cfg.dynadot_api_secret }}">
             <label>Kauf-Währung</label>
             <select name="buy_currency">
                 {% for c in ['USD','EUR','GBP','JPY','CNY','CAD','AUD'] %}
@@ -69,9 +71,23 @@
 <div class="grid-2" style="align-items:start">
     <div class="card">
         <h3>Cloudflare API</h3>
+        <p class="muted" style="font-size:12px;margin-top:0">
+            Entweder <strong>Global API Key + Auth-Email</strong> (voller Kontozugriff) ODER
+            <strong>Bearer-Token</strong> (feiner scoped). Wenn beides gesetzt, wird Global-Key bevorzugt.
+        </p>
         <form method="post" action="/admin/domains/cf/save">
-            <label>API-Token <span class="muted">(Zone.Zone Edit + Zone.DNS Edit + Account.Zone Create)</span></label>
-            <input name="api_token" type="password" value="{{ cfg.cloudflare_api_token }}">
+            <fieldset style="border:1px solid #d0e8ff;border-radius:4px;padding:10px 14px;margin-bottom:10px">
+                <legend style="font-size:12px">Global API Key (empfohlen)</legend>
+                <label>Global API Key <span class="muted">(CF Dashboard → My Profile → API Tokens → Global API Key)</span></label>
+                <input name="global_api_key" type="password" value="{{ cfg.cloudflare_global_api_key }}">
+                <label>Auth-Email <span class="muted">(deine CF-Account-Email)</span></label>
+                <input name="auth_email" type="email" value="{{ cfg.cloudflare_auth_email }}">
+            </fieldset>
+            <fieldset style="border:1px solid #eee;border-radius:4px;padding:10px 14px;margin-bottom:10px">
+                <legend style="font-size:12px">ODER: Scoped Bearer-Token</legend>
+                <label>API-Token <span class="muted">(Zone.Zone Edit + Zone.DNS Edit + Account.Zone Create)</span></label>
+                <input name="api_token" type="password" value="{{ cfg.cloudflare_api_token }}">
+            </fieldset>
             <label>Account-ID <span class="muted">(nur nötig um neue Zonen anzulegen)</span></label>
             <input name="account_id" value="{{ cfg.cloudflare_account_id }}">
             <button class="btn btn-primary btn-sm" style="margin-top:8px">Speichern</button>
@@ -80,7 +96,7 @@
 
     <div class="card">
         <h3>Bestehende Domain als CF-Zone hinzufügen</h3>
-        {% if cfg.cloudflare_api_token %}
+        {% if cfg.cloudflare_api_token or (cfg.cloudflare_global_api_key and cfg.cloudflare_auth_email) %}
         <form hx-post="/admin/domains/cf/add-zone" hx-target="#cf-add-result" hx-swap="innerHTML">
             <label>Domain (bei anderem Registrar liegend)</label>
             <input name="name" placeholder="deinedomain.de" required>

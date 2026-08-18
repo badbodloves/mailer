@@ -15,12 +15,17 @@ CF_BASE = "https://api.cloudflare.com/client/v4"
 
 # ── Dynadot helpers ────────────────────────────────────────
 
-def _dyn_call(api_key: str, command: str, params: dict = None) -> dict:
-    """Dynadot API v3 (JSON). Returns parsed dict, or {'error': msg}."""
+def _dyn_call(api_key: str, command: str, params: dict = None,
+              secret: str = "") -> dict:
+    """Dynadot API v3 (JSON). Returns parsed dict, or {'error': msg}.
+    `secret` is Dynadot's optional API-secret (needed for some actions
+    like register / renew when the account has 'API secret' enabled)."""
     import requests
     if not api_key:
         return {"error": "Kein Dynadot API-Key gesetzt."}
     url = f"{DYNADOT_BASE}?key={api_key}&command={command}"
+    if secret:
+        url += f"&secret={secret}"
     if params:
         for k, v in params.items():
             url += f"&{k}={v}"
@@ -31,8 +36,8 @@ def _dyn_call(api_key: str, command: str, params: dict = None) -> dict:
         return {"error": f"Dynadot request failed: {e}"}
 
 
-def _dyn_balance(api_key: str) -> str:
-    resp = _dyn_call(api_key, "account_info")
+def _dyn_balance(api_key: str, secret: str = "") -> str:
+    resp = _dyn_call(api_key, "account_info", secret=secret)
     if "error" in resp:
         return f"— ({resp['error']})"
     try:
@@ -41,9 +46,11 @@ def _dyn_balance(api_key: str) -> str:
         return "?"
 
 
-def _dyn_search(api_key: str, domain: str, currency: str = "USD") -> dict:
+def _dyn_search(api_key: str, domain: str, currency: str = "USD",
+                 secret: str = "") -> dict:
     """Check availability + price for a single domain."""
-    resp = _dyn_call(api_key, "search", {"domain0": domain, "currency": currency})
+    resp = _dyn_call(api_key, "search",
+                     {"domain0": domain, "currency": currency}, secret=secret)
     if "error" in resp:
         return {"available": False, "price": "", "error": resp["error"]}
     try:
@@ -59,10 +66,10 @@ def _dyn_search(api_key: str, domain: str, currency: str = "USD") -> dict:
 
 
 def _dyn_register(api_key: str, domain: str, currency: str = "USD",
-                   duration: int = 1) -> dict:
+                   duration: int = 1, secret: str = "") -> dict:
     """Actually buy the domain. Returns {'ok': bool, 'msg': str, 'raw': ...}."""
     params = {"domain": domain, "duration": duration, "currency": currency}
-    resp = _dyn_call(api_key, "register", params)
+    resp = _dyn_call(api_key, "register", params, secret=secret)
     if "error" in resp:
         return {"ok": False, "msg": resp["error"]}
     try:
@@ -75,8 +82,8 @@ def _dyn_register(api_key: str, domain: str, currency: str = "USD",
         return {"ok": False, "msg": "unklare Dynadot-Antwort", "raw": resp}
 
 
-def _dyn_domains(api_key: str) -> list:
-    resp = _dyn_call(api_key, "list_domain")
+def _dyn_domains(api_key: str, secret: str = "") -> list:
+    resp = _dyn_call(api_key, "list_domain", secret=secret)
     if "error" in resp:
         return []
     try:
@@ -90,72 +97,99 @@ def _dyn_domains(api_key: str) -> list:
 
 # ── Cloudflare helpers ────────────────────────────────────
 
-def _cf_headers(token: str) -> dict:
-    return {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+def _cf_auth(cfg: dict) -> dict:
+    """Prefer Global-API-Key + Email if both are set, else fall back to
+    Bearer token. Returns headers dict (or empty dict if nothing configured)."""
+    gk = (cfg.get("cloudflare_global_api_key") or "").strip()
+    email = (cfg.get("cloudflare_auth_email") or "").strip()
+    if gk and email:
+        return {
+            "X-Auth-Key": gk,
+            "X-Auth-Email": email,
+            "Content-Type": "application/json",
+        }
+    token = (cfg.get("cloudflare_api_token") or "").strip()
+    if token:
+        return {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        }
+    return {}
 
 
-def _cf_get(token: str, path: str, params: dict = None) -> dict:
+def _cf_get(cfg: dict, path: str, params: dict = None) -> dict:
     import requests
-    if not token:
-        return {"success": False, "errors": [{"message": "Kein Cloudflare-Token gesetzt."}]}
+    headers = _cf_auth(cfg)
+    if not headers:
+        return {"success": False, "errors": [{"message": "Weder CF-Token noch Global-Key/Email gesetzt."}]}
     try:
-        r = requests.get(f"{CF_BASE}{path}", headers=_cf_headers(token),
+        r = requests.get(f"{CF_BASE}{path}", headers=headers,
                          params=params or {}, timeout=20)
         return r.json()
     except Exception as e:
         return {"success": False, "errors": [{"message": str(e)}]}
 
 
-def _cf_post(token: str, path: str, body: dict) -> dict:
+def _cf_post(cfg: dict, path: str, body: dict) -> dict:
     import requests
+    headers = _cf_auth(cfg)
+    if not headers:
+        return {"success": False, "errors": [{"message": "Kein CF-Auth."}]}
     try:
-        r = requests.post(f"{CF_BASE}{path}", headers=_cf_headers(token),
+        r = requests.post(f"{CF_BASE}{path}", headers=headers,
                           json=body, timeout=20)
         return r.json()
     except Exception as e:
         return {"success": False, "errors": [{"message": str(e)}]}
 
 
-def _cf_delete(token: str, path: str) -> dict:
+def _cf_delete(cfg: dict, path: str) -> dict:
     import requests
+    headers = _cf_auth(cfg)
+    if not headers:
+        return {"success": False, "errors": [{"message": "Kein CF-Auth."}]}
     try:
-        r = requests.delete(f"{CF_BASE}{path}", headers=_cf_headers(token), timeout=20)
+        r = requests.delete(f"{CF_BASE}{path}", headers=headers, timeout=20)
         return r.json()
     except Exception as e:
         return {"success": False, "errors": [{"message": str(e)}]}
 
 
-def _cf_zones(token: str) -> list:
-    resp = _cf_get(token, "/zones", {"per_page": 50})
+def _cf_zones(cfg: dict) -> list:
+    resp = _cf_get(cfg, "/zones", {"per_page": 50})
     if not resp.get("success"):
         return []
     return resp.get("result", [])
 
 
-def _cf_records(token: str, zone_id: str) -> list:
-    resp = _cf_get(token, f"/zones/{zone_id}/dns_records", {"per_page": 100})
+def _cf_records(cfg: dict, zone_id: str) -> list:
+    resp = _cf_get(cfg, f"/zones/{zone_id}/dns_records", {"per_page": 100})
     if not resp.get("success"):
         return []
     return resp.get("result", [])
 
 
-def _cf_add_zone(token: str, name: str, account_id: str) -> dict:
+def _cf_add_zone(cfg: dict, name: str, account_id: str) -> dict:
     body = {"name": name, "type": "full"}
     if account_id:
         body["account"] = {"id": account_id}
-    return _cf_post(token, "/zones", body)
+    return _cf_post(cfg, "/zones", body)
 
 
-def _cf_add_record(token: str, zone_id: str, rtype: str, name: str,
+def _cf_add_record(cfg: dict, zone_id: str, rtype: str, name: str,
                     content: str, proxied: bool = False, ttl: int = 1) -> dict:
-    return _cf_post(token, f"/zones/{zone_id}/dns_records", {
+    return _cf_post(cfg, f"/zones/{zone_id}/dns_records", {
         "type": rtype, "name": name, "content": content,
         "proxied": proxied, "ttl": int(ttl),
     })
 
 
-def _cf_delete_record(token: str, zone_id: str, record_id: str) -> dict:
-    return _cf_delete(token, f"/zones/{zone_id}/dns_records/{record_id}")
+def _cf_delete_record(cfg: dict, zone_id: str, record_id: str) -> dict:
+    return _cf_delete(cfg, f"/zones/{zone_id}/dns_records/{record_id}")
+
+
+def _cf_configured(cfg: dict) -> bool:
+    return bool(_cf_auth(cfg))
 
 
 # ── Panel routes ──────────────────────────────────────────
@@ -168,12 +202,12 @@ async def domains_page(request: Request, tab: str = "dynadot"):
     dyn_balance = ""
     dyn_domains = []
     if cfg.get("dynadot_api_key"):
-        dyn_balance = _dyn_balance(cfg["dynadot_api_key"])
-        dyn_domains = _dyn_domains(cfg["dynadot_api_key"])
+        dyn_balance = _dyn_balance(cfg["dynadot_api_key"], cfg.get("dynadot_api_secret", ""))
+        dyn_domains = _dyn_domains(cfg["dynadot_api_key"], cfg.get("dynadot_api_secret", ""))
 
     cf_zones = []
-    if cfg.get("cloudflare_api_token"):
-        cf_zones = _cf_zones(cfg["cloudflare_api_token"])
+    if _cf_configured(cfg):
+        cf_zones = _cf_zones(cfg)
 
     return request.app.state.templates.TemplateResponse(request, "admin_domains.html", {
         "cfg": cfg,
@@ -186,9 +220,11 @@ async def domains_page(request: Request, tab: str = "dynadot"):
 
 @router.post("/admin/domains/dynadot/save")
 async def dyn_save(request: Request, api_key: str = Form(""),
+                    api_secret: str = Form(""),
                     buy_currency: str = Form("USD")):
     request.app.state.db.set_config(
         dynadot_api_key=api_key.strip(),
+        dynadot_api_secret=api_secret.strip(),
         buy_currency=buy_currency.strip() or "USD",
     )
     return RedirectResponse("/admin/domains?tab=dynadot", status_code=303)
@@ -205,7 +241,8 @@ async def dyn_search_route(request: Request, domains: str = Form("")):
         return HTMLResponse('<div class="alert alert-danger">Kein Dynadot-Key gesetzt.</div>')
     rows_html = []
     for d in lines:
-        r = _dyn_search(cfg["dynadot_api_key"], d, cfg.get("buy_currency", "USD"))
+        r = _dyn_search(cfg["dynadot_api_key"], d, cfg.get("buy_currency", "USD"),
+                        secret=cfg.get("dynadot_api_secret", ""))
         badge = ('<span class="v-allow">verfügbar</span>' if r["available"]
                  else '<span class="v-block">belegt</span>')
         price = escape(str(r.get("price", "")))
@@ -236,7 +273,8 @@ async def dyn_buy(request: Request, domain: str = Form("")):
     if not domain:
         return HTMLResponse('<span class="v-block">Empty</span>')
     res = _dyn_register(cfg["dynadot_api_key"], domain,
-                        currency=cfg.get("buy_currency", "USD"))
+                        currency=cfg.get("buy_currency", "USD"),
+                        secret=cfg.get("dynadot_api_secret", ""))
     if res["ok"]:
         return HTMLResponse(f'<span class="v-allow">✓ {escape(domain)} gekauft.</span> '
                             f'<a href="/admin/domains?tab=combined&connect={escape(domain)}" '
@@ -248,9 +286,13 @@ async def dyn_buy(request: Request, domain: str = Form("")):
 
 @router.post("/admin/domains/cf/save")
 async def cf_save(request: Request, api_token: str = Form(""),
+                   global_api_key: str = Form(""),
+                   auth_email: str = Form(""),
                    account_id: str = Form("")):
     request.app.state.db.set_config(
         cloudflare_api_token=api_token.strip(),
+        cloudflare_global_api_key=global_api_key.strip(),
+        cloudflare_auth_email=auth_email.strip(),
         cloudflare_account_id=account_id.strip(),
     )
     return RedirectResponse("/admin/domains?tab=cloudflare", status_code=303)
@@ -260,11 +302,10 @@ async def cf_save(request: Request, api_token: str = Form(""),
 async def cf_zone_view(request: Request, zone_id: str):
     db = request.app.state.db
     cfg = db.get_config()
-    token = cfg.get("cloudflare_api_token", "")
-    if not token:
-        return HTMLResponse('<div class="alert alert-danger">Kein CF-Token.</div>')
-    records = _cf_records(token, zone_id)
-    zones = _cf_zones(token)
+    if not _cf_configured(cfg):
+        return HTMLResponse('<div class="alert alert-danger">Weder CF-Token noch Global-Key/Email gesetzt.</div>')
+    records = _cf_records(cfg, zone_id)
+    zones = _cf_zones(cfg)
     zone = next((z for z in zones if z["id"] == zone_id), None)
     zone_name = zone["name"] if zone else zone_id
     rows_html = []
@@ -299,7 +340,7 @@ async def cf_record_add(request: Request, zone_id: str,
                          content: str = Form(""), proxied: str = Form("")):
     db = request.app.state.db
     cfg = db.get_config()
-    resp = _cf_add_record(cfg["cloudflare_api_token"], zone_id, rtype,
+    resp = _cf_add_record(cfg, zone_id, rtype,
                            name.strip(), content.strip(), bool(proxied))
     if not resp.get("success"):
         errs = "; ".join(e.get("message", "") for e in resp.get("errors", []))
@@ -311,7 +352,7 @@ async def cf_record_add(request: Request, zone_id: str,
 async def cf_record_delete(request: Request, zone_id: str, rec_id: str):
     db = request.app.state.db
     cfg = db.get_config()
-    _cf_delete(cfg["cloudflare_api_token"], f"/zones/{zone_id}/dns_records/{rec_id}")
+    _cf_delete(cfg, f"/zones/{zone_id}/dns_records/{rec_id}")
     return await cf_zone_view(request, zone_id)
 
 
@@ -323,8 +364,7 @@ async def cf_add_zone_route(request: Request, name: str = Form("")):
     name = name.strip().lower()
     if not name or "." not in name:
         return HTMLResponse('<div class="alert alert-warning">Gültige Domain angeben.</div>')
-    resp = _cf_add_zone(cfg["cloudflare_api_token"], name,
-                        cfg.get("cloudflare_account_id", ""))
+    resp = _cf_add_zone(cfg, name, cfg.get("cloudflare_account_id", ""))
     if not resp.get("success"):
         errs = "; ".join(e.get("message", "") for e in resp.get("errors", []))
         return HTMLResponse(f'<div class="alert alert-danger">{escape(errs) or "Fehler"}</div>')
@@ -352,20 +392,19 @@ async def combined_connect(request: Request,
     then create an A-record @ → ip (and optionally www)."""
     db = request.app.state.db
     cfg = db.get_config()
-    token = cfg.get("cloudflare_api_token", "")
-    if not token:
-        return HTMLResponse('<div class="alert alert-danger">Kein Cloudflare-Token gesetzt.</div>')
+    if not _cf_configured(cfg):
+        return HTMLResponse('<div class="alert alert-danger">Weder CF-Token noch Global-Key/Email gesetzt.</div>')
     domain = domain.strip().lower()
     ip = ip.strip()
     if not domain or not ip:
         return HTMLResponse('<div class="alert alert-warning">Domain und IP nötig.</div>')
 
     # Ist die Zone schon in CF? Sonst neu anlegen.
-    zones = _cf_zones(token)
+    zones = _cf_zones(cfg)
     zone = next((z for z in zones if z["name"] == domain), None)
     ns_hint = ""
     if not zone:
-        resp = _cf_add_zone(token, domain, cfg.get("cloudflare_account_id", ""))
+        resp = _cf_add_zone(cfg, domain, cfg.get("cloudflare_account_id", ""))
         if not resp.get("success"):
             errs = "; ".join(e.get("message", "") for e in resp.get("errors", []))
             return HTMLResponse(f'<div class="alert alert-danger">Zone add failed: {escape(errs)}</div>')
@@ -378,10 +417,10 @@ async def combined_connect(request: Request,
     zid = zone["id"]
 
     logs = []
-    r1 = _cf_add_record(token, zid, "A", domain, ip, proxied=False)
+    r1 = _cf_add_record(cfg, zid, "A", domain, ip, proxied=False)
     logs.append(("@ → " + ip, r1.get("success"), r1))
     if add_www:
-        r2 = _cf_add_record(token, zid, "A", f"www.{domain}", ip, proxied=False)
+        r2 = _cf_add_record(cfg, zid, "A", f"www.{domain}", ip, proxied=False)
         logs.append(("www → " + ip, r2.get("success"), r2))
 
     log_html = "".join(
