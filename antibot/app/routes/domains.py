@@ -980,25 +980,45 @@ async def gate_health_check(request: Request, gate_id: int):
         checks.append(("Turnstile", "warn",
                         "nur Site-Key ODER Secret-Key gesetzt — beide nötig"))
     else:
-        # Dummy-Verify: mit invalid response check ob secret akzeptiert wird.
-        # Erfolgreiches Auth = wir kriegen 'invalid-input-response' (Token
-        # war falsch, aber Secret war ok). Wenn Secret invalid: 'invalid-input-secret'.
+        # Verify-Trick: wir schicken den Secret + einen bewusst leeren Response.
+        # CF antwortet:
+        #   error-codes: ["missing-input-response"]  → Secret akzeptiert, Token fehlte (= OK)
+        #   error-codes: ["invalid-input-secret"]    → Secret war falsch (= BAD)
+        #   error-codes: ["missing-input-secret"]    → Secret fehlte, sollte hier nie kommen
+        # Bei allem anderen dass success=False sagt: Secret wurde auch akzeptiert
+        # (der Fehler bezieht sich auf die Response, nicht den Secret).
         try:
             r = _req.post(
                 "https://challenges.cloudflare.com/turnstile/v0/siteverify",
-                data={"secret": ts_secret, "response": "dummy-token-for-health-check"},
-                timeout=6,
+                data={"secret": ts_secret, "response": ""},
+                timeout=8,
             )
-            data = r.json() if r.status_code == 200 else {}
-            errs = data.get("error-codes", [])
-            if "invalid-input-secret" in errs:
+            try:
+                data = r.json()
+            except Exception:
+                data = {}
+            errs = data.get("error-codes") or []
+            secret_bad = ("invalid-input-secret" in errs
+                          or "missing-input-secret" in errs)
+            if secret_bad:
                 checks.append(("Turnstile", "fail",
-                                "Secret-Key ist bei CF ungültig"))
-            elif "invalid-input-response" in errs or data.get("success") is False:
+                                f"Secret-Key bei CF ungültig ({', '.join(errs)})"))
+            elif data.get("success") is False:
+                # Irgendein anderer error-code → Secret war ok, nur unser
+                # Dummy-Response wurde (korrekt) abgelehnt.
+                errs_str = ", ".join(errs) if errs else "no error-codes"
                 checks.append(("Turnstile", "ok",
-                                f"Secret akzeptiert · Site-Key: {ts_site[:10]}…"))
+                                f"Secret akzeptiert (dummy verify → {errs_str}) · "
+                                f"Site: {ts_site[:12]}…"))
+            elif data.get("success") is True:
+                # Extrem unerwartet — leerer Response validiert nie
+                checks.append(("Turnstile", "warn",
+                                "success=true auf leeren Response — Test-Konfiguration?"))
             else:
-                checks.append(("Turnstile", "warn", f"unerwartet: {data}"))
+                # Wirklich leerer/kaputter Body → HTTP-Code + Body-Snippet zeigen
+                body_snip = r.text[:150].replace("\n", " ") if r.text else "(empty)"
+                checks.append(("Turnstile", "warn",
+                                f"CF-API HTTP {r.status_code} · body: {body_snip}"))
         except Exception as e:
             checks.append(("Turnstile", "fail", f"CF-API nicht erreichbar: {e}"))
 
