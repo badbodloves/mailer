@@ -274,6 +274,32 @@ async def verify(request: Request,
     if pow_seed and pow_answer:
         h = hashlib.sha256(f"{pow_seed}:{pow_answer}".encode()).hexdigest()
         pow_ok = h.startswith("0" * difficulty) and (not pow_hash or h == pow_hash)
+
+    # Turnstile-Verify (falls Gate ein Widget hat)
+    ts_secret = (cfg.get("turnstile_secret_key") or "").strip()
+    ts_response = ""
+    try:
+        form_data = await request.form()
+        ts_response = (form_data.get("cf-turnstile-response") or "").strip()
+    except Exception:
+        pass
+    turnstile_ok = None   # None = kein Turnstile aktiv, True/False = Ergebnis
+    if ts_secret:
+        turnstile_ok = False
+        if ts_response:
+            try:
+                import requests as _req
+                r = _req.post(
+                    "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                    data={"secret": ts_secret, "response": ts_response,
+                          "remoteip": ip},
+                    timeout=6,
+                )
+                if r.status_code == 200:
+                    turnstile_ok = bool(r.json().get("success"))
+            except Exception as e:
+                logger.warning("Turnstile verify failed: %s", e)
+
     client_signals = {
         "honeypot": bool(honeypot),
         "webdriver": webdriver == "true",
@@ -282,6 +308,7 @@ async def verify(request: Request,
         "no_plugins": no_plugins == "true",
         "submit_ms": submit_ms,
         "pow_ok": pow_ok,
+        "turnstile_ok": turnstile_ok,
     }
     result = score_request(db, cfg, ip=ip, user_agent=ua,
                             client_signals=client_signals, rate_bucket=bucket)
@@ -301,20 +328,24 @@ async def verify(request: Request,
                              "verdict": hint, "signals": result["signals"],
                              "phase": "verify", "ts": int(time.time())})
 
-    if dry_run or hint == "allow":
-        ttl = int(cfg.get("verification_ttl_hours", "6")) * 3600
-        if link_row:
-            db.bump_gate_link_hits(link_row["id"])
-        resp = RedirectResponse(target, status_code=302)
-        resp.set_cookie(VERIFY_COOKIE,
-                        issue_verify_cookie(cookie_secret, bucket, ttl),
-                        max_age=ttl, httponly=True, samesite="strict",
-                        secure=True, path="/")
-        return resp
-    if hint == "challenge":
-        # a repeat challenge is suspicious — bump to block on retry
+    # Verify-Semantik: hard-block only bleibt block. Alles andere (auch wenn
+    # der Score noch im "challenge"-Bereich ist) gilt als "hat die Challenge
+    # bestanden" — schließlich hat der Nutzer PoW gelöst UND Signals geliefert.
+    # Nur echte Bot-Signale (honeypot, webdriver=true, PoW-fail, submit_ms<500)
+    # ziehen ihn in den Block-Bereich; wenn er trotz Challenge dort landet
+    # ist's auch klar Bot.
+    if hint == "block":
         return _honeypot(request, cfg)
-    return _honeypot(request, cfg)
+
+    ttl = int(cfg.get("verification_ttl_hours", "6")) * 3600
+    if link_row:
+        db.bump_gate_link_hits(link_row["id"])
+    resp = RedirectResponse(target, status_code=302)
+    resp.set_cookie(VERIFY_COOKIE,
+                    issue_verify_cookie(cookie_secret, bucket, ttl),
+                    max_age=ttl, httponly=True, samesite="strict",
+                    secure=True, path="/")
+    return resp
 
 
 # ── /api/check — for external integration (POST) ──────────

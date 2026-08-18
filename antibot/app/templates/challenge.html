@@ -6,6 +6,9 @@
 <meta name="robots" content="noindex, nofollow">
 <title>{{ cfg.brand_text }}</title>
 <link rel="stylesheet" href="/static/style.css">
+{% if cfg.turnstile_site_key %}
+<script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
+{% endif %}
 <style>
     body { background: #f5f6f8; margin:0; }
     .center { min-height:100vh; display:flex; align-items:center; justify-content:center; }
@@ -30,6 +33,7 @@
         margin-top:16px; background:#fee; color:#a22;
         padding:10px; border-radius:6px; font-size:13px;
     }
+    .cf-turnstile { margin: 16px auto 0; }
 </style>
 </head>
 <body>
@@ -55,6 +59,16 @@
             <!-- Honeypot — versteckt vor Menschen, für Bots sichtbar. -->
             <input type="text" name="honeypot" class="honeypot-input"
                    tabindex="-1" autocomplete="off" aria-hidden="true">
+
+            {% if cfg.turnstile_site_key %}
+            <!-- Cloudflare Turnstile Widget — meist unsichtbar (managed mode) -->
+            <div class="cf-turnstile"
+                 data-sitekey="{{ cfg.turnstile_site_key }}"
+                 data-callback="onTurnstileOk"
+                 data-error-callback="onTurnstileErr"
+                 data-timeout-callback="onTurnstileErr"
+                 data-theme="light"></div>
+            {% endif %}
         </form>
 
         <noscript>
@@ -72,6 +86,9 @@
     var difficulty = {{ pow_difficulty }};
     var prefix = new Array(difficulty + 1).join('0');
     var minShow = ({{ cfg.wait_seconds|int }} * 1000) || 0;
+    var needsTurnstile = {{ 'true' if cfg.turnstile_site_key else 'false' }};
+    var turnstileOk = !needsTurnstile;  // wenn keins konfiguriert → sofort "ok"
+    var powDone = false;
 
     // 1. Client signals
     document.getElementById('webdriver').value =
@@ -84,9 +101,8 @@
         var g = c.getContext('2d');
         g.textBaseline = 'top'; g.font = '14px Arial';
         g.fillStyle = '#f60'; g.fillRect(0, 0, 240, 60);
-        g.fillStyle = '#069'; g.fillText('antibot canvas 🛡️', 4, 20);
+        g.fillStyle = '#069'; g.fillText('antibot canvas', 4, 20);
         var d = c.toDataURL();
-        // hash
         var h = 0;
         for (var i = 0; i < d.length; i++) { h = ((h << 5) - h) + d.charCodeAt(i); h |= 0; }
         document.getElementById('canvas_hash').value = h.toString(16);
@@ -126,12 +142,27 @@
         }
     }
 
-    solve().then(function(){
+    function trySubmit() {
+        if (!powDone || !turnstileOk) return;
         document.getElementById('submit_ms').value =
             Math.round(performance.now() - startedAt).toString();
         var elapsed = performance.now() - startedAt;
         var wait = Math.max(0, minShow - elapsed);
         setTimeout(function(){ f.submit(); }, wait);
+    }
+
+    // Turnstile-Callbacks (globaler Scope wegen data-callback)
+    window.onTurnstileOk = function(){ turnstileOk = true; trySubmit(); };
+    window.onTurnstileErr = function(){
+        // Turnstile ist krachen gegangen — trotzdem weiter, Server-Verify entscheidet.
+        // Der cf-turnstile-response bleibt leer, Server sieht das und blockt/lässt durch.
+        turnstileOk = true;
+        trySubmit();
+    };
+
+    solve().then(function(){
+        powDone = true;
+        trySubmit();
     });
 })();
 </script>
