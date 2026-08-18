@@ -17,7 +17,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 from bulk.mailer.db_manager import BulkDBManager
 
 from .routes import mailings, brands, smtp, lists, composer, macros, preview, cloudflare, logs, macro_help
-from .routes import auth, profile, dynadot, dns, warmup, fast_deploy, expurgate, cloudinary
+from .routes import auth, profile, dynadot, dns, warmup, fast_deploy, expurgate, cloudinary, pdf_variator
 
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 db = BulkDBManager(os.path.join(_project_root, "bulk.db"))
@@ -82,6 +82,7 @@ app.include_router(warmup.router)
 app.include_router(fast_deploy.router)
 app.include_router(expurgate.router)
 app.include_router(cloudinary.router)
+app.include_router(pdf_variator.router)
 
 
 @app.get("/")

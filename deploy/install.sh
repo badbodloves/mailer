@@ -77,7 +77,8 @@ apt-get install -yqq \
     git curl ca-certificates gnupg \
     python3 python3-venv python3-pip \
     ufw fail2ban unattended-upgrades apt-listchanges \
-    debian-keyring debian-archive-keyring apt-transport-https
+    debian-keyring debian-archive-keyring apt-transport-https \
+    qpdf libjpeg-turbo8-dev zlib1g-dev
 
 # ─── 3. Caddy ────────────────────────────────────────────────
 if ! command -v caddy >/dev/null; then
