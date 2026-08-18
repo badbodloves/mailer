@@ -246,12 +246,17 @@ async def domains_page(request: Request, tab: str = "dynadot"):
 async def dyn_save(request: Request, api_key: str = Form(""),
                     api_secret: str = Form(""),
                     buy_currency: str = Form("USD")):
-    request.app.state.db.set_config(
-        dynadot_api_key=api_key.strip(),
-        dynadot_api_secret=api_secret.strip(),
-        buy_currency=buy_currency.strip() or "USD",
-    )
-    return RedirectResponse("/admin/domains?tab=dynadot", status_code=303)
+    db = request.app.state.db
+    cur = db.get_config()
+    # Leeres Feld = "nicht ändern" (nicht überschreiben) — verhindert dass
+    # Browser-Password-Manager mit geleertem Feld existierende Secrets killt.
+    updates = {"buy_currency": buy_currency.strip() or "USD"}
+    if api_key.strip() or not cur.get("dynadot_api_key"):
+        updates["dynadot_api_key"] = api_key.strip()
+    if api_secret.strip() or not cur.get("dynadot_api_secret"):
+        updates["dynadot_api_secret"] = api_secret.strip()
+    db.set_config(**updates)
+    return RedirectResponse("/admin/domains?tab=dynadot&saved=1", status_code=303)
 
 
 @router.post("/admin/domains/dynadot/search", response_class=HTMLResponse)
@@ -313,13 +318,19 @@ async def cf_save(request: Request, api_token: str = Form(""),
                    global_api_key: str = Form(""),
                    auth_email: str = Form(""),
                    account_id: str = Form("")):
-    request.app.state.db.set_config(
-        cloudflare_api_token=api_token.strip(),
-        cloudflare_global_api_key=global_api_key.strip(),
-        cloudflare_auth_email=auth_email.strip(),
-        cloudflare_account_id=account_id.strip(),
-    )
-    return RedirectResponse("/admin/domains?tab=cloudflare", status_code=303)
+    db = request.app.state.db
+    cur = db.get_config()
+    updates = {
+        "cloudflare_auth_email": auth_email.strip(),
+        "cloudflare_account_id": account_id.strip(),
+    }
+    # Secrets nur überschreiben wenn Feld befüllt (Browser-PW-Manager-safe)
+    if api_token.strip() or not cur.get("cloudflare_api_token"):
+        updates["cloudflare_api_token"] = api_token.strip()
+    if global_api_key.strip() or not cur.get("cloudflare_global_api_key"):
+        updates["cloudflare_global_api_key"] = global_api_key.strip()
+    db.set_config(**updates)
+    return RedirectResponse("/admin/domains?tab=cloudflare&saved=1", status_code=303)
 
 
 @router.get("/admin/domains/cf/zone/{zone_id}", response_class=HTMLResponse)
