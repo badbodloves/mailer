@@ -49,6 +49,30 @@
 
             <button class="btn btn-primary btn-sm" style="margin-top:12px">Speichern</button>
         </form>
+
+        <hr style="margin:16px 0">
+        <h4 style="margin:0 0 8px">CF-Wolke (Proxied)</h4>
+        <p class="muted" style="font-size:12px">
+            Erst NACHDEM Caddy das LE-Cert für diese Domain geholt hat auf
+            <em>orange</em> stellen — sonst kommt kein Traffic mehr durch.
+            Prüfen mit: <code>curl -sI https://{{ gate.hostname }}/health</code>.
+        </p>
+        <div class="btn-group">
+            <button type="button" class="btn btn-success btn-xs"
+                    hx-post="/admin/gates/{{ gate.id }}/cf-proxy-toggle"
+                    hx-vals='{"proxied":"1"}'
+                    hx-target="#cf-toggle-result" hx-swap="innerHTML"
+                    hx-confirm="Alle A/CNAME-Records für {{ gate.hostname }} auf orange (proxied) setzen?">
+                Wolke auf orange (proxied)
+            </button>
+            <button type="button" class="btn btn-secondary btn-xs"
+                    hx-post="/admin/gates/{{ gate.id }}/cf-proxy-toggle"
+                    hx-vals='{"proxied":"0"}'
+                    hx-target="#cf-toggle-result" hx-swap="innerHTML">
+                Wolke auf grau (DNS only)
+            </button>
+        </div>
+        <div id="cf-toggle-result" style="font-size:12px;margin-top:6px"></div>
     </div>
 
     <div class="card">

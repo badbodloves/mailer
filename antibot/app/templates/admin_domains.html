@@ -6,7 +6,7 @@
 <div style="display:flex;gap:8px;margin-bottom:16px;border-bottom:1px solid var(--border-light);padding-bottom:6px">
     <a href="/admin/domains?tab=dynadot"    class="btn btn-secondary btn-sm{% if tab == 'dynadot' %} btn-primary{% endif %}">Dynadot</a>
     <a href="/admin/domains?tab=cloudflare" class="btn btn-secondary btn-sm{% if tab == 'cloudflare' %} btn-primary{% endif %}">Cloudflare</a>
-    <a href="/admin/domains?tab=combined"   class="btn btn-secondary btn-sm{% if tab == 'combined' %} btn-primary{% endif %}">Buy &amp; Connect</a>
+    <a href="/admin/domains?tab=combined"   class="btn btn-secondary btn-sm{% if tab == 'combined' %} btn-primary{% endif %}">Pipeline (Kauf &rarr; Deploy)</a>
 </div>
 
 {% if tab == 'dynadot' %}
@@ -127,8 +127,10 @@
             <button class="btn btn-primary btn-sm">Zone anlegen</button>
         </form>
         <div id="cf-add-result" style="margin-top:8px"></div>
+        {% elif cfg.cloudflare_global_api_key and not cfg.cloudflare_auth_email %}
+        <p class="muted" style="color:var(--red)">Auth-Email fehlt — Global API Key braucht immer die zugehörige Cloudflare-Account-Email.</p>
         {% else %}
-        <p class="muted">Erst API-Token speichern.</p>
+        <p class="muted">Erst CF Global-Key + Auth-Email ODER API-Token speichern.</p>
         {% endif %}
     </div>
 </div>
@@ -165,32 +167,89 @@
 
 {% if tab == 'combined' %}
 <div class="card">
-    <h3>Domain kaufen + gleich mit Server verbinden</h3>
-    <p class="muted">Workflow: (1) Domain via Dynadot kaufen im Tab „Dynadot".
-    (2) Bei Dynadot Nameserver auf Cloudflare umstellen (kommt automatisch nach dem CF-Zone-Anlegen).
-    (3) Hier unten Domain + Ziel-IP eingeben — antibot legt die CF-Zone an (falls noch nicht) und setzt A-Record @ + www.</p>
-    <form hx-post="/admin/domains/combined/connect" hx-target="#combined-result" hx-swap="innerHTML">
-        <div class="grid-2">
-            <div>
-                <label>Domain</label>
-                <input name="domain" placeholder="deinedomain.de"
-                    value="{{ request.query_params.get('connect', '') }}" required>
-            </div>
-            <div>
-                <label>Ziel-Server IP</label>
-                <input name="ip" placeholder="1.2.3.4" required>
-            </div>
+    <h3>Full-Pipeline: Suchen &rarr; Kaufen &rarr; DNS &rarr; Turnstile &rarr; Gate &rarr; Ready-Links</h3>
+    <p class="muted" style="margin-bottom:12px">
+        Ende-zu-Ende Setup einer neuen Gate-Domain in einem Rutsch.
+        Server-IP wird automatisch erkannt: <code>{{ cfg.server_public_ip or '— noch nicht ermittelt —' }}</code>.
+        <br>
+        <strong>Voraussetzungen (siehe Tabs „Dynadot" &amp; „Cloudflare"):</strong>
+        Dynadot-Key {% if cfg.dynadot_api_key %}<span class="v-allow">✓</span>{% else %}<span class="v-block">fehlt</span>{% endif %} ·
+        Cloudflare {% if cfg.cloudflare_api_token or (cfg.cloudflare_global_api_key and cfg.cloudflare_auth_email) %}<span class="v-allow">✓</span>{% else %}<span class="v-block">fehlt</span>{% endif %} ·
+        Turnstile {% if cfg.cloudflare_account_id %}<span class="v-allow">✓ (Account-ID gesetzt)</span>{% else %}<span class="v-block">Account-ID fehlt</span>{% endif %}
+    </p>
+
+    <fieldset>
+        <legend>Schritt 1: Domains suchen (Verfügbarkeit + Preis)</legend>
+        <form hx-post="/admin/domains/pipeline/search"
+              hx-target="#pipeline-search-result" hx-swap="innerHTML">
+            <label>Domains (eine pro Zeile oder kommagetrennt, max 20)</label>
+            <textarea name="domains" rows="5" placeholder="firma-x.de&#10;firma-x.com&#10;firma-x.net"
+                      style="font-family:monospace;font-size:12px"></textarea>
+            <button class="btn btn-primary btn-sm">Suchen</button>
+        </form>
+        <div id="pipeline-search-result" style="margin-top:12px"></div>
+    </fieldset>
+
+    <form hx-post="/admin/domains/pipeline/run"
+          hx-target="#pipeline-run-result" hx-swap="innerHTML"
+          hx-include="[name='pipeline_domain']"
+          hx-confirm="Pipeline wirklich starten? Bei aktivierter „Kaufen"-Option werden echte Domains gekauft (kostet Geld)."
+          style="margin-top:16px">
+        <div id="pipeline-selected-hint" class="muted" style="font-size:11px;margin-bottom:6px">
+            Die Domain-Auswahl kommt aus dem Suchergebnis oben (nur angehakte werden verarbeitet).
         </div>
-        <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;margin-top:6px">
-            <input type="checkbox" name="add_www" value="1" checked>
-            <span>www.-Subdomain auch anlegen</span>
-        </label>
+
+        <fieldset>
+            <legend>Schritt 2: Pipeline-Config für die ausgewählten Domains</legend>
+            <div class="grid-2">
+                <div>
+                    <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer">
+                        <input type="checkbox" name="buy_dynadot" value="1" checked
+                               {% if not cfg.dynadot_api_key %}disabled{% endif %}>
+                        <span>Bei Dynadot kaufen (falls noch nicht deins)</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer">
+                        <input type="checkbox" name="add_www" value="1" checked>
+                        <span>www.-Subdomain als A-Record dazu</span>
+                    </label>
+                    <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer">
+                        <input type="checkbox" name="auto_turnstile" value="1"
+                               {% if not cfg.cloudflare_account_id %}disabled{% endif %}>
+                        <span>Turnstile-Widget via CF automatisch erstellen</span>
+                    </label>
+                </div>
+                <div>
+                    <label>Modus (für alle neuen Gates)</label>
+                    <select name="mode">
+                        {% for k, p in presets.items() %}
+                        <option value="{{ k }}" {% if k == 'medium' %}selected{% endif %}>{{ p.label }}</option>
+                        {% endfor %}
+                    </select>
+                    <label>Ziel-URL (für alle neuen Gates)</label>
+                    <input name="target_url" placeholder="https://real-landing.de/x" required>
+                    <label>Ready-Links pro Gate</label>
+                    <input name="initial_links" type="number" value="10" min="0" max="500">
+                </div>
+            </div>
+        </fieldset>
+
         <div style="margin-top:12px">
-            <button class="btn btn-primary btn-sm">Verbinden</button>
+            <button class="btn btn-primary">Pipeline für ausgewählte Domains starten</button>
         </div>
     </form>
-    <div id="combined-result" style="margin-top:12px"></div>
+    <div id="pipeline-run-result" style="margin-top:16px"></div>
+
+    <div style="margin-top:20px;padding:10px;background:#fff8e6;border-left:3px solid #f2c74a;font-size:12px">
+        <strong>Cloudflare-Wolke:</strong> Die Pipeline setzt A-Records IMMER auf <em>grau (DNS only)</em>,
+        weil Caddy sonst kein Let's-Encrypt-Cert holen kann. <strong>Erst nachdem der Cert geholt wurde</strong>
+        (passiert automatisch beim ersten HTTPS-Request auf die neue Domain),
+        kannst du im Gate-Detail auf orange (proxied) umschalten — Button „CF-Wolke einschalten".
+    </div>
 </div>
 <script src="https://unpkg.com/htmx.org@2.0.4"></script>
+{% endif %}
+
+{% if tab != 'combined' %}
+{# Standalone-Zugriff auf den alten "combined/connect" Handler bleibt via URL erhalten #}
 {% endif %}
 {% endblock %}

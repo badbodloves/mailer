@@ -1,10 +1,12 @@
 """Domain-Panel — Dynadot (Kauf + Search) + Cloudflare (Zones + DNS)
-+ kombinierter Buy-and-Connect Workflow."""
++ End-to-End Pipeline (Kauf → CF Zone → A-Records → Turnstile → Gate + Links)."""
 import time
 import logging
 from html import escape
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
+
+from ..presets import MODE_PRESETS, gen_slug, detect_public_ip
 
 logger = logging.getLogger("antibot.domains")
 router = APIRouter()
@@ -239,6 +241,7 @@ async def domains_page(request: Request, tab: str = "dynadot"):
         "dyn_balance": dyn_balance,
         "dyn_domains": dyn_domains,
         "cf_zones": cf_zones,
+        "presets": MODE_PRESETS,
     })
 
 
@@ -470,4 +473,264 @@ async def combined_connect(request: Request,
         f'<div class="alert alert-success">Verbunden: <code>{escape(domain)}</code> → <code>{escape(ip)}</code></div>'
         f'<ul style="font-size:13px">{log_html}</ul>'
         f'<p class="muted">DNS-Propagation kann bis 5 Min dauern. Danach kann Caddy auf dem Ziel-Server das Cert holen.</p>'
+    )
+
+
+# ── Pipeline: Suchen → Kaufen → CF → Turnstile → Gate → Links ────────
+
+def _pipeline_one_domain(db, cfg: dict, domain: str, pcfg: dict) -> dict:
+    """Führt die komplette Ende-zu-Ende-Pipeline für EINE Domain aus.
+    Returns {domain, ok, steps=[(label, ok, detail), ...], gate_id, ns_hint}."""
+    steps = []
+    ns_hint = ""
+
+    # 1. Dynadot Kauf (nur wenn buy_dynadot=True und Key vorhanden)
+    if pcfg.get("buy_dynadot") and cfg.get("dynadot_api_key"):
+        res = _dyn_register(cfg["dynadot_api_key"], domain,
+                             currency=cfg.get("buy_currency", "USD"),
+                             secret=cfg.get("dynadot_api_secret", ""))
+        steps.append(("Dynadot: Kauf", res["ok"], res["msg"]))
+        if not res["ok"]:
+            return {"domain": domain, "ok": False, "steps": steps,
+                    "gate_id": None, "ns_hint": ""}
+    elif pcfg.get("buy_dynadot"):
+        steps.append(("Dynadot: Kauf", False, "Kein Dynadot-Key gesetzt"))
+        return {"domain": domain, "ok": False, "steps": steps,
+                "gate_id": None, "ns_hint": ""}
+
+    # 2. Server-IP + CF-Auth check
+    server_ip = cfg.get("server_public_ip", "") or detect_public_ip()
+    if server_ip and not cfg.get("server_public_ip"):
+        db.set_config(server_public_ip=server_ip)
+    if not _cf_configured(cfg):
+        steps.append(("CF: Setup", False, "Kein CF-Auth (Token oder Global-Key+Email)"))
+        return {"domain": domain, "ok": False, "steps": steps,
+                "gate_id": None, "ns_hint": ""}
+    if not server_ip:
+        steps.append(("Server-IP", False, "eigene IP konnte nicht ermittelt werden"))
+        return {"domain": domain, "ok": False, "steps": steps,
+                "gate_id": None, "ns_hint": ""}
+
+    # 3. CF-Zone anlegen falls nicht schon da
+    zones = _cf_zones(cfg)
+    zone = next((z for z in zones if z["name"] == domain), None)
+    if not zone:
+        zr = _cf_add_zone(cfg, domain, cfg.get("cloudflare_account_id", ""))
+        if not zr.get("success"):
+            errs = "; ".join(e.get("message", "") for e in zr.get("errors", []))
+            steps.append(("CF: Zone anlegen", False, errs))
+            return {"domain": domain, "ok": False, "steps": steps,
+                    "gate_id": None, "ns_hint": ""}
+        zone = zr.get("result", {})
+        ns_list = zone.get("name_servers", [])
+        ns_hint = ", ".join(ns_list)
+        steps.append(("CF: Zone angelegt", True,
+                       f"NS bei Registrar setzen auf: {ns_hint}"))
+    else:
+        steps.append(("CF: Zone existiert", True, ""))
+
+    zid = zone["id"]
+
+    # 4. A-Records — IMMER grau (DNS only) initial damit LE-Cert geholt
+    #    werden kann. User kann später via Gate-Panel auf orange schalten.
+    a1 = _cf_add_record(cfg, zid, "A", domain, server_ip, proxied=False)
+    steps.append((f"CF: A @ → {server_ip}", a1.get("success"),
+                   "" if a1.get("success") else str(a1.get("errors"))))
+    if pcfg.get("add_www"):
+        a2 = _cf_add_record(cfg, zid, "A", f"www.{domain}", server_ip, proxied=False)
+        steps.append((f"CF: A www → {server_ip}", a2.get("success"),
+                       "" if a2.get("success") else str(a2.get("errors"))))
+
+    # 5. Turnstile Widget (optional)
+    ts_site, ts_secret = "", ""
+    if pcfg.get("auto_turnstile"):
+        ts = _cf_create_turnstile_widget(cfg, domain)
+        steps.append(("Turnstile Widget", ts["ok"], ts.get("msg", "")))
+        if ts["ok"]:
+            ts_site = ts["site_key"]
+            ts_secret = ts["secret_key"]
+
+    # 6. Gate anlegen (oder skippen wenn schon da)
+    existing = db.get_gate_by_host(domain)
+    if existing:
+        gate_id = existing["id"]
+        steps.append(("Gate existiert bereits", True, f"ID {gate_id} — nicht überschrieben"))
+    else:
+        gate_id = db.add_gate(
+            hostname=domain,
+            mode=pcfg.get("mode", "medium"),
+            target_url=pcfg.get("target_url", ""),
+            brand_text=cfg.get("brand_text", "Sicherheitsprüfung läuft …"),
+            brand_color=cfg.get("brand_color", "#005eb8"),
+            turnstile_site_key=ts_site,
+            turnstile_secret_key=ts_secret,
+        )
+        steps.append(("Gate angelegt", True, f"ID {gate_id}, Modus {pcfg.get('mode','medium')}"))
+
+    # 7. Ready-Links
+    n = max(0, min(int(pcfg.get("initial_links") or 0), 500))
+    generated = 0
+    for _ in range(n):
+        for _try in range(5):
+            slug = gen_slug(8)
+            if not db.get_gate_link(gate_id, slug):
+                db.add_gate_link(gate_id, slug)
+                generated += 1
+                break
+    if n:
+        steps.append((f"{generated} Ready-Links generiert", True, ""))
+
+    return {"domain": domain, "ok": True, "steps": steps,
+            "gate_id": gate_id, "ns_hint": ns_hint}
+
+
+@router.post("/admin/domains/pipeline/search", response_class=HTMLResponse)
+async def pipeline_search(request: Request, domains: str = Form("")):
+    """Verfügbarkeits-Check aller eingegebenen Domains via Dynadot."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    if not cfg.get("dynadot_api_key"):
+        return HTMLResponse('<div class="alert alert-danger">Kein Dynadot-Key gesetzt (Tab „Dynadot").</div>')
+    lines = [d.strip().lower() for d in domains.replace(",", "\n").splitlines() if d.strip()]
+    lines = list(dict.fromkeys(lines))[:20]  # dedupe + cap
+    if not lines:
+        return HTMLResponse('<div class="alert alert-warning">Keine gültigen Domains.</div>')
+
+    rows_html = []
+    n_available = 0
+    for d in lines:
+        r = _dyn_search(cfg["dynadot_api_key"], d, cfg.get("buy_currency", "USD"),
+                        secret=cfg.get("dynadot_api_secret", ""))
+        if r["available"]:
+            n_available += 1
+            badge = '<span class="v-allow">verfügbar</span>'
+            checkbox = f'<input type="checkbox" name="pipeline_domain" value="{escape(d)}" checked class="pipe-domain-cb">'
+        else:
+            badge = '<span class="v-block">belegt</span>'
+            checkbox = '—'
+        err = f'<span class="muted" style="font-size:11px">{escape(r["error"])}</span>' if r.get("error") else ""
+        rows_html.append(
+            f'<tr><td>{checkbox}</td>'
+            f'<td style="font-family:monospace">{escape(d)}</td>'
+            f'<td>{badge}</td><td>{escape(str(r.get("price", "")))}</td>'
+            f'<td>{err}</td></tr>'
+        )
+    check_all_btn = ('<div style="margin-bottom:8px"><button type="button" class="btn btn-secondary btn-xs" '
+                     'onclick="document.querySelectorAll(\'.pipe-domain-cb\').forEach(cb=>cb.checked=true)">'
+                     'Alle Verfügbaren auswählen</button> '
+                     '<button type="button" class="btn btn-secondary btn-xs" '
+                     'onclick="document.querySelectorAll(\'.pipe-domain-cb\').forEach(cb=>cb.checked=false)">'
+                     'Auswahl leeren</button></div>')
+    return HTMLResponse(
+        f'<div class="alert alert-info">{n_available}/{len(lines)} verfügbar — pick + „Pipeline starten" unten.</div>'
+        + check_all_btn
+        + '<table style="font-size:12px"><thead>'
+        '<tr><th></th><th>Domain</th><th>Status</th><th>Preis</th><th></th></tr>'
+        '</thead><tbody>' + "".join(rows_html) + '</tbody></table>'
+    )
+
+
+@router.post("/admin/domains/pipeline/run", response_class=HTMLResponse)
+async def pipeline_run(request: Request):
+    """Läuft die Pipeline für alle ausgewählten Domains synchron.
+    Rückgabe ist eine Report-Tabelle mit allen Schritten pro Domain."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    form = await request.form()
+    selected = form.getlist("pipeline_domain") or []
+    selected = [d.strip().lower() for d in selected if d.strip()]
+    if not selected:
+        return HTMLResponse('<div class="alert alert-warning">Keine Domains ausgewählt. '
+                            'Zuerst „Suchen" → dann Checkboxen setzen.</div>')
+
+    pcfg = {
+        "buy_dynadot": bool(form.get("buy_dynadot")),
+        "add_www": bool(form.get("add_www")),
+        "auto_turnstile": bool(form.get("auto_turnstile")),
+        "target_url": (form.get("target_url") or "").strip(),
+        "mode": form.get("mode") or "medium",
+        "initial_links": int(form.get("initial_links") or 10),
+    }
+    if pcfg["mode"] not in MODE_PRESETS:
+        pcfg["mode"] = "medium"
+
+    results = []
+    for d in selected[:20]:  # safety cap
+        res = _pipeline_one_domain(db, cfg, d, pcfg)
+        results.append(res)
+
+    # Report
+    sections = []
+    all_ns_hints = set()
+    for r in results:
+        color = "var(--green)" if r["ok"] else "var(--red)"
+        head = (f'<h3 style="color:{color};margin:12px 0 6px">'
+                f'{"✓" if r["ok"] else "✗"} {escape(r["domain"])}</h3>')
+        steps_html = "".join(
+            f'<li>{"✓" if ok else "✗"} <strong>{escape(label)}</strong>'
+            f'{": " + escape(detail) if detail else ""}</li>'
+            for label, ok, detail in r["steps"]
+        )
+        gate_link = ""
+        if r.get("gate_id"):
+            gate_link = (f'<p><a href="/admin/gates/{r["gate_id"]}" '
+                         f'class="btn btn-primary btn-xs">Gate + Ready-Links öffnen</a></p>')
+        sections.append(f'{head}<ul style="font-size:13px">{steps_html}</ul>{gate_link}')
+        if r.get("ns_hint"):
+            all_ns_hints.add(r["ns_hint"])
+
+    ns_alert = ""
+    if all_ns_hints:
+        ns_alert = ('<div class="alert alert-warn">Neue CF-Zonen angelegt — bei Dynadot '
+                    'die Nameserver umstellen auf:<br>'
+                    + "<br>".join(f"<code>{escape(ns)}</code>" for ns in all_ns_hints)
+                    + '</div>')
+
+    ok_count = sum(1 for r in results if r["ok"])
+    summary = (f'<div class="alert alert-{"success" if ok_count == len(results) else "warn"}">'
+               f'{ok_count}/{len(results)} erfolgreich durchgelaufen.</div>')
+
+    return HTMLResponse(summary + ns_alert + "".join(sections)
+                        + '<p class="muted">DNS-Propagation dauert bis ~5 Min. Danach holt Caddy '
+                          'beim ersten HTTPS-Request automatisch das LE-Cert. '
+                          'Wenn du CF-Wolke orange willst: <strong>erst nach dem ersten '
+                          'Cert-Holen</strong> im Gate-Panel oder direkt in CF umschalten.</p>')
+
+
+# ── Gate: CF-Wolke orange/grau umschalten ────────────────
+
+@router.post("/admin/gates/{gate_id}/cf-proxy-toggle", response_class=HTMLResponse)
+async def gate_cf_proxy_toggle(request: Request, gate_id: int,
+                                 proxied: str = Form("")):
+    """Alle A/CNAME-Records dieser Domain in CF auf proxied=True/False setzen."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    gate = db.get_gate(gate_id)
+    if not gate:
+        return HTMLResponse('<span style="color:var(--red)">Gate weg</span>')
+    if not _cf_configured(cfg):
+        return HTMLResponse('<span style="color:var(--red)">Kein CF-Auth konfiguriert.</span>')
+    zones = _cf_zones(cfg)
+    zone = next((z for z in zones if z["name"] == gate["hostname"]), None)
+    if not zone:
+        return HTMLResponse(f'<span style="color:var(--red)">Keine CF-Zone für {escape(gate["hostname"])}.</span>')
+    want_proxied = proxied == "1"
+    records = _cf_records(cfg, zone["id"])
+    n = 0
+    for r in records:
+        if r.get("type") not in ("A", "AAAA", "CNAME"):
+            continue
+        if r.get("proxied") == want_proxied:
+            continue
+        # Update via PATCH — hier tun's wir per PUT über _cf_post nicht direkt,
+        # verwenden stattdessen den low-level requests wrapper mit PATCH.
+        import requests as _req
+        headers = _cf_auth(cfg)
+        resp = _req.patch(f"{CF_BASE}/zones/{zone['id']}/dns_records/{r['id']}",
+                          headers=headers, json={"proxied": want_proxied}, timeout=15)
+        if resp.status_code == 200 and resp.json().get("success"):
+            n += 1
+    return HTMLResponse(
+        f'<span style="color:var(--green)">✓ {n} Record(s) auf '
+        f'<strong>{"orange" if want_proxied else "grau"}</strong> umgeschaltet.</span>'
     )
