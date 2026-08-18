@@ -8,6 +8,28 @@
 
 {% if request.query_params.get('saved') %}<div class="alert alert-success">Gespeichert.</div>{% endif %}
 
+<div class="card" style="margin-bottom:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
+        <div>
+            <h3 style="margin:0">Health Check</h3>
+            <p class="muted" style="margin:0;font-size:12px">
+                Prüft DNS, TLS-Cert, HTTP-Ping, Turnstile-Auth und Cloudflare-Records.
+                Sagt dir auch wann's Zeit ist auf CF-Wolke orange umzuschalten.
+            </p>
+        </div>
+        <button type="button" class="btn btn-primary btn-sm"
+                hx-post="/admin/gates/{{ gate.id }}/health-check"
+                hx-target="#health-check-result" hx-swap="innerHTML"
+                hx-indicator="#health-check-loading">
+            Check ausführen
+        </button>
+    </div>
+    <div id="health-check-loading" class="htmx-indicator" style="font-size:12px;margin-top:6px;color:var(--fg2)">
+        Läuft … (DNS + TLS + HTTP + Turnstile-Auth + CF, dauert ~5-10s)
+    </div>
+    <div id="health-check-result" style="margin-top:10px"></div>
+</div>
+
 <div class="grid-2" style="align-items:start">
     <div class="card">
         <h3>Config</h3>

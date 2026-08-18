@@ -890,6 +890,181 @@ async def pipeline_run(request: Request):
 
 # ── Gate: CF-Wolke orange/grau umschalten ────────────────
 
+@router.post("/admin/gates/{gate_id}/health-check", response_class=HTMLResponse)
+async def gate_health_check(request: Request, gate_id: int):
+    """End-to-End Check pro Gate:
+      1. DNS: löst der Hostname auf deine Server-IP auf?
+      2. TLS: hat der Server ein gültiges Cert für die Domain?
+      3. HTTP: antwortet /health mit 200?
+      4. Turnstile: sind Site+Secret gesetzt UND funktionieren sie?
+      5. CF: existiert die Zone? Sind Records aktuell proxied?
+    """
+    import socket, ssl
+    import requests as _req
+    from datetime import datetime, timezone
+    db = request.app.state.db
+    cfg = db.get_config()
+    gate = db.get_gate(gate_id)
+    if not gate:
+        return HTMLResponse('<div class="alert alert-danger">Gate weg</div>')
+    hostname = gate["hostname"]
+    checks = []
+
+    # 1. DNS
+    server_ip = cfg.get("server_public_ip", "")
+    try:
+        resolved = socket.gethostbyname(hostname)
+        if server_ip and resolved == server_ip:
+            checks.append(("DNS", "ok", f"{hostname} → {resolved} (unser Server ✓)"))
+        elif server_ip:
+            # CF-proxied? Dann zeigt DNS auf CF-IP (104.16.x.x, 104.17.x.x, 172.64-71.x.x, 172.67.x.x, 188.114.9x.x, 188.114.9x.x)
+            is_cf = (resolved.startswith(("104.16.", "104.17.", "104.18.", "104.19.",
+                                            "104.20.", "104.21.", "172.64.", "172.65.",
+                                            "172.66.", "172.67.", "172.68.", "172.69.",
+                                            "172.70.", "172.71.", "188.114.9", "188.114.10")))
+            if is_cf:
+                checks.append(("DNS", "info",
+                                f"{hostname} → {resolved} (Cloudflare-IP — Wolke ist AN)"))
+            else:
+                checks.append(("DNS", "warn",
+                                f"{hostname} → {resolved} — aber unser Server ist {server_ip}"))
+        else:
+            checks.append(("DNS", "ok", f"{hostname} → {resolved}"))
+    except Exception as e:
+        checks.append(("DNS", "fail", f"Auflösung fehlgeschlagen: {e}"))
+
+    # 2. TLS-Zertifikat via SNI-Handshake, ohne HTTP-Request
+    cert_ok = False
+    cert_msg = ""
+    try:
+        ctx = ssl.create_default_context()
+        with socket.create_connection((hostname, 443), timeout=6) as sock:
+            with ctx.wrap_socket(sock, server_hostname=hostname) as ssock:
+                cert = ssock.getpeercert()
+                subject = dict(x[0] for x in cert.get("subject", []))
+                issuer = dict(x[0] for x in cert.get("issuer", []))
+                not_after = cert.get("notAfter", "")
+                cert_ok = True
+                cert_msg = (f"CN={subject.get('commonName', '?')} · "
+                             f"Issuer={issuer.get('organizationName', '?')} · "
+                             f"gültig bis {not_after}")
+        checks.append(("TLS-Cert", "ok", cert_msg))
+    except ssl.SSLCertVerificationError as e:
+        checks.append(("TLS-Cert", "fail", f"Cert nicht valide: {e}"))
+    except socket.timeout:
+        checks.append(("TLS-Cert", "fail",
+                        "Port 443 timeout — DNS zeigt auf falschen Server, oder Caddy läuft nicht"))
+    except Exception as e:
+        checks.append(("TLS-Cert", "fail", f"{type(e).__name__}: {e}"))
+
+    # 3. HTTP-Ping — /go/nonexistent sollte 404 zurückgeben (heißt Antibot bearbeitet Request)
+    if cert_ok:
+        try:
+            r = _req.get(f"https://{hostname}/go/nonexistent-test", timeout=6,
+                          allow_redirects=False)
+            if r.status_code in (200, 302, 303, 404):
+                checks.append(("HTTP-Ping", "ok",
+                                f"HTTPS {r.status_code} — Antibot antwortet für diese Domain"))
+            else:
+                checks.append(("HTTP-Ping", "warn",
+                                f"HTTP {r.status_code} — unerwartet"))
+        except Exception as e:
+            checks.append(("HTTP-Ping", "fail", f"{type(e).__name__}: {e}"))
+
+    # 4. Turnstile
+    ts_site = (gate.get("turnstile_site_key") or "").strip()
+    ts_secret = (gate.get("turnstile_secret_key") or "").strip()
+    if not ts_site and not ts_secret:
+        checks.append(("Turnstile", "info", "nicht konfiguriert (optional)"))
+    elif not ts_site or not ts_secret:
+        checks.append(("Turnstile", "warn",
+                        "nur Site-Key ODER Secret-Key gesetzt — beide nötig"))
+    else:
+        # Dummy-Verify: mit invalid response check ob secret akzeptiert wird.
+        # Erfolgreiches Auth = wir kriegen 'invalid-input-response' (Token
+        # war falsch, aber Secret war ok). Wenn Secret invalid: 'invalid-input-secret'.
+        try:
+            r = _req.post(
+                "https://challenges.cloudflare.com/turnstile/v0/siteverify",
+                data={"secret": ts_secret, "response": "dummy-token-for-health-check"},
+                timeout=6,
+            )
+            data = r.json() if r.status_code == 200 else {}
+            errs = data.get("error-codes", [])
+            if "invalid-input-secret" in errs:
+                checks.append(("Turnstile", "fail",
+                                "Secret-Key ist bei CF ungültig"))
+            elif "invalid-input-response" in errs or data.get("success") is False:
+                checks.append(("Turnstile", "ok",
+                                f"Secret akzeptiert · Site-Key: {ts_site[:10]}…"))
+            else:
+                checks.append(("Turnstile", "warn", f"unerwartet: {data}"))
+        except Exception as e:
+            checks.append(("Turnstile", "fail", f"CF-API nicht erreichbar: {e}"))
+
+    # 5. Cloudflare-Zone-Status
+    proxied_records = 0
+    total_records = 0
+    zone = None
+    if _cf_configured(cfg):
+        zones = _cf_zones(cfg)
+        zone = next((z for z in zones if z["name"] == hostname), None)
+        if not zone:
+            checks.append(("CF-Zone", "warn",
+                            f"Keine CF-Zone für {hostname} — Records nicht managbar"))
+        else:
+            recs = _cf_records(cfg, zone["id"])
+            for r in recs:
+                if r.get("type") in ("A", "AAAA", "CNAME"):
+                    total_records += 1
+                    if r.get("proxied"):
+                        proxied_records += 1
+            if total_records == 0:
+                checks.append(("CF-Zone", "warn", "Zone existiert aber keine A/CNAME-Records"))
+            elif proxied_records == 0:
+                checks.append(("CF-Wolke", "info",
+                                f"{total_records} Record(s) auf grau (DNS-only)"))
+            elif proxied_records == total_records:
+                checks.append(("CF-Wolke", "ok",
+                                f"alle {total_records} Records auf orange (proxied)"))
+            else:
+                checks.append(("CF-Wolke", "warn",
+                                f"{proxied_records}/{total_records} auf orange (Mix)"))
+    else:
+        checks.append(("CF-Zone", "info", "Kein CF-Auth im Panel — Skip"))
+
+    # Hinweis-Zeile: wenn Cert vorhanden + Wolke grau + Turnstile ok → empfehle orange
+    tips = []
+    if cert_ok and zone and total_records > 0 and proxied_records == 0:
+        tips.append("💡 Cert steht, Records sind grau — du kannst jetzt auf CF-Wolke orange "
+                    "umschalten (Button unten in dieser Card).")
+    if not cert_ok:
+        tips.append("⚠️ Kein Cert erreichbar — Caddy holt sich das automatisch beim ersten "
+                    "HTTPS-Request. Test: <code>curl -sI https://" + escape(hostname) + "/health</code>")
+
+    # Render
+    icon_map = {"ok": ("✓", "var(--green)"),
+                "warn": ("!", "var(--orange, #d97706)"),
+                "info": ("ℹ", "var(--fg2)"),
+                "fail": ("✗", "var(--red)")}
+    rows = []
+    for label, status, detail in checks:
+        icon, color = icon_map.get(status, ("?", "var(--fg2)"))
+        rows.append(
+            f'<tr><td style="color:{color};font-weight:600;white-space:nowrap">{icon} {escape(label)}</td>'
+            f'<td style="font-size:11px">{escape(detail)}</td></tr>'
+        )
+    tips_html = ""
+    if tips:
+        tips_html = ('<div style="margin-top:10px;padding:8px;background:#fff8e6;'
+                     'border-left:3px solid #f2c74a;font-size:12px">'
+                     + "<br>".join(tips) + '</div>')
+    return HTMLResponse(
+        '<table style="font-size:12px"><tbody>' + "".join(rows) + '</tbody></table>'
+        + tips_html
+    )
+
+
 @router.post("/admin/gates/{gate_id}/retry-set-ns", response_class=HTMLResponse)
 async def gate_retry_set_ns(request: Request, gate_id: int):
     """Manueller Retry für Dynadot NS-Setting (falls's beim Deploy nicht klappte)."""
