@@ -69,19 +69,37 @@ def _dyn_search(api_key: str, domain: str, currency: str = "USD",
 
 def _dyn_register(api_key: str, domain: str, currency: str = "USD",
                    duration: int = 1, secret: str = "") -> dict:
-    """Actually buy the domain. Returns {'ok': bool, 'msg': str, 'raw': ...}."""
+    """Actually buy the domain. Returns {'ok': bool, 'msg': str, 'raw': ...}.
+
+    Dynadot ist bei den Response-Typen inkonsistent — mal Integer 0,
+    mal String '0', mal Status 'success', mal ResponseCode 'success'.
+    Wir akzeptieren alle plausiblen Erfolgs-Signale und loggen bei
+    Unsicherheit die Raw-Response mit."""
     params = {"domain": domain, "duration": duration, "currency": currency}
     resp = _dyn_call(api_key, "register", params, secret=secret)
     if "error" in resp:
         return {"ok": False, "msg": resp["error"]}
     try:
         r = resp["RegisterResponse"]
-        status = (r.get("ResponseCode") or "").strip()
-        if status in ("0", "success"):
-            return {"ok": True, "msg": "gekauft", "raw": r}
-        return {"ok": False, "msg": r.get("Status") or r.get("Error") or str(r), "raw": r}
-    except Exception:
-        return {"ok": False, "msg": "unklare Dynadot-Antwort", "raw": resp}
+    except (KeyError, TypeError):
+        return {"ok": False, "msg": f"kein RegisterResponse: {str(resp)[:200]}"}
+
+    # Success-Signale einsammeln (Dynadot ist sloppy mit den Typen)
+    code_raw = r.get("ResponseCode")
+    code_str = str(code_raw).strip().lower() if code_raw is not None else ""
+    status_str = (r.get("Status") or "").strip().lower()
+    error_str = (r.get("Error") or "").strip()
+
+    is_success = (
+        code_str in ("0", "success", "ok")
+        or status_str in ("success", "ok")
+        or (not error_str and "RegisterContent" in r)
+    )
+    if is_success:
+        return {"ok": True, "msg": f"gekauft (status={status_str or code_str or '?'})", "raw": r}
+    return {"ok": False,
+            "msg": error_str or status_str or code_str or f"unklar: {str(r)[:200]}",
+            "raw": r}
 
 
 def _dyn_domains(api_key: str, secret: str = "") -> list:
@@ -582,6 +600,98 @@ def _pipeline_one_domain(db, cfg: dict, domain: str, pcfg: dict) -> dict:
 
     return {"domain": domain, "ok": True, "steps": steps,
             "gate_id": gate_id, "ns_hint": ns_hint}
+
+
+@router.post("/admin/domains/pipeline/precheck", response_class=HTMLResponse)
+async def pipeline_precheck(request: Request):
+    """Testet alle nötigen APIs read-only bevor der User Domains kauft.
+    Rückgabe ist eine Ampel-Tabelle: DNS, Dynadot, Cloudflare, Turnstile-Fähigkeit."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    results = []
+
+    # 1. Eigene Public-IP
+    ip = cfg.get("server_public_ip", "") or detect_public_ip()
+    if ip and not cfg.get("server_public_ip"):
+        db.set_config(server_public_ip=ip)
+    results.append(("Server-Public-IP", bool(ip), ip or "konnte nicht ermittelt werden"))
+
+    # 2. Dynadot: account_info (safe, read-only, gibt Balance zurück)
+    dyn_key = cfg.get("dynadot_api_key", "")
+    if not dyn_key:
+        results.append(("Dynadot API", False, "Kein API-Key gesetzt (Tab Dynadot)"))
+    else:
+        resp = _dyn_call(dyn_key, "account_info", secret=cfg.get("dynadot_api_secret", ""))
+        if "error" in resp:
+            results.append(("Dynadot API", False, resp["error"]))
+        else:
+            try:
+                bal = resp.get("AccountInfoResponse", {}).get("Account", {}).get("AccountBalance", "?")
+                results.append(("Dynadot API", True, f"Kontostand: {bal}"))
+            except Exception as e:
+                results.append(("Dynadot API", False,
+                                 f"Response gelesen, aber unerwartetes Format: {str(resp)[:150]}"))
+
+    # 3. Cloudflare: zones list (safe, read-only)
+    if not _cf_configured(cfg):
+        results.append(("Cloudflare API", False, "Weder Bearer-Token noch Global-Key+Email gesetzt"))
+    else:
+        auth_kind = ("Global-Key + Email"
+                     if cfg.get("cloudflare_global_api_key") and cfg.get("cloudflare_auth_email")
+                     else "Bearer-Token")
+        resp = _cf_get(cfg, "/zones", {"per_page": 5})
+        if not resp.get("success"):
+            errs = "; ".join(e.get("message", "") for e in resp.get("errors", []))
+            results.append(("Cloudflare API", False, f"({auth_kind}) {errs}"))
+        else:
+            n = len(resp.get("result", []))
+            results.append(("Cloudflare API", True,
+                             f"({auth_kind}) {n}+ Zone(n) sichtbar"))
+
+    # 4. Cloudflare: verify token permissions (nur wenn Token benutzt wird)
+    #    Für Zone-Anlegen brauchen wir explizit account-level Berechtigungen
+    #    → schauen wir mit Account-ID + list-accounts endpoint nach
+    if _cf_configured(cfg) and cfg.get("cloudflare_account_id"):
+        acc_id = cfg["cloudflare_account_id"]
+        resp = _cf_get(cfg, f"/accounts/{acc_id}")
+        if resp.get("success"):
+            acc_name = resp.get("result", {}).get("name", "")
+            results.append(("CF Account-ID", True, f"OK ({acc_name})"))
+        else:
+            errs = "; ".join(e.get("message", "") for e in resp.get("errors", []))
+            results.append(("CF Account-ID", False, errs or "unbekannter Fehler"))
+    elif _cf_configured(cfg):
+        results.append(("CF Account-ID", False,
+                         "nicht gesetzt — Turnstile + Zone-Create werden nicht funktionieren"))
+
+    # 5. Turnstile-Widgets list (nur wenn Account-ID + Auth vorhanden)
+    if _cf_configured(cfg) and cfg.get("cloudflare_account_id"):
+        acc_id = cfg["cloudflare_account_id"]
+        resp = _cf_get(cfg, f"/accounts/{acc_id}/challenges/widgets", {"per_page": 5})
+        if resp.get("success"):
+            n = len(resp.get("result", []))
+            results.append(("Turnstile-Fähigkeit", True, f"OK ({n} vorhandene Widget(s))"))
+        else:
+            errs = "; ".join(e.get("message", "") for e in resp.get("errors", []))
+            results.append(("Turnstile-Fähigkeit", False, errs))
+
+    # Render
+    rows_html = []
+    for label, ok, detail in results:
+        icon = ("✓" if ok else "✗")
+        color = "var(--green)" if ok else "var(--red)"
+        rows_html.append(
+            f'<tr><td style="color:{color};font-weight:600">{icon} {escape(label)}</td>'
+            f'<td style="font-family:monospace;font-size:11px">{escape(detail)}</td></tr>'
+        )
+    all_ok = all(ok for _, ok, _ in results)
+    header = ('<div class="alert alert-success">Alle Checks grün — Pipeline safe zu starten.</div>'
+              if all_ok else
+              '<div class="alert alert-warn">Einige Checks failen — Pipeline würde fehlschlagen. Erst die roten Punkte fixen.</div>')
+    return HTMLResponse(
+        header +
+        '<table style="font-size:12px"><tbody>' + "".join(rows_html) + '</tbody></table>'
+    )
 
 
 @router.post("/admin/domains/pipeline/search", response_class=HTMLResponse)

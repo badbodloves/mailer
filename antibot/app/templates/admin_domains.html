@@ -179,6 +179,20 @@
     </p>
 
     <fieldset>
+        <legend>Schritt 0: Precheck (empfohlen bevor du kaufst)</legend>
+        <p class="muted" style="font-size:12px;margin:0 0 8px">
+            Testet alle APIs read-only — Dynadot Balance-Call, CF Zone-List,
+            Turnstile-Endpunkt, Public-IP-Erkennung. Nichts wird gekauft/geändert.
+        </p>
+        <button type="button" class="btn btn-secondary btn-sm"
+                hx-post="/admin/domains/pipeline/precheck"
+                hx-target="#precheck-result" hx-swap="innerHTML">
+            Precheck ausführen
+        </button>
+        <div id="precheck-result" style="margin-top:10px"></div>
+    </fieldset>
+
+    <fieldset style="margin-top:16px">
         <legend>Schritt 1: Domains suchen (Verfügbarkeit + Preis)</legend>
         <form hx-post="/admin/domains/pipeline/search"
               hx-target="#pipeline-search-result" hx-swap="innerHTML">
