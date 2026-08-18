@@ -169,14 +169,7 @@ cat > /etc/caddy/Caddyfile <<EOF
     email admin@${DOMAIN#*.}
     on_demand_tls {
         ask http://127.0.0.1:${APP_PORT}/tls-check
-        interval 2m
-        burst 5
     }
-}
-
-# HTTP → HTTPS für alle Hosts
-:80 {
-    redir https://{host}{uri} permanent
 }
 
 # Panel-Domain — fest konfiguriert, kein on-demand nötig
@@ -205,7 +198,8 @@ ${DOMAIN} {
 
 # Catch-all für alle Gate-Domains — Caddy fragt /tls-check bevor's ein
 # Cert holt, so verhindern wir dass Fremde uns via DNS-Umleitung
-# LE-Rate-Limits ausschöpfen.
+# LE-Rate-Limits ausschöpfen. https:// = alle HTTPS die nicht schon
+# von einem expliziten Site-Block weiter oben gecatcht wurden.
 https:// {
     tls {
         on_demand
@@ -230,6 +224,12 @@ https:// {
         }
         format json
     }
+}
+
+# HTTP → HTTPS Redirect fuer alle unbekannten Hosts (Panel-Domain
+# macht Caddy sowieso automatisch)
+http:// {
+    redir https://{host}{uri} permanent
 }
 EOF
 mkdir -p /var/log/caddy && chown caddy:caddy /var/log/caddy
