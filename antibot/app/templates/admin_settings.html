@@ -32,8 +32,13 @@
                 <input name="brand_color" type="color" value="{{ cfg.brand_color }}" style="width:60px;height:34px">
             </div>
             <div>
-                <label>Mindest-Anzeigedauer (Sekunden, 0 = sofort weiter nach PoW)</label>
-                <input name="wait_seconds" type="number" value="{{ cfg.wait_seconds }}" min="0" max="10">
+                <label>Wait-Screen Sekunden (0 = kein Screen für Human-verdicts, direkter Redirect)</label>
+                <input name="wait_seconds" type="number" value="{{ cfg.wait_seconds }}" min="0" max="20">
+                <div class="form-help">
+                    Wenn &gt; 0: JEDER (auch als Human erkannter Traffic) sieht kurz den
+                    Wait-Screen mit deinem Logo + Wartetext bevor's zum Ziel geht. Empfehlung: 2-4 Sek.
+                    Bei 0 wird direkt weitergeleitet (nur Challenges kriegen dann noch den Screen).
+                </div>
             </div>
         </div>
         <label>Logo hochladen</label>

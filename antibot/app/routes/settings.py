@@ -29,7 +29,7 @@ async def branding_save(request: Request,
     updates = {
         "brand_text": brand_text.strip() or "Sicherheitsprüfung läuft …",
         "brand_color": brand_color.strip() or "#005eb8",
-        "wait_seconds": str(max(0, min(int(wait_seconds or 0), 10))),
+        "wait_seconds": str(max(0, min(int(wait_seconds or 0), 20))),
     }
     if default_target.strip():
         updates["default_target"] = default_target.strip()

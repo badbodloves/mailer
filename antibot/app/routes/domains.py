@@ -974,12 +974,26 @@ async def gate_health_check(request: Request, gate_id: int):
     # 4. Turnstile
     ts_site = (gate.get("turnstile_site_key") or "").strip()
     ts_secret = (gate.get("turnstile_secret_key") or "").strip()
+
+    def _fmt_key(k: str) -> str:
+        if len(k) < 12:
+            return f'"{k}" ({len(k)} chars)'
+        return f'{k[:8]}…{k[-4:]} ({len(k)} chars)'
+
     if not ts_site and not ts_secret:
         checks.append(("Turnstile", "info", "nicht konfiguriert (optional)"))
     elif not ts_site or not ts_secret:
         checks.append(("Turnstile", "warn",
                         "nur Site-Key ODER Secret-Key gesetzt — beide nötig"))
     else:
+        # Format-Sanity: Turnstile-Keys starten immer mit '0x'
+        format_warns = []
+        if not ts_site.startswith("0x"):
+            format_warns.append(f"Site-Key sieht ungewöhnlich aus: {_fmt_key(ts_site)} — sollte mit '0x' anfangen")
+        if not ts_secret.startswith("0x"):
+            format_warns.append(f"Secret-Key sieht ungewöhnlich aus: {_fmt_key(ts_secret)} — sollte mit '0x' anfangen")
+        for w in format_warns:
+            checks.append(("Turnstile Format", "warn", w))
         # Verify-Trick: wir schicken den Secret + einen bewusst leeren Response.
         # CF antwortet:
         #   error-codes: ["missing-input-response"]  → Secret akzeptiert, Token fehlte (= OK)
@@ -1008,8 +1022,8 @@ async def gate_health_check(request: Request, gate_id: int):
                 # Dummy-Response wurde (korrekt) abgelehnt.
                 errs_str = ", ".join(errs) if errs else "no error-codes"
                 checks.append(("Turnstile", "ok",
-                                f"Secret akzeptiert (dummy verify → {errs_str}) · "
-                                f"Site: {ts_site[:12]}…"))
+                                f"Secret akzeptiert (CF: {errs_str}) · "
+                                f"Site-Key: {_fmt_key(ts_site)}"))
             elif data.get("success") is True:
                 # Extrem unerwartet — leerer Response validiert nie
                 checks.append(("Turnstile", "warn",

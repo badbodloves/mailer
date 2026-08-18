@@ -19,6 +19,32 @@ router = APIRouter()
 VERIFY_COOKIE = "abo_verified"
 
 
+def _redirect_or_wait(request: Request, cfg: dict, target: str,
+                       response=None) -> HTMLResponse:
+    """Wenn wait_seconds > 0: Wait-Screen mit Logo zeigen und dann per JS/meta
+    weiterleiten. Sonst direkter 302. `response` optional wenn wir Cookies
+    setzen müssen (verify-branch) — dann kopieren wir sie in die HTMLResponse."""
+    try:
+        wait_s = int(cfg.get("wait_seconds", "0"))
+    except (ValueError, TypeError):
+        wait_s = 0
+    if wait_s <= 0:
+        r = RedirectResponse(target, status_code=302)
+        if response is not None:
+            for k, v in response.headers.raw:
+                if k.lower() == b"set-cookie":
+                    r.headers.raw.append((k, v))
+        return r
+    resp = request.app.state.templates.TemplateResponse(request, "wait_screen.html", {
+        "cfg": cfg, "target": target, "wait_seconds": max(1, min(wait_s, 20)),
+    })
+    if response is not None:
+        for k, v in response.headers.raw:
+            if k.lower() == b"set-cookie":
+                resp.headers.raw.append((k, v))
+    return resp
+
+
 def _resolve_gate(request: Request, db):
     """Match request.host → gates table; None if no per-host gate."""
     host = (request.headers.get("host") or "").split(":")[0].lower()
@@ -117,6 +143,7 @@ async def gate_entry(request: Request, param: str):
     bucket = session_bucket_from_request(ip, ua, cookie_secret or "salt")
 
     # Owner bypass — HMAC-signed "?bypass=..." for the owner to test live
+    # (bypass umgeht ALLES, auch den Wartescreen, damit man's schnell testen kann)
     if request.query_params.get("bypass") == _owner_bypass(cookie_secret):
         db.log_decision(ip=ip, asn="", country="", user_agent=ua, target=target,
                         verdict="allow", score=0, signals_json='{"owner_bypass":true}',
@@ -128,14 +155,16 @@ async def gate_entry(request: Request, param: str):
     if not token_valid and not target:
         return PlainTextResponse("not found", status_code=404)
 
-    # Verified cookie shortcut — skip the challenge entirely
+    # Verified cookie shortcut — skip the challenge, aber Wait-Screen bleibt
     if verify_cookie(cookie_secret, request.cookies.get(VERIFY_COOKIE, ""), bucket):
         db.log_decision(ip=ip, asn="", country="", user_agent=ua, target=target,
                         verdict="allow", score=0,
                         signals_json='{"verify_cookie":true}',
                         token_valid=1 if token_valid else 0,
                         dry_run=1 if cfg.get("dry_run") == "1" else 0)
-        return RedirectResponse(target, status_code=302)
+        if link_row:
+            db.bump_gate_link_hits(link_row["id"])
+        return _redirect_or_wait(request, cfg, target)
 
     # Score server-side signals
     result = score_request(db, cfg, ip=ip, user_agent=ua, rate_bucket=bucket)
@@ -156,16 +185,16 @@ async def gate_entry(request: Request, param: str):
                              "verdict": hint, "signals": result["signals"],
                              "ts": int(time.time())})
 
-    # DRY-RUN: log verdict but always allow-redirect
+    # DRY-RUN: log verdict but always redirect (via Wait-Screen wenn konfiguriert)
     if dry_run:
         if link_row:
             db.bump_gate_link_hits(link_row["id"])
-        return RedirectResponse(target, status_code=302)
+        return _redirect_or_wait(request, cfg, target)
 
     if hint == "allow":
         if link_row:
             db.bump_gate_link_hits(link_row["id"])
-        return RedirectResponse(target, status_code=302)
+        return _redirect_or_wait(request, cfg, target)
     if hint == "block":
         return _honeypot(request, cfg)
     # challenge
