@@ -232,7 +232,9 @@ http:// {
     redir https://{host}{uri} permanent
 }
 EOF
-mkdir -p /var/log/caddy && chown caddy:caddy /var/log/caddy
+mkdir -p /var/log/caddy
+chown -R caddy:caddy /var/log/caddy
+chmod 755 /var/log/caddy
 
 # ─── 8. UFW ──────────────────────────────────────────────────
 log "8/10  UFW Firewall"
