@@ -115,6 +115,65 @@ def _dyn_domains(api_key: str, secret: str = "") -> list:
         return []
 
 
+def _dyn_set_ns(api_key: str, domain: str, ns_list: list,
+                 secret: str = "") -> dict:
+    """set_ns bei Dynadot. Erwartet mindestens ns1+ns2. Nur EIN Versuch —
+    Retry-Loop macht der Aufrufer damit er Delay-Steps loggen kann.
+    Returns {ok, msg, not_ready_yet: bool}."""
+    if not ns_list or len(ns_list) < 2:
+        return {"ok": False, "msg": "keine NS geliefert von CF"}
+    params = {"domain": domain, "ns0": ns_list[0], "ns1": ns_list[1]}
+    # Dynadot's set_ns nimmt ns0..nsN (nicht ns1..nsN wie manche docs sagen)
+    for i, ns in enumerate(ns_list[2:6], start=2):
+        params[f"ns{i}"] = ns
+    resp = _dyn_call(api_key, "set_ns", params, secret=secret)
+    if "error" in resp:
+        return {"ok": False, "msg": resp["error"], "not_ready_yet": False}
+
+    r = resp.get("SetNsResponse", resp)
+    code_str = str(r.get("ResponseCode", "-1")).strip().lower()
+    status_str = (r.get("Status") or "").strip().lower()
+    r_lower = str(r).lower()
+    # Dynadot Sondermeldung: frisch gekaufte Domain ist noch nicht "settled"
+    not_ready = ("dns queries" in r_lower or "must respond" in r_lower
+                 or "not registered" in r_lower or "pending" in r_lower)
+    if code_str in ("0", "success", "ok") or status_str in ("success", "ok"):
+        return {"ok": True, "msg": "gesetzt", "not_ready_yet": False}
+    if not_ready:
+        return {"ok": False, "msg": "Domain bei Dynadot noch nicht settled",
+                "not_ready_yet": True}
+    return {"ok": False,
+            "msg": r.get("Error") or status_str or code_str or str(r)[:200],
+            "not_ready_yet": False}
+
+
+def _dyn_set_ns_with_retry(api_key: str, domain: str, ns_list: list,
+                             secret: str = "", log_step=None) -> dict:
+    """Set NS mit Retry-Loop (wie im bulk mailer):
+      .de → 4 Versuche, 30s Delay
+      andere → 2 Versuche, 10s Delay
+    log_step (optional) = callable(label, ok, detail) für step-by-step Feedback."""
+    is_de = domain.lower().endswith(".de")
+    max_retries = 4 if is_de else 2
+    wait_s = 30 if is_de else 10
+
+    last = {"ok": False, "msg": "kein Versuch"}
+    for attempt in range(max_retries):
+        if attempt > 0:
+            if log_step:
+                log_step(f"NS: warte {wait_s}s (Attempt {attempt+1}/{max_retries})",
+                         True, "Dynadot braucht kurz bis der Domain-Datensatz settled ist")
+            time.sleep(wait_s)
+        r = _dyn_set_ns(api_key, domain, ns_list, secret=secret)
+        last = r
+        if r["ok"]:
+            return r
+        if not r.get("not_ready_yet"):
+            # echter Fehler (nicht "warte noch") → abbrechen
+            return r
+    return last
+
+
 # ── Cloudflare helpers ────────────────────────────────────
 
 def _cf_auth(cfg: dict) -> dict:
@@ -532,6 +591,7 @@ def _pipeline_one_domain(db, cfg: dict, domain: str, pcfg: dict) -> dict:
     # 3. CF-Zone anlegen falls nicht schon da
     zones = _cf_zones(cfg)
     zone = next((z for z in zones if z["name"] == domain), None)
+    is_new_zone = False
     if not zone:
         zr = _cf_add_zone(cfg, domain, cfg.get("cloudflare_account_id", ""))
         if not zr.get("success"):
@@ -540,14 +600,35 @@ def _pipeline_one_domain(db, cfg: dict, domain: str, pcfg: dict) -> dict:
             return {"domain": domain, "ok": False, "steps": steps,
                     "gate_id": None, "ns_hint": ""}
         zone = zr.get("result", {})
-        ns_list = zone.get("name_servers", [])
-        ns_hint = ", ".join(ns_list)
-        steps.append(("CF: Zone angelegt", True,
-                       f"NS bei Registrar setzen auf: {ns_hint}"))
+        is_new_zone = True
+        steps.append(("CF: Zone angelegt", True, f"ID {zone.get('id', '?')[:12]}…"))
     else:
         steps.append(("CF: Zone existiert", True, ""))
 
     zid = zone["id"]
+
+    # 3a. Nameserver automatisch bei Dynadot setzen (statt "User macht's manuell")
+    # Nur wenn wir Dynadot-Key haben UND die Zone gerade neu angelegt wurde
+    # (bei existierenden Zonen davon ausgehen dass NS schon stehen).
+    ns_list = zone.get("name_servers", [])
+    if ns_list:
+        ns_hint = ", ".join(ns_list)
+    if is_new_zone and cfg.get("dynadot_api_key") and ns_list:
+        def _log_ns_step(label, ok, detail):
+            steps.append((label, ok, detail))
+        ns_res = _dyn_set_ns_with_retry(
+            cfg["dynadot_api_key"], domain, ns_list,
+            secret=cfg.get("dynadot_api_secret", ""),
+            log_step=_log_ns_step,
+        )
+        if ns_res["ok"]:
+            steps.append((f"Dynadot: NS gesetzt → {ns_list[0]}, {ns_list[1]}",
+                           True, ""))
+            ns_hint = ""   # brauchen wir dem User nicht mehr anzeigen
+        else:
+            steps.append(("Dynadot: NS setzen fehlgeschlagen", False,
+                           ns_res["msg"] + " — bitte manuell im Dynadot-Panel setzen"))
+            # NICHT abort — Rest der Pipeline (A-Records, Gate) läuft trotzdem
 
     # 4. A-Records — IMMER grau (DNS only) initial damit LE-Cert geholt
     #    werden kann. User kann später via Gate-Panel auf orange schalten.
@@ -808,6 +889,47 @@ async def pipeline_run(request: Request):
 
 
 # ── Gate: CF-Wolke orange/grau umschalten ────────────────
+
+@router.post("/admin/gates/{gate_id}/retry-set-ns", response_class=HTMLResponse)
+async def gate_retry_set_ns(request: Request, gate_id: int):
+    """Manueller Retry für Dynadot NS-Setting (falls's beim Deploy nicht klappte)."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    gate = db.get_gate(gate_id)
+    if not gate:
+        return HTMLResponse('<span style="color:var(--red)">Gate weg</span>')
+    if not cfg.get("dynadot_api_key"):
+        return HTMLResponse('<span style="color:var(--red)">Kein Dynadot-Key gesetzt</span>')
+    if not _cf_configured(cfg):
+        return HTMLResponse('<span style="color:var(--red)">Kein CF-Auth</span>')
+    zones = _cf_zones(cfg)
+    zone = next((z for z in zones if z["name"] == gate["hostname"]), None)
+    if not zone:
+        return HTMLResponse(f'<span style="color:var(--red)">Keine CF-Zone für {escape(gate["hostname"])}</span>')
+    ns_list = zone.get("name_servers", [])
+    if not ns_list:
+        return HTMLResponse('<span style="color:var(--red)">CF liefert keine NS für diese Zone</span>')
+    logs = []
+    res = _dyn_set_ns_with_retry(
+        cfg["dynadot_api_key"], gate["hostname"], ns_list,
+        secret=cfg.get("dynadot_api_secret", ""),
+        log_step=lambda label, ok, detail: logs.append((label, ok, detail)),
+    )
+    log_html = "".join(f'<li>{"✓" if ok else "…"} {escape(label)}'
+                        f'{": " + escape(detail) if detail else ""}</li>'
+                        for label, ok, detail in logs)
+    if res["ok"]:
+        return HTMLResponse(
+            f'<div style="color:var(--green)">✓ NS bei Dynadot gesetzt auf {escape(", ".join(ns_list[:2]))}</div>'
+            f'<ul style="font-size:11px;color:var(--fg2)">{log_html}</ul>'
+        )
+    return HTMLResponse(
+        f'<div style="color:var(--red)">✗ {escape(res["msg"])}</div>'
+        f'<ul style="font-size:11px;color:var(--fg2)">{log_html}</ul>'
+        f'<div style="font-size:11px;color:var(--fg2);margin-top:6px">Manuell im Dynadot-Panel setzen: '
+        f'<code>{escape(", ".join(ns_list))}</code></div>'
+    )
+
 
 @router.post("/admin/gates/{gate_id}/cf-proxy-toggle", response_class=HTMLResponse)
 async def gate_cf_proxy_toggle(request: Request, gate_id: int,

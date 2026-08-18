@@ -51,6 +51,21 @@
         </form>
 
         <hr style="margin:16px 0">
+        <h4 style="margin:0 0 8px">Dynadot Nameserver retry</h4>
+        <p class="muted" style="font-size:12px">
+            Falls das automatische NS-Setzen beim Deploy nicht klappte
+            (Dynadot braucht bei frisch gekauften Domains manchmal ein paar Minuten):
+            hier nochmal versuchen. Retry-Pattern .de = 4x mit 30s Delay,
+            sonst 2x mit 10s.
+        </p>
+        <button type="button" class="btn btn-secondary btn-xs"
+                hx-post="/admin/gates/{{ gate.id }}/retry-set-ns"
+                hx-target="#ns-retry-result" hx-swap="innerHTML">
+            NS bei Dynadot nochmal setzen
+        </button>
+        <div id="ns-retry-result" style="font-size:12px;margin-top:6px"></div>
+
+        <hr style="margin:16px 0">
         <h4 style="margin:0 0 8px">CF-Wolke (Proxied)</h4>
         <p class="muted" style="font-size:12px">
             Erst NACHDEM Caddy das LE-Cert für diese Domain geholt hat auf
