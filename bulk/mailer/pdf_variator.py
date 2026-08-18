@@ -44,13 +44,17 @@ except ImportError:
 # ── Default Pools (überschreibbar via PoolBag.from_dict) ──
 
 FILENAME_POOL = [
-    "Anhang", "Anlage", "Katalog", "Broschüre", "Prospekt", "Dokument",
-    "Übersicht", "Datei", "Unterlage", "Angebot", "Info", "Ausarbeitung",
-    "Bericht", "Vorschau", "Detailinfo", "Zusammenfassung", "Preisliste",
-    "Produktinfo", "Leistungsübersicht", "Konzept", "Präsentation",
-    "Vertriebsunterlage", "Firmenprofil", "Leistungsbeschreibung",
-    "Sortiment", "Warenverzeichnis", "Produktverzeichnis",
-    "Detailunterlagen", "Referenzunterlagen", "Fachinformation",
+    "Katalog", "Produktkatalog", "Gesamtkatalog", "Hauptkatalog",
+    "Lieferprogramm", "Sortiment", "Sortimentsübersicht",
+    "Sortimentskatalog", "Produktprogramm", "Produktübersicht",
+    "Produktverzeichnis", "Modellübersicht", "Modellprogramm",
+    "Modellkatalog", "Fahrzeugübersicht", "Fahrzeugkatalog",
+    "Branchenkatalog", "Handelskatalog", "Großhandelskatalog",
+    "Verkaufskatalog", "Bestellkatalog", "Broschüre",
+    "Produktbroschüre", "Prospekt", "Kompaktkatalog", "Kurzkatalog",
+    "Auswahlübersicht", "Preisliste", "Produktunterlagen",
+    "Verkaufsunterlagen", "Vertriebsunterlagen", "Unterlagen",
+    "Anhang", "Anlage", "Dokumentation",
 ]
 
 PRODUCER_POOL = [

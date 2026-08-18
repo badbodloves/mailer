@@ -94,9 +94,10 @@
         </div>
     </div>
 
-    <details style="margin-top:16px">
+    <details style="margin-top:16px" {% if pools_saved %}open{% endif %}>
         <summary style="cursor:pointer;padding:8px;background:var(--bg-alt,#eee);border-radius:4px">
             Pools bearbeiten (Filename, Metadaten-Strings)
+            {% if pools_saved %}<span style="color:var(--green);font-size:11px;margin-left:8px">✓ eigene Pools gespeichert</span>{% endif %}
         </summary>
         <div class="grid-2" style="padding-top:12px;align-items:start">
             <div class="card">
@@ -122,6 +123,23 @@
                 <label>Keywords-Pool (kommagetrennt)</label>
                 <textarea name="pool_keywords" rows="3" style="font-family:monospace;font-size:11px">{{ pool_keywords }}</textarea>
             </div>
+        </div>
+        <div style="margin-top:8px;padding:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+            <button type="button" class="btn btn-success btn-sm"
+                    hx-post="/pdf-variator/pools/save"
+                    hx-target="#pools-save-result"
+                    hx-swap="innerHTML"
+                    hx-include="closest form">
+                Pools speichern
+            </button>
+            <button type="button" class="btn btn-secondary btn-sm"
+                    hx-post="/pdf-variator/pools/reset"
+                    hx-target="#pools-save-result"
+                    hx-swap="innerHTML"
+                    hx-confirm="Gespeicherte Pools löschen und beim nächsten Reload die Defaults laden?">
+                Auf Defaults zurücksetzen
+            </button>
+            <span id="pools-save-result"></span>
         </div>
     </details>
 

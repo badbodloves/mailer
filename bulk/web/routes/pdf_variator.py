@@ -41,13 +41,32 @@ def _parse_pools(**kw) -> "PoolBag":
     })
 
 
-@router.get("/pdf-variator", response_class=HTMLResponse)
-async def pdf_variator_page(request: Request):
+_POOL_KEYS = ("filename", "title", "producer", "creator",
+              "author", "subject", "keywords")
+
+
+def _resolve_pools(db) -> dict:
+    """Liefert für jeden Pool den gespeicherten Inhalt, oder — falls
+    nichts gespeichert wurde — den Default aus dem pdf_variator-Modul."""
     from bulk.mailer.pdf_variator import (FILENAME_POOL, PRODUCER_POOL,
                                             CREATOR_POOL, AUTHOR_POOL,
                                             TITLE_POOL, SUBJECT_POOL,
                                             KEYWORDS_POOL)
-    # Check pikepdf availability early
+    defaults = {
+        "filename": "\n".join(FILENAME_POOL),
+        "title":    "\n".join(TITLE_POOL),
+        "producer": "\n".join(PRODUCER_POOL),
+        "creator":  "\n".join(CREATOR_POOL),
+        "author":   "\n".join(AUTHOR_POOL),
+        "subject":  "\n".join(SUBJECT_POOL),
+        "keywords": ", ".join(KEYWORDS_POOL),
+    }
+    saved = db.get_variator_pools() if hasattr(db, "get_variator_pools") else {}
+    return {k: (saved.get(k) or defaults[k]) for k in _POOL_KEYS}
+
+
+@router.get("/pdf-variator", response_class=HTMLResponse)
+async def pdf_variator_page(request: Request):
     try:
         import pikepdf  # noqa
         pikepdf_ok = True
@@ -56,17 +75,54 @@ async def pdf_variator_page(request: Request):
         pikepdf_ok = False
         pike_ver = None
 
-    return request.app.state.templates.TemplateResponse(request, "pdf_variator.html", {
+    db = request.app.state.db
+    pools = _resolve_pools(db)
+    saved_flag = "1" if db.get_variator_pools() else ""
+
+    ctx = {
         "active": "pdf_variator",
         "pikepdf_ok": pikepdf_ok, "pike_ver": pike_ver,
-        "pool_filename": "\n".join(FILENAME_POOL),
-        "pool_producer": "\n".join(PRODUCER_POOL),
-        "pool_creator": "\n".join(CREATOR_POOL),
-        "pool_author": "\n".join(AUTHOR_POOL),
-        "pool_title": "\n".join(TITLE_POOL),
-        "pool_subject": "\n".join(SUBJECT_POOL),
-        "pool_keywords": ", ".join(KEYWORDS_POOL),
-    })
+        "pools_saved": saved_flag,
+    }
+    for k in _POOL_KEYS:
+        ctx[f"pool_{k}"] = pools[k]
+    return request.app.state.templates.TemplateResponse(request, "pdf_variator.html", ctx)
+
+
+@router.post("/pdf-variator/pools/save", response_class=HTMLResponse)
+async def pools_save(request: Request,
+                      pool_filename: str = Form(""),
+                      pool_producer: str = Form(""),
+                      pool_creator: str = Form(""),
+                      pool_author: str = Form(""),
+                      pool_title: str = Form(""),
+                      pool_subject: str = Form(""),
+                      pool_keywords: str = Form("")):
+    db = request.app.state.db
+    to_save = {
+        "filename": pool_filename.strip(),
+        "producer": pool_producer.strip(),
+        "creator":  pool_creator.strip(),
+        "author":   pool_author.strip(),
+        "title":    pool_title.strip(),
+        "subject":  pool_subject.strip(),
+        "keywords": pool_keywords.strip(),
+    }
+    db.save_variator_pools(to_save)
+    return HTMLResponse(
+        '<span style="color:var(--green);font-size:12px">✓ Pools gespeichert. '
+        'Werden beim nächsten Reload automatisch geladen.</span>'
+    )
+
+
+@router.post("/pdf-variator/pools/reset", response_class=HTMLResponse)
+async def pools_reset(request: Request):
+    db = request.app.state.db
+    db.reset_variator_pools()
+    return HTMLResponse(
+        '<span style="color:var(--green);font-size:12px">✓ Auf Defaults zurückgesetzt. '
+        '<a href="/pdf-variator">Reload</a> um die Textareas neu zu befüllen.</span>'
+    )
 
 
 @router.post("/pdf-variator/test-report", response_class=HTMLResponse)

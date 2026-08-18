@@ -302,6 +302,13 @@ class BulkDBManager:
                 pixel_tweak INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
+        # PDF Variator pools (kv-store, ein Eintrag pro Pool-Typ)
+        if "pdf_variator_pools" not in tables:
+            c.execute("""CREATE TABLE pdf_variator_pools (
+                pool_key TEXT PRIMARY KEY,
+                content TEXT NOT NULL DEFAULT '',
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
         if "bulk_cloudinary_links" not in tables:
             c.execute("""CREATE TABLE bulk_cloudinary_links (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -988,3 +995,26 @@ class BulkDBManager:
         c.execute("DELETE FROM bulk_cloudinary_links WHERE upload_id=?", (upload_id,))
         c.execute("DELETE FROM bulk_cloudinary_uploads WHERE id=?", (upload_id,))
         c.commit()
+
+    # ── PDF Variator Pools (persistent per-Panel) ──────────
+    def get_variator_pools(self) -> dict:
+        """Alle gespeicherten Pools als {pool_key: content_string}."""
+        rows = self._conn().execute(
+            "SELECT pool_key, content FROM pdf_variator_pools").fetchall()
+        return {r["pool_key"]: r["content"] for r in rows}
+
+    def save_variator_pools(self, pools: dict):
+        """Bulk-Upsert: übergibt {pool_key: content} und schreibt alles."""
+        c = self._conn()
+        for k, v in pools.items():
+            c.execute(
+                "INSERT INTO pdf_variator_pools (pool_key, content, updated_at) "
+                "VALUES (?, ?, CURRENT_TIMESTAMP) "
+                "ON CONFLICT(pool_key) DO UPDATE SET "
+                "content=excluded.content, updated_at=CURRENT_TIMESTAMP",
+                (k, v))
+        c.commit()
+
+    def reset_variator_pools(self):
+        self._conn().execute("DELETE FROM pdf_variator_pools")
+        self._conn().commit()
