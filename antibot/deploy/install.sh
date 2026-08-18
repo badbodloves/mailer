@@ -41,12 +41,24 @@ esac
 [ -n "$DOMAIN" ] || die "DOMAIN muss gesetzt sein: DOMAIN=xyz.deinedomain.de bash install.sh"
 
 export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a          # kein 'welche services neu starten?'-Prompt
+export NEEDRESTART_SUSPEND=1
+export UCF_FORCE_CONFFOLD=1        # keine conf-file merge prompts
 log "Plan: antibot auf ${DOMAIN} (port ${APP_PORT})"
 
 # ─── 1. System-Update ────────────────────────────────────────
 log "1/10  System-Update + Zeitzone $TIMEZONE"
+# needrestart komplett neutralisieren (Ubuntu 22.04+ blockt sonst)
+if [ -f /etc/needrestart/needrestart.conf ]; then
+    sed -i "s/^#\?\$nrconf{restart} = .*/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf
+    sed -i "s/^#\?\$nrconf{kernelhints} = .*/\$nrconf{kernelhints} = 0;/" /etc/needrestart/needrestart.conf
+fi
 apt-get update -qq
-apt-get -yqq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
+apt-get -yqq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    -o APT::Get::Assume-Yes=true \
+    upgrade
 timedatectl set-timezone "$TIMEZONE" || true
 
 # ─── 2. Pakete ───────────────────────────────────────────────

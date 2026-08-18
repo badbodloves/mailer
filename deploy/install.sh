@@ -50,14 +50,25 @@ if [ $INSTALL_TRANS -eq 0 ] && [ $INSTALL_BULK -eq 0 ]; then
 fi
 
 export DEBIAN_FRONTEND=noninteractive
+export NEEDRESTART_MODE=a          # kein 'welche services neu starten?'-Prompt
+export NEEDRESTART_SUSPEND=1
+export UCF_FORCE_CONFFOLD=1
 plan=""; [ $INSTALL_TRANS -eq 1 ] && plan+="trans (${DOMAIN_TRANS}:${TRANS_PORT}) "
 [ $INSTALL_BULK -eq 1 ]  && plan+="bulk (${DOMAIN_BULK}:${BULK_PORT})"
 log "Plan: $plan"
 
 # ─── 1. System-Update + Zeitzone ─────────────────────────────
 log "1/10  System-Update + Zeitzone $TIMEZONE"
+if [ -f /etc/needrestart/needrestart.conf ]; then
+    sed -i "s/^#\?\$nrconf{restart} = .*/\$nrconf{restart} = 'a';/" /etc/needrestart/needrestart.conf
+    sed -i "s/^#\?\$nrconf{kernelhints} = .*/\$nrconf{kernelhints} = 0;/" /etc/needrestart/needrestart.conf
+fi
 apt-get update -qq
-apt-get -yqq -o Dpkg::Options::="--force-confdef" -o Dpkg::Options::="--force-confold" upgrade
+apt-get -yqq \
+    -o Dpkg::Options::="--force-confdef" \
+    -o Dpkg::Options::="--force-confold" \
+    -o APT::Get::Assume-Yes=true \
+    upgrade
 timedatectl set-timezone "$TIMEZONE" || true
 
 # ─── 2. Pakete ───────────────────────────────────────────────
