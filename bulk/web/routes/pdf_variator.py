@@ -5,13 +5,107 @@ Variante wird generiert → in ZIP-Stream gepusht → RAM freigegeben.
 Zu jedem Zeitpunkt max ~2 Varianten im Speicher.
 """
 import io
+import struct
+import time
+import zlib
 import logging
-import zipfile
 from html import escape
 from typing import Optional
 
 from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, StreamingResponse, PlainTextResponse
+
+
+# ── True-Streaming-ZIP-Writer ───────────────────────────────────────
+# zipfile.ZipFile braucht seekable file objects — beim Truncate-Buffer
+# Ansatz landen falsche Central-Directory-Offsets im Output → Archiv-
+# Fehler beim Öffnen. Deshalb ZIP hand-rolled, format ist simpel genug.
+
+_LOCAL_HDR_SIG = b"PK\x03\x04"
+_CENTRAL_DIR_SIG = b"PK\x01\x02"
+_END_OF_CD_SIG = b"PK\x05\x06"
+
+
+def _dos_datetime(ts=None) -> tuple:
+    t = time.localtime(ts)
+    dos_time = (t.tm_hour << 11) | (t.tm_min << 5) | (t.tm_sec // 2)
+    dos_date = ((max(t.tm_year, 1980) - 1980) << 9) | (t.tm_mon << 5) | t.tm_mday
+    return dos_time, dos_date
+
+
+class StreamingZipWriter:
+    """Kein seek() nötig — jedes add_file yields die vollständigen Bytes
+    (local header + data). finalize() yields Central-Directory + EOCD.
+    Alle Files STORED (unkomprimiert) — PDFs sind eh intern schon
+    komprimiert."""
+
+    def __init__(self):
+        self._entries = []  # list of dicts für CD-Bau
+        self._offset = 0     # aktuelle Byte-Position im Stream
+
+    def add_file(self, filename: str, data: bytes) -> bytes:
+        fname_bytes = filename.encode("utf-8")
+        flags = 0x0800 if any(b > 0x7F for b in fname_bytes) else 0
+        crc = zlib.crc32(data) & 0xFFFFFFFF
+        size = len(data)
+        dt, dd = _dos_datetime()
+
+        local_hdr = struct.pack(
+            "<4sHHHHHIIIHH",
+            _LOCAL_HDR_SIG,
+            20,     # version needed to extract (2.0 = STORED)
+            flags,
+            0,      # compression method (STORED)
+            dt, dd,
+            crc,
+            size,   # compressed size
+            size,   # uncompressed size
+            len(fname_bytes),
+            0,      # extra field length
+        )
+        self._entries.append({
+            "filename": fname_bytes, "crc": crc, "size": size,
+            "dos_time": dt, "dos_date": dd, "offset": self._offset,
+            "flags": flags,
+        })
+        chunk = local_hdr + fname_bytes + data
+        self._offset += len(chunk)
+        return chunk
+
+    def finalize(self) -> bytes:
+        cd_offset = self._offset
+        cd_bytes = b""
+        for e in self._entries:
+            cd_entry = struct.pack(
+                "<4sHHHHHHIIIHHHHHII",
+                _CENTRAL_DIR_SIG,
+                20,             # version made by
+                20,             # version needed
+                e["flags"],
+                0,              # method (STORED)
+                e["dos_time"], e["dos_date"],
+                e["crc"],
+                e["size"],      # compressed
+                e["size"],      # uncompressed
+                len(e["filename"]),
+                0,              # extra len
+                0,              # comment len
+                0,              # disk number start
+                0,              # internal attrs
+                0,              # external attrs
+                e["offset"],    # local header offset
+            )
+            cd_bytes += cd_entry + e["filename"]
+
+        eocd = struct.pack(
+            "<4sHHHHIIH",
+            _END_OF_CD_SIG,
+            0, 0,               # disk numbers
+            len(self._entries), len(self._entries),
+            len(cd_bytes), cd_offset,
+            0,                  # comment length
+        )
+        return cd_bytes + eocd
 
 logger = logging.getLogger("bulk.pdf_variator")
 router = APIRouter()
@@ -233,24 +327,14 @@ async def generate(request: Request,
     used_names = set()
 
     def _generate_stream():
-        """Yield chunks of a growing ZIP file. Buffer = one variant at a time."""
-        buf = io.BytesIO()
-        # ZIP_STORED — PDFs sind intern schon komprimiert, kein Doppel-Compress
-        zf = zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED, allowZip64=True)
-
-        def _flush():
-            data = buf.getvalue()
-            buf.seek(0)
-            buf.truncate()
-            return data
-
+        """Yield chunks eines echten Streaming-ZIPs. Peak-RAM = 1 Variante."""
+        zw = StreamingZipWriter()
         for i in range(count):
             try:
                 fname, pdf_bytes = variator.make_variant(seed=i)
             except Exception as e:
                 logger.warning("Variant %d failed: %s", i, e)
                 continue
-            # Kollision? → numerischen Suffix ranhängen
             base_fname = fname
             n = 1
             while fname in used_names:
@@ -258,13 +342,8 @@ async def generate(request: Request,
                 fname = f"{stem}_{n}.{ext}"
                 n += 1
             used_names.add(fname)
-
-            zi = zipfile.ZipInfo(fname)
-            zi.compress_type = zipfile.ZIP_STORED
-            zf.writestr(zi, pdf_bytes)
-            yield _flush()
-        zf.close()
-        yield _flush()
+            yield zw.add_file(fname, pdf_bytes)
+        yield zw.finalize()
 
     return StreamingResponse(
         _generate_stream(),
