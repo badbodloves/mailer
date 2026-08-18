@@ -11,11 +11,44 @@ from fastapi.responses import HTMLResponse, RedirectResponse, PlainTextResponse
 from ..tokens import (verify_token, session_bucket_from_request,
                       verify_cookie, issue_verify_cookie)
 from ..scoring import score_request
+from ..presets import resolve_mode
 
 logger = logging.getLogger("antibot.gate")
 router = APIRouter()
 
 VERIFY_COOKIE = "abo_verified"
+
+
+def _resolve_gate(request: Request, db):
+    """Match request.host → gates table; None if no per-host gate."""
+    host = (request.headers.get("host") or "").split(":")[0].lower()
+    return db.get_gate_by_host(host) if host else None
+
+
+def _effective_cfg(cfg: dict, gate: dict = None) -> dict:
+    """Merge a gate's per-domain overrides on top of the global config."""
+    eff = dict(cfg)
+    if not gate:
+        return eff
+    if gate.get("target_url"):
+        eff["default_target"] = gate["target_url"]
+    if gate.get("brand_text"):
+        eff["brand_text"] = gate["brand_text"]
+    if gate.get("brand_color"):
+        eff["brand_color"] = gate["brand_color"]
+    if gate.get("logo_path"):
+        eff["logo_path"] = gate["logo_path"]
+    if gate.get("turnstile_site_key"):
+        eff["turnstile_site_key"] = gate["turnstile_site_key"]
+    if gate.get("turnstile_secret_key"):
+        eff["turnstile_secret_key"] = gate["turnstile_secret_key"]
+    # Score-Preset überschreibt globale Schwellwerte
+    preset = resolve_mode(gate.get("mode", "medium"))
+    eff["threshold_allow"] = str(preset["threshold_allow"])
+    eff["threshold_block"] = str(preset["threshold_block"])
+    eff["pow_difficulty"] = str(preset["pow_difficulty"])
+    eff["rate_limit_per_min"] = str(preset["rate_limit_per_min"])
+    return eff
 
 
 def _client_ip(request: Request) -> str:
@@ -37,21 +70,49 @@ def _fire_webhook(cfg: dict, payload: dict):
     threading.Thread(target=_send, daemon=True).start()
 
 
-@router.get("/go/{token}", response_class=HTMLResponse)
-async def gate_entry(request: Request, token: str):
-    """Mail-link landing. Validates token → scores → routes."""
+@router.get("/go/{param}", response_class=HTMLResponse)
+async def gate_entry(request: Request, param: str):
+    """Mail-link landing. Zwei Modi:
+      * `param` enthält '.' → HMAC-Token (klassisch, share.google-Wrap)
+      * sonst → Slug in gate_links (Multi-Domain-Ready-Links)
+    """
     db = request.app.state.db
-    cfg = db.get_config()
+    global_cfg = db.get_config()
+    gate = _resolve_gate(request, db)
+    cfg = _effective_cfg(global_cfg, gate)
     ip = _client_ip(request)
     ua = request.headers.get("user-agent", "")
-    hmac_secret = cfg.get("hmac_secret", "")
-    cookie_secret = cfg.get("cookie_secret", "")
+    hmac_secret = global_cfg.get("hmac_secret", "")
+    cookie_secret = global_cfg.get("cookie_secret", "")
 
-    payload = verify_token(hmac_secret, token) if hmac_secret else None
-    token_valid = payload is not None
-    target = (payload.get("t") if payload else "") or cfg.get("default_target", "")
+    # Token-Modus: hat immer '.' als HMAC-Trenner
+    payload = None
+    token_valid = False
+    link_row = None
+    if "." in param and hmac_secret:
+        payload = verify_token(hmac_secret, param)
+        token_valid = payload is not None
+    else:
+        # Slug-Modus: braucht ein aktives Gate für diese Domain
+        if gate:
+            link_row = db.get_gate_link(gate["id"], param)
+
+    # Ohne gültigen Token UND ohne bekannten Slug: 404 (kein Random-Traffic auf's Ziel)
+    if not payload and not link_row:
+        return PlainTextResponse("not found", status_code=404)
+
+    target = ""
+    if payload:
+        target = payload.get("t") or ""
+    elif link_row:
+        target = link_row.get("target_override") or gate.get("target_url") or ""
+    if not target:
+        target = cfg.get("default_target", "")
     if not target:
         return PlainTextResponse("no target configured", status_code=500)
+
+    # Für die Antwort: nutze param als "token" (Verify-Round schickt's zurück)
+    token = param
 
     bucket = session_bucket_from_request(ip, ua, cookie_secret or "salt")
 
@@ -97,9 +158,13 @@ async def gate_entry(request: Request, token: str):
 
     # DRY-RUN: log verdict but always allow-redirect
     if dry_run:
+        if link_row:
+            db.bump_gate_link_hits(link_row["id"])
         return RedirectResponse(target, status_code=302)
 
     if hint == "allow":
+        if link_row:
+            db.bump_gate_link_hits(link_row["id"])
         return RedirectResponse(target, status_code=302)
     if hint == "block":
         return _honeypot(request, cfg)
@@ -147,14 +212,28 @@ async def verify(request: Request,
                   pow_answer: str = Form(""),
                   pow_hash: str = Form("")):
     db = request.app.state.db
-    cfg = db.get_config()
+    global_cfg = db.get_config()
+    gate = _resolve_gate(request, db)
+    cfg = _effective_cfg(global_cfg, gate)
     ip = _client_ip(request)
     ua = request.headers.get("user-agent", "")
-    hmac_secret = cfg.get("hmac_secret", "")
-    cookie_secret = cfg.get("cookie_secret", "")
+    hmac_secret = global_cfg.get("hmac_secret", "")
+    cookie_secret = global_cfg.get("cookie_secret", "")
 
-    payload = verify_token(hmac_secret, token) if hmac_secret else None
-    target = (payload.get("t") if payload else "") or cfg.get("default_target", "")
+    payload = None
+    link_row = None
+    if "." in token and hmac_secret:
+        payload = verify_token(hmac_secret, token)
+    else:
+        if gate:
+            link_row = db.get_gate_link(gate["id"], token)
+    target = ""
+    if payload:
+        target = payload.get("t") or ""
+    elif link_row:
+        target = link_row.get("target_override") or gate.get("target_url") or ""
+    if not target:
+        target = cfg.get("default_target", "")
     if not target:
         return PlainTextResponse("no target", status_code=400)
 
@@ -195,6 +274,8 @@ async def verify(request: Request,
 
     if dry_run or hint == "allow":
         ttl = int(cfg.get("verification_ttl_hours", "6")) * 3600
+        if link_row:
+            db.bump_gate_link_hits(link_row["id"])
         resp = RedirectResponse(target, status_code=302)
         resp.set_cookie(VERIFY_COOKIE,
                         issue_verify_cookie(cookie_secret, bucket, ttl),

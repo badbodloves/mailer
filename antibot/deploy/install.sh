@@ -107,6 +107,13 @@ sudo -u "$APP_USER" "$APP_DIR/venv/bin/pip" install -q -r "$APP_DIR/requirements
 sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && '$APP_DIR/venv/bin/python' -c 'from app.main import app'" \
     || die "Import von app.main:app fehlgeschlagen."
 
+# Panel-Domain in DB hinterlegen, damit /tls-check sie als 'ok' erkennt
+sudo -u "$APP_USER" bash -c "cd '$APP_DIR' && '$APP_DIR/venv/bin/python' -c \"
+from app.db import DB
+d = DB('$APP_DIR/antibot.db')
+d.set_config(panel_hostname='$DOMAIN')
+\"" || true
+
 # ─── 6. Systemd Unit ─────────────────────────────────────────
 log "6/10  systemd Unit (hardened, non-root)"
 cat > /etc/systemd/system/antibot.service <<EOF
@@ -155,13 +162,24 @@ UMask=0077
 WantedBy=multi-user.target
 EOF
 
-# ─── 7. Caddyfile ────────────────────────────────────────────
-log "7/10  Caddyfile"
+# ─── 7. Caddyfile — Panel-Domain + on-demand TLS für alle Gate-Domains ─
+log "7/10  Caddyfile (Panel + on-demand für Gates)"
 cat > /etc/caddy/Caddyfile <<EOF
 {
     email admin@${DOMAIN#*.}
+    on_demand_tls {
+        ask http://127.0.0.1:${APP_PORT}/tls-check
+        interval 2m
+        burst 5
+    }
 }
 
+# HTTP → HTTPS für alle Hosts
+:80 {
+    redir https://{host}{uri} permanent
+}
+
+# Panel-Domain — fest konfiguriert, kein on-demand nötig
 ${DOMAIN} {
     encode gzip zstd
     header {
@@ -177,7 +195,36 @@ ${DOMAIN} {
         header_up X-Forwarded-Host {host}
     }
     log {
-        output file /var/log/caddy/${DOMAIN}.log {
+        output file /var/log/caddy/panel.log {
+            roll_size 10MiB
+            roll_keep 5
+        }
+        format json
+    }
+}
+
+# Catch-all für alle Gate-Domains — Caddy fragt /tls-check bevor's ein
+# Cert holt, so verhindern wir dass Fremde uns via DNS-Umleitung
+# LE-Rate-Limits ausschöpfen.
+https:// {
+    tls {
+        on_demand
+    }
+    encode gzip zstd
+    header {
+        Strict-Transport-Security "max-age=31536000; includeSubDomains"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "SAMEORIGIN"
+        Referrer-Policy "strict-origin-when-cross-origin"
+        -Server
+    }
+    reverse_proxy 127.0.0.1:${APP_PORT} {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-For {remote_host}
+        header_up X-Forwarded-Host {host}
+    }
+    log {
+        output file /var/log/caddy/gates.log {
             roll_size 10MiB
             roll_keep 5
         }

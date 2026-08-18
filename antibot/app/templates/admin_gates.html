@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% set active = "gates" %}
+{% block content %}
+<div class="page-header">
+    <h1>Gates (Domains)</h1>
+    <a href="/admin/gates/new" class="btn btn-primary btn-sm">+ Neue Gate</a>
+</div>
+
+<p class="muted" style="font-size:13px">
+    Jede Gate ist eine eigene Domain mit eigenem Modus, Ziel-URL, Logo und optional
+    eigenem Turnstile-Widget. Caddy holt für jede Domain automatisch ein
+    Let's-Encrypt-Zertifikat sobald DNS auf diesen Server zeigt.
+    Server-IP: <code>{{ server_ip or 'noch nicht ermittelt' }}</code>.
+</p>
+
+{% if gates %}
+<table style="font-size:12px">
+    <thead>
+        <tr>
+            <th>Hostname</th><th>Modus</th><th>Ziel</th><th>Links</th>
+            <th>Aktiv</th><th></th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for g in gates %}
+    <tr>
+        <td style="font-family:monospace">{{ g.hostname }}</td>
+        <td><span class="badge">{{ g.mode }}</span>
+            <div class="muted" style="font-size:10px">{{ g.mode_label }}</div></td>
+        <td style="max-width:280px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+            title="{{ g.target_url }}">{{ g.target_url }}</td>
+        <td>{{ g.link_count }}</td>
+        <td>{% if g.active %}<span class="v-allow">ja</span>{% else %}<span class="v-block">nein</span>{% endif %}</td>
+        <td style="white-space:nowrap">
+            <a href="/admin/gates/{{ g.id }}" class="btn btn-secondary btn-xs">Edit / Links</a>
+            <a href="https://{{ g.hostname }}/admin/gates/{{ g.id }}"
+               class="btn btn-secondary btn-xs" target="_blank">Live</a>
+            <form method="post" action="/admin/gates/{{ g.id }}/delete" style="display:inline"
+                  onsubmit="return confirm('Gate + alle Links löschen?');">
+                <button class="btn btn-danger btn-xs">×</button>
+            </form>
+        </td>
+    </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<div class="card">
+    <p class="muted">Noch keine Gate angelegt. <a href="/admin/gates/new">Neue Gate anlegen →</a></p>
+</div>
+{% endif %}
+{% endblock %}

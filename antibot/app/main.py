@@ -13,7 +13,7 @@ from starlette.middleware.base import BaseHTTPMiddleware
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from app.db import DB
-from app.routes import auth, setup, gate, admin, settings as settings_route, domains
+from app.routes import auth, setup, gate, admin, settings as settings_route, domains, gates
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -35,7 +35,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
         request.state.admin = None
 
         if path.startswith("/static") or path.startswith("/go/") \
-           or path in ("/verify", "/api/check", "/health", "/favicon.ico") \
+           or path in ("/verify", "/api/check", "/health", "/tls-check", "/favicon.ico") \
            or path in self.PUBLIC_EXACT:
             return await call_next(request)
 
@@ -83,6 +83,7 @@ app.include_router(gate.router)
 app.include_router(admin.router)
 app.include_router(settings_route.router)
 app.include_router(domains.router)
+app.include_router(gates.router)
 
 
 @app.get("/health")

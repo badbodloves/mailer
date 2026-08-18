@@ -192,6 +192,30 @@ def _cf_configured(cfg: dict) -> bool:
     return bool(_cf_auth(cfg))
 
 
+def _cf_create_turnstile_widget(cfg: dict, hostname: str) -> dict:
+    """Erstellt ein Turnstile-Widget via CF-API für einen Hostname.
+    Braucht account_id. Gibt {ok, site_key, secret_key, msg} zurück."""
+    account_id = (cfg.get("cloudflare_account_id") or "").strip()
+    if not account_id:
+        return {"ok": False, "msg": "Keine CF Account-ID gesetzt (nötig für Turnstile-API)."}
+    resp = _cf_post(cfg, f"/accounts/{account_id}/challenges/widgets", {
+        "name": f"antibot-{hostname}",
+        "domains": [hostname],
+        "mode": "managed",
+        "region": "world",
+        "bot_fight_mode": True,
+    })
+    if not resp.get("success"):
+        errs = "; ".join(e.get("message", "") for e in resp.get("errors", []))
+        return {"ok": False, "msg": errs or "unknown"}
+    r = resp.get("result", {})
+    return {
+        "ok": True,
+        "site_key": r.get("sitekey", ""),
+        "secret_key": r.get("secret", ""),
+    }
+
+
 # ── Panel routes ──────────────────────────────────────────
 
 @router.get("/admin/domains", response_class=HTMLResponse)

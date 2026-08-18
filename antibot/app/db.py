@@ -33,6 +33,31 @@ class DB:
     def _migrate(self):
         c = self._conn()
         c.executescript("""
+            CREATE TABLE IF NOT EXISTS gates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                hostname TEXT NOT NULL UNIQUE,
+                active INTEGER DEFAULT 1,
+                mode TEXT DEFAULT 'medium',
+                target_url TEXT DEFAULT '',
+                logo_path TEXT DEFAULT '',
+                brand_text TEXT DEFAULT '',
+                brand_color TEXT DEFAULT '#005eb8',
+                turnstile_site_key TEXT DEFAULT '',
+                turnstile_secret_key TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS gate_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                gate_id INTEGER NOT NULL REFERENCES gates(id) ON DELETE CASCADE,
+                slug TEXT NOT NULL,
+                target_override TEXT DEFAULT '',
+                label TEXT DEFAULT '',
+                hits INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(gate_id, slug)
+            );
+            CREATE INDEX IF NOT EXISTS idx_glink_slug ON gate_links(slug);
+            CREATE INDEX IF NOT EXISTS idx_glink_gate ON gate_links(gate_id);
             CREATE TABLE IF NOT EXISTS config (
                 key TEXT PRIMARY KEY,
                 value TEXT NOT NULL
@@ -118,7 +143,74 @@ class DB:
         "cloudflare_auth_email": "",       # required when global key is used
         "cloudflare_account_id": "",       # needed only to create new zones
         "buy_currency": "USD",
+        "server_public_ip": "",            # auto-detected; used for CF A-records
+        "panel_hostname": "",              # gesetzt vom install.sh — für tls-check
     }
+
+    # ── Gate CRUD ──────────────────────────────────────────
+    def add_gate(self, hostname: str, **kw) -> int:
+        kw["hostname"] = hostname.lower()
+        cols = list(kw.keys())
+        vals = list(kw.values())
+        ph = ",".join("?" for _ in vals)
+        c = self._conn()
+        c.execute(f"INSERT INTO gates ({','.join(cols)}) VALUES ({ph})", vals)
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def update_gate(self, gate_id: int, **kw):
+        if not kw:
+            return
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in kw)
+        c.execute(f"UPDATE gates SET {sets} WHERE id=?",
+                  list(kw.values()) + [gate_id])
+
+    def delete_gate(self, gate_id: int):
+        self._conn().execute("DELETE FROM gates WHERE id=?", (gate_id,))
+
+    def list_gates(self) -> list:
+        return [dict(r) for r in self._conn().execute(
+            "SELECT * FROM gates ORDER BY id").fetchall()]
+
+    def get_gate(self, gate_id: int):
+        r = self._conn().execute(
+            "SELECT * FROM gates WHERE id=?", (gate_id,)).fetchone()
+        return dict(r) if r else None
+
+    def get_gate_by_host(self, hostname: str):
+        r = self._conn().execute(
+            "SELECT * FROM gates WHERE hostname=? AND active=1",
+            (hostname.lower(),)).fetchone()
+        return dict(r) if r else None
+
+    # ── Gate-Link CRUD ────────────────────────────────────
+    def add_gate_link(self, gate_id: int, slug: str, target_override: str = "",
+                      label: str = "") -> int:
+        c = self._conn()
+        c.execute("INSERT INTO gate_links (gate_id, slug, target_override, label) "
+                  "VALUES (?,?,?,?)", (gate_id, slug, target_override, label))
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_gate_link(self, gate_id: int, slug: str):
+        r = self._conn().execute(
+            "SELECT * FROM gate_links WHERE gate_id=? AND slug=?",
+            (gate_id, slug)).fetchone()
+        return dict(r) if r else None
+
+    def list_gate_links(self, gate_id: int, limit: int = 500) -> list:
+        return [dict(r) for r in self._conn().execute(
+            "SELECT * FROM gate_links WHERE gate_id=? ORDER BY id DESC LIMIT ?",
+            (gate_id, limit)).fetchall()]
+
+    def bump_gate_link_hits(self, link_id: int):
+        self._conn().execute(
+            "UPDATE gate_links SET hits=hits+1 WHERE id=?", (link_id,))
+
+    def delete_gate_link(self, link_id: int):
+        self._conn().execute("DELETE FROM gate_links WHERE id=?", (link_id,))
+
+    def delete_all_gate_links(self, gate_id: int):
+        self._conn().execute("DELETE FROM gate_links WHERE gate_id=?", (gate_id,))
 
     def get_config(self) -> dict:
         rows = self._conn().execute("SELECT key, value FROM config").fetchall()
