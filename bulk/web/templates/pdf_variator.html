@@ -94,6 +94,52 @@
         </div>
     </div>
 
+    <div class="card" style="margin-top:16px">
+        <h3>Filename-Suffix</h3>
+        <p class="muted" style="margin:0 0 10px">
+            Aktueller Monat: <strong>{{ current_month_de }} ({{ current_month }})</strong>,
+            Jahr <strong>{{ current_year }}</strong>, KW <strong>{{ current_kw }}</strong>.
+            Beispiel-Filename: <code>Katalog_KW{{ '%02d'|format(current_kw) }}.pdf</code>,
+            <code>Sortiment_{{ current_month_de }}_{{ current_year }}.pdf</code>, …
+        </p>
+        <div class="grid-2">
+            <div>
+                <label>Referenz-Monat</label>
+                <select name="ref_month">
+                    <option value="auto" selected>Aktueller Monat ({{ current_month_de }})</option>
+                    {% for n, name in months_de %}
+                    <option value="{{ n }}">{{ name }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            <div>
+                <label>Referenz-Jahr</label>
+                <select name="ref_year">
+                    <option value="auto" selected>Aktuelles Jahr ({{ current_year }})</option>
+                    {% for y in range(2023, 2028) %}
+                    <option value="{{ y }}">{{ y }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+        </div>
+        <label style="margin-top:12px">Aktive Suffix-Typen (random pick pro Variante)</label>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 12px;font-size:12px">
+            {% for k, label in suffix_types %}
+            <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;margin:0">
+                <input type="checkbox" name="suffix_{{ k }}" value="1"
+                       {% if k in default_active_suffixes %}checked{% endif %}
+                       style="margin:0;width:auto">
+                <span>{{ label }}</span>
+            </label>
+            {% endfor %}
+        </div>
+        <div class="form-help" style="margin-top:8px">
+            Mind. einer muss aktiv sein — wenn alle deaktiviert, fällt's auf „Kein Suffix" zurück.
+            Bei Filename-Kollisionen (mehr Files als Base+Suffix-Kombinationen) hängt der Writer
+            automatisch <code>_2</code>, <code>_3</code>, … an.
+        </div>
+    </div>
+
     <details style="margin-top:16px" {% if pools_saved %}open{% endif %}>
         <summary style="cursor:pointer;padding:8px;background:var(--bg-alt,#eee);border-radius:4px">
             Pools bearbeiten (Filename, Metadaten-Strings)

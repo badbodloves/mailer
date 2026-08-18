@@ -23,7 +23,7 @@ import string
 import hashlib
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 logger = logging.getLogger("bulk.pdf_variator")
@@ -163,28 +163,67 @@ class LayerSet:
 _MONTHS_DE = ["Januar", "Februar", "März", "April", "Mai", "Juni",
               "Juli", "August", "September", "Oktober", "November", "Dezember"]
 
+# Suffix-Typen: (Label, callable(rng, ref_date) -> str)
+# ref_date ist ein datetime.date-Objekt (oder was mit .month/.year/.isocalendar).
+SUFFIX_TYPES = {
+    "none":       ("Kein Suffix (nur Basename)",       lambda r, d: ""),
+    "month_de":   ("_Monat (deutsch, z.B. _September)", lambda r, d: f"_{_MONTHS_DE[d.month - 1]}"),
+    "month_year": ("_Monat_Jahr (z.B. _September_2025)", lambda r, d: f"_{_MONTHS_DE[d.month - 1]}_{d.year}"),
+    "mm":         ("_MM (Monatszahl, z.B. _09)",       lambda r, d: f"_{d.month:02d}"),
+    "mm_yyyy":    ("_MM_YYYY (z.B. _09_2025)",          lambda r, d: f"_{d.month:02d}_{d.year}"),
+    "yyyy":       ("_YYYY (nur Jahr, z.B. _2025)",     lambda r, d: f"_{d.year}"),
+    "kw":         ("_KWnn (Kalenderwoche, z.B. _KW33)", lambda r, d: f"_KW{d.isocalendar()[1]:02d}"),
+    "kw_yyyy":    ("_KWnn_YYYY (z.B. _KW33_2025)",      lambda r, d: f"_KW{d.isocalendar()[1]:02d}_{d.year}"),
+    "v":          ("_vN (Version 1-12)",                lambda r, d: f"_v{r.randint(1, 12)}"),
+    "rev":        ("_RevN (Revision 1-5)",              lambda r, d: f"_Rev{r.randint(1, 5)}"),
+    "num":        ("_NNN (3-stellige Zufallsnummer)",   lambda r, d: f"_{r.randint(100, 999)}"),
+}
+DEFAULT_ACTIVE_SUFFIXES = ["none", "mm", "kw", "month_de"]
 
-def build_filename(pool: list, rng: random.Random) -> str:
+
+def resolve_ref_date(month: str = "", year: str = "") -> date:
+    """Auto → heute. Sonst month (1-12 or DE name) + year kombiniert.
+    Fehlender Wert = current."""
+    today = date.today()
+    m = today.month
+    y = today.year
+    if month and month.lower() not in ("", "auto"):
+        try:
+            m = int(month)
+        except ValueError:
+            for i, name in enumerate(_MONTHS_DE, 1):
+                if name.lower() == month.lower():
+                    m = i
+                    break
+    if year and year.lower() not in ("", "auto"):
+        try:
+            y = int(year)
+        except ValueError:
+            pass
+    m = max(1, min(m, 12))
+    y = max(1980, min(y, 2099))
+    try:
+        return date(y, m, min(today.day, 28))
+    except ValueError:
+        return date(y, m, 1)
+
+
+def build_filename(pool: list, rng: random.Random,
+                    active_suffix_types: list, ref_date: date) -> str:
+    """base_name + random pick aus aktiven Suffix-Typen + .pdf."""
+    if not pool:
+        pool = FILENAME_POOL
+    if not active_suffix_types:
+        active_suffix_types = ["none"]
     base = rng.choice(pool)
-    suffix_choice = rng.randint(0, 6)
-    if suffix_choice == 0:
-        s = f"_{rng.randint(2023, 2025)}"
-    elif suffix_choice == 1:
-        s = f"_{rng.choice(_MONTHS_DE)}"
-    elif suffix_choice == 2:
-        s = f"_{rng.randint(100, 9999)}"
-    elif suffix_choice == 3:
-        s = f"_v{rng.randint(1, 12)}"
-    elif suffix_choice == 4:
-        s = f"-{rng.choice(_MONTHS_DE)}_{rng.randint(2023, 2025)}"
-    elif suffix_choice == 5:
-        s = f"_Rev{rng.randint(1, 5)}"
-    else:
-        s = ""
-    # replace umlauts in filename to keep it fs-safe
-    fname = (base + s).replace("ä", "ae").replace("ö", "oe").replace("ü", "ue") \
-                       .replace("Ä", "Ae").replace("Ö", "Oe").replace("Ü", "Ue") \
-                       .replace("ß", "ss")
+    stype = rng.choice(active_suffix_types)
+    _, fn = SUFFIX_TYPES.get(stype, SUFFIX_TYPES["none"])
+    suffix = fn(rng, ref_date)
+    fname = base + suffix
+    # umlauts → ascii fürs Dateisystem
+    fname = (fname.replace("ä", "ae").replace("ö", "oe").replace("ü", "ue")
+                    .replace("Ä", "Ae").replace("Ö", "Oe").replace("Ü", "Ue")
+                    .replace("ß", "ss"))
     return fname + ".pdf"
 
 
@@ -497,12 +536,15 @@ def inject_hidden_text(pdf, rng: random.Random) -> bool:
 
 class PDFVariator:
     def __init__(self, source_bytes: bytes, layers: LayerSet = None,
-                 pools: PoolBag = None):
+                 pools: PoolBag = None, active_suffix_types: list = None,
+                 ref_date: date = None):
         if pikepdf is None:
             raise RuntimeError("pikepdf nicht installiert — bitte requirements.txt aktualisieren.")
         self.source = source_bytes
         self.layers = layers or LayerSet()
         self.pools = pools or PoolBag.default()
+        self.active_suffix_types = active_suffix_types or DEFAULT_ACTIVE_SUFFIXES
+        self.ref_date = ref_date or date.today()
 
     def make_variant(self, seed: int) -> tuple[str, bytes]:
         """Erzeugt eine einzige Variante. Rückgabe: (filename, pdf_bytes)."""
@@ -537,8 +579,10 @@ class PDFVariator:
         if self.layers.byte_noise:
             data = add_eof_padding(data, rng)
 
-        filename = build_filename(self.pools.filename, rng) \
-            if self.layers.filename else f"variant_{seed}.pdf"
+        filename = build_filename(
+            self.pools.filename, rng,
+            self.active_suffix_types, self.ref_date,
+        ) if self.layers.filename else f"variant_{seed}.pdf"
         return filename, data
 
     def compare_variants(self, count: int = 3) -> list:

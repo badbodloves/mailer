@@ -139,6 +139,14 @@ _POOL_KEYS = ("filename", "title", "producer", "creator",
               "author", "subject", "keywords")
 
 
+def _parse_suffixes(form_getter) -> list:
+    """Sammelt aktive Suffix-Typen aus dem Formular. Wenn nichts checked
+    ist, fallback auf 'none' (nur Basename) damit's nie leer bleibt."""
+    from bulk.mailer.pdf_variator import SUFFIX_TYPES
+    active = [k for k in SUFFIX_TYPES if form_getter(f"suffix_{k}")]
+    return active or ["none"]
+
+
 def _resolve_pools(db) -> dict:
     """Liefert für jeden Pool den gespeicherten Inhalt, oder — falls
     nichts gespeichert wurde — den Default aus dem pdf_variator-Modul."""
@@ -169,6 +177,10 @@ async def pdf_variator_page(request: Request):
         pikepdf_ok = False
         pike_ver = None
 
+    from bulk.mailer.pdf_variator import SUFFIX_TYPES, DEFAULT_ACTIVE_SUFFIXES, _MONTHS_DE
+    from datetime import date
+    today = date.today()
+
     db = request.app.state.db
     pools = _resolve_pools(db)
     saved_flag = "1" if db.get_variator_pools() else ""
@@ -177,6 +189,13 @@ async def pdf_variator_page(request: Request):
         "active": "pdf_variator",
         "pikepdf_ok": pikepdf_ok, "pike_ver": pike_ver,
         "pools_saved": saved_flag,
+        "suffix_types": [(k, label) for k, (label, _) in SUFFIX_TYPES.items()],
+        "default_active_suffixes": DEFAULT_ACTIVE_SUFFIXES,
+        "months_de": list(enumerate(_MONTHS_DE, 1)),
+        "current_month": today.month,
+        "current_month_de": _MONTHS_DE[today.month - 1],
+        "current_year": today.year,
+        "current_kw": today.isocalendar()[1],
     }
     for k in _POOL_KEYS:
         ctx[f"pool_{k}"] = pools[k]
@@ -220,38 +239,43 @@ async def pools_reset(request: Request):
 
 
 @router.post("/pdf-variator/test-report", response_class=HTMLResponse)
-async def test_report(request: Request, source: UploadFile = File(...),
-                       layer_image: str = Form(""),
-                       layer_byte_noise: str = Form(""),
-                       layer_cmap_poison: str = Form(""),
-                       layer_hidden_text: str = Form(""),
-                       pool_filename: str = Form(""),
-                       pool_producer: str = Form(""),
-                       pool_creator: str = Form(""),
-                       pool_author: str = Form(""),
-                       pool_title: str = Form(""),
-                       pool_subject: str = Form(""),
-                       pool_keywords: str = Form("")):
+async def test_report(request: Request):
     try:
-        from bulk.mailer.pdf_variator import PDFVariator
+        from bulk.mailer.pdf_variator import PDFVariator, resolve_ref_date
     except Exception as e:
         return HTMLResponse(f'<div class="alert alert-danger">pikepdf fehlt: {escape(str(e))}</div>')
 
+    form = await request.form()
+    source = form.get("source")
+    if source is None or not hasattr(source, "read"):
+        return HTMLResponse('<div class="alert alert-warning">PDF fehlt.</div>')
     src = await source.read()
     if not src or len(src) > 50 * 1024 * 1024:
         return HTMLResponse('<div class="alert alert-warning">PDF fehlt oder > 50 MB.</div>')
     if not src.startswith(b"%PDF"):
-        return HTMLResponse('<div class="alert alert-warning">Sieht nicht nach PDF aus (kein %PDF-Header).</div>')
+        return HTMLResponse('<div class="alert alert-warning">Kein %PDF-Header.</div>')
 
-    layers = _parse_layers(layer_image=layer_image, layer_byte_noise=layer_byte_noise,
-                            layer_cmap_poison=layer_cmap_poison,
-                            layer_hidden_text=layer_hidden_text)
-    pools = _parse_pools(pool_filename=pool_filename, pool_producer=pool_producer,
-                          pool_creator=pool_creator, pool_author=pool_author,
-                          pool_title=pool_title, pool_subject=pool_subject,
-                          pool_keywords=pool_keywords)
+    layers = _parse_layers(
+        layer_image=form.get("layer_image", ""),
+        layer_byte_noise=form.get("layer_byte_noise", ""),
+        layer_cmap_poison=form.get("layer_cmap_poison", ""),
+        layer_hidden_text=form.get("layer_hidden_text", ""),
+    )
+    pools = _parse_pools(
+        pool_filename=form.get("pool_filename", ""),
+        pool_producer=form.get("pool_producer", ""),
+        pool_creator=form.get("pool_creator", ""),
+        pool_author=form.get("pool_author", ""),
+        pool_title=form.get("pool_title", ""),
+        pool_subject=form.get("pool_subject", ""),
+        pool_keywords=form.get("pool_keywords", ""),
+    )
+    active_suffixes = _parse_suffixes(form.get)
+    ref_date = resolve_ref_date(form.get("ref_month", ""), form.get("ref_year", ""))
+
     try:
-        v = PDFVariator(src, layers=layers, pools=pools)
+        v = PDFVariator(src, layers=layers, pools=pools,
+                         active_suffix_types=active_suffixes, ref_date=ref_date)
         rows = v.compare_variants(3)
     except Exception as e:
         logger.exception("test-report crashed")
@@ -288,40 +312,42 @@ async def test_report(request: Request, source: UploadFile = File(...),
 
 
 @router.post("/pdf-variator/generate")
-async def generate(request: Request,
-                    source: UploadFile = File(...),
-                    count: int = Form(100),
-                    layer_image: str = Form(""),
-                    layer_byte_noise: str = Form(""),
-                    layer_cmap_poison: str = Form(""),
-                    layer_hidden_text: str = Form(""),
-                    pool_filename: str = Form(""),
-                    pool_producer: str = Form(""),
-                    pool_creator: str = Form(""),
-                    pool_author: str = Form(""),
-                    pool_title: str = Form(""),
-                    pool_subject: str = Form(""),
-                    pool_keywords: str = Form("")):
+async def generate(request: Request):
     try:
-        from bulk.mailer.pdf_variator import PDFVariator
+        from bulk.mailer.pdf_variator import PDFVariator, resolve_ref_date
     except Exception as e:
         return PlainTextResponse(f"pikepdf fehlt: {e}", status_code=500)
 
+    form = await request.form()
+    source = form.get("source")
+    if source is None or not hasattr(source, "read"):
+        return PlainTextResponse("PDF fehlt", status_code=400)
     src = await source.read()
     if not src or len(src) > 50 * 1024 * 1024:
         return PlainTextResponse("PDF fehlt oder > 50 MB", status_code=400)
     if not src.startswith(b"%PDF"):
         return PlainTextResponse("Kein %PDF-Header", status_code=400)
 
-    count = max(1, min(int(count or 100), 1000))
-    layers = _parse_layers(layer_image=layer_image, layer_byte_noise=layer_byte_noise,
-                            layer_cmap_poison=layer_cmap_poison,
-                            layer_hidden_text=layer_hidden_text)
-    pools = _parse_pools(pool_filename=pool_filename, pool_producer=pool_producer,
-                          pool_creator=pool_creator, pool_author=pool_author,
-                          pool_title=pool_title, pool_subject=pool_subject,
-                          pool_keywords=pool_keywords)
-    variator = PDFVariator(src, layers=layers, pools=pools)
+    count = max(1, min(int(form.get("count") or 100), 1000))
+    layers = _parse_layers(
+        layer_image=form.get("layer_image", ""),
+        layer_byte_noise=form.get("layer_byte_noise", ""),
+        layer_cmap_poison=form.get("layer_cmap_poison", ""),
+        layer_hidden_text=form.get("layer_hidden_text", ""),
+    )
+    pools = _parse_pools(
+        pool_filename=form.get("pool_filename", ""),
+        pool_producer=form.get("pool_producer", ""),
+        pool_creator=form.get("pool_creator", ""),
+        pool_author=form.get("pool_author", ""),
+        pool_title=form.get("pool_title", ""),
+        pool_subject=form.get("pool_subject", ""),
+        pool_keywords=form.get("pool_keywords", ""),
+    )
+    active_suffixes = _parse_suffixes(form.get)
+    ref_date = resolve_ref_date(form.get("ref_month", ""), form.get("ref_year", ""))
+    variator = PDFVariator(src, layers=layers, pools=pools,
+                            active_suffix_types=active_suffixes, ref_date=ref_date)
 
     # Filename-Kollisionen aktiv vermeiden — pro ZIP kein Duplikat
     used_names = set()
