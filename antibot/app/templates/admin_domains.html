@@ -149,15 +149,23 @@
             <td style="font-family:monospace;font-size:10px">
                 {% for ns in z.name_servers %}{{ ns }}<br>{% endfor %}
             </td>
-            <td>
+            <td style="white-space:nowrap">
                 <button class="btn btn-secondary btn-xs"
                         hx-get="/admin/domains/cf/zone/{{ z.id }}"
                         hx-target="#zone-view" hx-swap="innerHTML">Records</button>
+                <button class="btn btn-success btn-xs"
+                        hx-get="/admin/domains/cf/zone/{{ z.id }}/deploy-form"
+                        hx-target="#zone-view" hx-swap="innerHTML">Als Gate deployen</button>
             </td>
         </tr>
         {% endfor %}
         </tbody>
     </table>
+    <p class="muted" style="margin-top:8px;font-size:11px">
+        „Als Gate deployen": setzt A @ + www auf deine Server-IP (Voraussetzung: Server-IP im
+        Pipeline-Tab konfiguriert), erstellt optional ein Turnstile-Widget, legt ein Antibot-Gate
+        an und generiert Ready-Links. Perfekt für Domains die du hier manuell hinzugefügt hast.
+    </p>
 </div>
 <div id="zone-view" class="card" style="margin-top:12px"></div>
 {% endif %}
@@ -168,15 +176,45 @@
 {% if tab == 'combined' %}
 <div class="card">
     <h3>Full-Pipeline: Suchen &rarr; Kaufen &rarr; DNS &rarr; Turnstile &rarr; Gate &rarr; Ready-Links</h3>
-    <p class="muted" style="margin-bottom:12px">
+    <p class="muted" style="margin-bottom:6px">
         Ende-zu-Ende Setup einer neuen Gate-Domain in einem Rutsch.
-        Server-IP wird automatisch erkannt: <code>{{ cfg.server_public_ip or '— noch nicht ermittelt —' }}</code>.
         <br>
         <strong>Voraussetzungen (siehe Tabs „Dynadot" &amp; „Cloudflare"):</strong>
         Dynadot-Key {% if cfg.dynadot_api_key %}<span class="v-allow">✓</span>{% else %}<span class="v-block">fehlt</span>{% endif %} ·
         Cloudflare {% if cfg.cloudflare_api_token or (cfg.cloudflare_global_api_key and cfg.cloudflare_auth_email) %}<span class="v-allow">✓</span>{% else %}<span class="v-block">fehlt</span>{% endif %} ·
         Turnstile {% if cfg.cloudflare_account_id %}<span class="v-allow">✓ (Account-ID gesetzt)</span>{% else %}<span class="v-block">Account-ID fehlt</span>{% endif %}
     </p>
+
+    <div style="padding:8px 10px;background:#f5f5fa;border-radius:4px;margin-bottom:12px">
+        <label style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;font-weight:400;font-size:12px;margin:0">
+            <span>Server-Public-IP:</span>
+            {% if cfg.server_public_ip %}
+            <code style="color:var(--green)">{{ cfg.server_public_ip }}</code> ✓
+            {% else %}
+            <span style="color:var(--red)">nicht ermittelt</span>
+            {% endif %}
+            <input type="text" name="server_ip_manual" placeholder="1.2.3.4 (manuell)"
+                   style="width:130px;padding:2px 6px;font-size:12px;margin:0">
+            <button type="button" class="btn btn-secondary btn-xs"
+                    hx-post="/admin/domains/set-server-ip"
+                    hx-target="#ip-set-result" hx-swap="innerHTML"
+                    hx-include="[name='server_ip_manual']"
+                    hx-vals='js:{"ip": document.querySelector("[name=server_ip_manual]").value}'>
+                Speichern
+            </button>
+            <button type="button" class="btn btn-secondary btn-xs"
+                    hx-post="/admin/domains/set-server-ip"
+                    hx-vals='{"ip":""}'
+                    hx-target="#ip-set-result" hx-swap="innerHTML">
+                Auto-detect nochmal
+            </button>
+            <span id="ip-set-result" style="font-size:11px"></span>
+        </label>
+        <div class="form-help" style="margin-top:4px">
+            Falls Auto-Detect nicht klappt (Hoster blockt Outbound zu Public-IP-APIs):
+            IP von Hand eintragen (die kennst du ja).
+        </div>
+    </div>
 
     <fieldset>
         <legend>Schritt 0: Precheck (empfohlen bevor du kaufst)</legend>

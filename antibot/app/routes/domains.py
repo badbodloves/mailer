@@ -844,3 +844,123 @@ async def gate_cf_proxy_toggle(request: Request, gate_id: int,
         f'<span style="color:var(--green)">✓ {n} Record(s) auf '
         f'<strong>{"orange" if want_proxied else "grau"}</strong> umgeschaltet.</span>'
     )
+
+
+# ── Server-IP manuell setzen / auto-detect nachziehen ───────
+
+@router.post("/admin/domains/set-server-ip", response_class=HTMLResponse)
+async def set_server_ip(request: Request, ip: str = Form("")):
+    db = request.app.state.db
+    ip = ip.strip()
+    if ip:
+        # Sanity check IPv4
+        parts = ip.split(".")
+        if len(parts) != 4 or not all(p.isdigit() and 0 <= int(p) <= 255 for p in parts):
+            return HTMLResponse('<span style="color:var(--red)">Keine gültige IPv4.</span>')
+        db.set_config(server_public_ip=ip)
+        return HTMLResponse(f'<span style="color:var(--green)">✓ Gespeichert: <code>{escape(ip)}</code></span>')
+    # ip leer → auto-detect nochmal versuchen
+    detected = detect_public_ip()
+    if detected:
+        db.set_config(server_public_ip=detected)
+        return HTMLResponse(f'<span style="color:var(--green)">✓ Auto-detected: <code>{escape(detected)}</code></span>')
+    return HTMLResponse('<span style="color:var(--red)">Auto-detect fehlgeschlagen — bitte IP von Hand eintragen '
+                        '(dein Server ist evtl. hinter NAT oder blockt Outbound zu Public-IP-APIs).</span>')
+
+
+# ── Existierende CF-Zone als Gate deployen (ohne Kauf-Step) ─
+
+@router.get("/admin/domains/cf/zone/{zone_id}/deploy-form", response_class=HTMLResponse)
+async def zone_deploy_form(request: Request, zone_id: str):
+    db = request.app.state.db
+    cfg = db.get_config()
+    if not _cf_configured(cfg):
+        return HTMLResponse('<div class="alert alert-danger">Kein CF-Auth.</div>')
+    zones = _cf_zones(cfg)
+    zone = next((z for z in zones if z["id"] == zone_id), None)
+    if not zone:
+        return HTMLResponse('<div class="alert alert-danger">Zone nicht gefunden.</div>')
+    hostname = zone["name"]
+    existing = db.get_gate_by_host(hostname)
+    warn = ""
+    if existing:
+        warn = (f'<div class="alert alert-warn">Für <code>{escape(hostname)}</code> gibt es schon '
+                f'einen Gate (ID {existing["id"]}). Deploy wird ihn NICHT überschreiben, '
+                f'nur A-Records + Turnstile erneuern falls nötig.</div>')
+    presets_html = "".join(
+        f'<option value="{k}" {"selected" if k == "medium" else ""}>{p["label"]}</option>'
+        for k, p in MODE_PRESETS.items()
+    )
+    return HTMLResponse(f'''
+    {warn}
+    <form hx-post="/admin/domains/cf/zone/{zone_id}/deploy-as-gate"
+          hx-target="#zone-deploy-result-{zone_id}" hx-swap="innerHTML"
+          style="padding:12px;background:#f8f9fb;border-radius:4px">
+        <p><strong>{escape(hostname)}</strong> als antibot-Gate deployen —
+        A-Records @ + www setzen, optional Turnstile, Gate anlegen, Ready-Links generieren.</p>
+
+        <div class="grid-2">
+            <div>
+                <label>Modus</label>
+                <select name="mode">{presets_html}</select>
+                <label>Ziel-URL</label>
+                <input name="target_url" placeholder="https://real-landing.de/x" required>
+            </div>
+            <div>
+                <label>Ready-Links</label>
+                <input name="initial_links" type="number" value="10" min="0" max="500">
+                <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;margin-top:6px">
+                    <input type="checkbox" name="add_www" value="1" checked>
+                    <span>www.-Subdomain als A-Record dazu</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer">
+                    <input type="checkbox" name="auto_turnstile" value="1"
+                           {"" if cfg.get("cloudflare_account_id") else "disabled"}>
+                    <span>Turnstile-Widget erstellen</span>
+                </label>
+            </div>
+        </div>
+        <div style="margin-top:10px">
+            <button class="btn btn-primary btn-sm">Als Gate deployen</button>
+        </div>
+    </form>
+    <div id="zone-deploy-result-{zone_id}" style="margin-top:10px"></div>
+    ''')
+
+
+@router.post("/admin/domains/cf/zone/{zone_id}/deploy-as-gate", response_class=HTMLResponse)
+async def zone_deploy_as_gate(request: Request, zone_id: str):
+    db = request.app.state.db
+    cfg = db.get_config()
+    form = await request.form()
+    zones = _cf_zones(cfg)
+    zone = next((z for z in zones if z["id"] == zone_id), None)
+    if not zone:
+        return HTMLResponse('<div class="alert alert-danger">Zone nicht gefunden.</div>')
+    pcfg = {
+        "buy_dynadot": False,  # explizit KEIN Kauf — Domain ist ja schon da
+        "add_www": bool(form.get("add_www")),
+        "auto_turnstile": bool(form.get("auto_turnstile")),
+        "target_url": (form.get("target_url") or "").strip(),
+        "mode": form.get("mode") or "medium",
+        "initial_links": int(form.get("initial_links") or 10),
+    }
+    if pcfg["mode"] not in MODE_PRESETS:
+        pcfg["mode"] = "medium"
+
+    res = _pipeline_one_domain(db, cfg, zone["name"], pcfg)
+    color = "var(--green)" if res["ok"] else "var(--red)"
+    steps_html = "".join(
+        f'<li>{"✓" if ok else "✗"} <strong>{escape(label)}</strong>'
+        f'{": " + escape(detail) if detail else ""}</li>'
+        for label, ok, detail in res["steps"]
+    )
+    gate_link = ""
+    if res.get("gate_id"):
+        gate_link = (f'<p><a href="/admin/gates/{res["gate_id"]}" '
+                     f'class="btn btn-primary btn-xs">Gate + Ready-Links öffnen</a></p>')
+    return HTMLResponse(
+        f'<div style="color:{color};font-weight:600;margin-bottom:6px">'
+        f'{"✓" if res["ok"] else "✗"} {escape(res["domain"])}</div>'
+        f'<ul style="font-size:13px">{steps_html}</ul>{gate_link}'
+    )

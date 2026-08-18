@@ -40,17 +40,40 @@ def gen_slug(n: int = 8) -> str:
 
 
 def detect_public_ip() -> str:
-    """Ermittelt die eigene öffentliche IP über ifconfig.io.
-    Wird für Auto-CF-Connect gebraucht."""
-    for url in ("https://ifconfig.io/ip", "https://api.ipify.org",
-                "https://icanhazip.com"):
+    """Ermittelt die eigene öffentliche IP. Mehrere Provider parallel,
+    manche Hoster blocken einzelne Services."""
+    providers = (
+        "https://api.ipify.org",
+        "https://ifconfig.io/ip",
+        "https://icanhazip.com",
+        "https://checkip.amazonaws.com",
+        "https://ipv4.icanhazip.com",
+        "https://ipinfo.io/ip",
+        "https://ident.me",
+        "https://api.my-ip.io/ip",
+    )
+    for url in providers:
         try:
-            r = _req.get(url, timeout=5)
+            r = _req.get(url, timeout=4)
             if r.status_code == 200:
                 ip = r.text.strip().split()[0]
                 if ip and all(p.isdigit() and 0 <= int(p) <= 255
-                              for p in ip.split(".")):
+                              for p in ip.split(".")) and len(ip.split(".")) == 4:
                     return ip
         except Exception as e:
             logger.debug("ip lookup %s failed: %s", url, e)
+    # Fallback: DNS-basiert via opendns
+    try:
+        import socket
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.settimeout(3)
+        s.connect(("8.8.8.8", 53))
+        local = s.getsockname()[0]
+        s.close()
+        # Nur wenn's nicht privater NAT-Range ist — sonst hat der Server keine
+        # direkte Public-IP (steht hinter NAT) und wir müssen den User fragen.
+        if not local.startswith(("10.", "192.168.", "172.")):
+            return local
+    except Exception:
+        pass
     return ""
