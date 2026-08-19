@@ -137,27 +137,64 @@
 <div class="grid-2" style="align-items:start">
     <div class="card">
         <h3>Generate Redirects (Google Share)</h3>
-        <form hx-post="/redirects/generate" hx-target="#gen-result" hx-swap="innerHTML">
-            <label>Pool (optional)</label>
-            <select name="pool_id">
-                <option value="0">No Pool (global)</option>
-                {% for p in redirect_pools %}
-                <option value="{{ p.id }}">{{ p.name }}</option>
-                {% endfor %}
-            </select>
-            <label>Target URL</label>
-            <input name="target_url" placeholder="https://yoursite.com/landing" required>
-            <div class="grid-2">
-                <div><label>Count</label><input name="count" type="number" value="100" min="1" max="5000"></div>
-                <div><label>Threads</label><input name="gen_threads" type="number" value="3" min="1" max="10"></div>
-            </div>
-            <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-weight:400;cursor:pointer">
-                <input type="checkbox" name="google_rewrite" value="1" style="margin:0;width:auto">
-                <span>google.xx Format</span>
-                <span style="font-size:11px;color:var(--fg2)">share.google/ID &rarr; www.google.XX/share.google?q=ID (random Domain)</span>
-            </label>
-            <div style="margin-top:10px"><button class="btn btn-primary">Generate</button></div>
-        </form>
+        <div class="tab-wrap" style="display:flex;gap:6px;margin-bottom:10px;font-size:12px">
+            <button type="button" class="tab-btn active" onclick="showTab(this, 'gen-tab-single')">Ein Target</button>
+            <button type="button" class="tab-btn" onclick="showTab(this, 'gen-tab-multi')">Mehrere Targets</button>
+        </div>
+
+        <div id="gen-tab-single" class="tab-content active">
+            <form hx-post="/redirects/generate" hx-target="#gen-result" hx-swap="innerHTML">
+                <label>Pool (optional)</label>
+                <select name="pool_id">
+                    <option value="0">No Pool (global)</option>
+                    {% for p in redirect_pools %}
+                    <option value="{{ p.id }}">{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+                <label>Target URL</label>
+                <input name="target_url" placeholder="https://yoursite.com/landing" required>
+                <div class="grid-2">
+                    <div><label>Count</label><input name="count" type="number" value="100" min="1" max="5000"></div>
+                    <div><label>Threads</label><input name="gen_threads" type="number" value="3" min="1" max="10"></div>
+                </div>
+                <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-weight:400;cursor:pointer">
+                    <input type="checkbox" name="google_rewrite" value="1" style="margin:0;width:auto">
+                    <span>google.xx Format</span>
+                </label>
+                <div style="margin-top:10px"><button class="btn btn-primary">Generate</button></div>
+            </form>
+        </div>
+
+        <div id="gen-tab-multi" class="tab-content">
+            <form hx-post="/redirects/generate-multi" hx-target="#gen-result" hx-swap="innerHTML">
+                <label>Pool (optional)</label>
+                <select name="pool_id">
+                    <option value="0">No Pool (global)</option>
+                    {% for p in redirect_pools %}
+                    <option value="{{ p.id }}">{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+                <label>Target-URLs (eine pro Zeile, max 500)</label>
+                <textarea name="targets" rows="6" required
+                          style="font-family:monospace;font-size:12px"
+                          placeholder="https://kunde-a.de/landing&#10;https://kunde-b.de/angebot&#10;https://kunde-c.de/promo"></textarea>
+                <div class="grid-2">
+                    <div><label>Links pro Target</label><input name="count_per_target" type="number" value="1" min="1" max="100"></div>
+                    <div><label>Threads</label><input name="gen_threads" type="number" value="3" min="1" max="10"></div>
+                </div>
+                <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-weight:400;cursor:pointer">
+                    <input type="checkbox" name="google_rewrite" value="1" style="margin:0;width:auto">
+                    <span>google.xx Format</span>
+                </label>
+                <div class="form-help">
+                    Für jede Target-URL wird 1 (oder N) share.google-Link erzeugt.
+                    Jeder Link zeigt bei Klick auf sein spezifisches Target — perfekt
+                    wenn du mehrere Kunden/Kampagnen parallel bespielst und Traffic-
+                    Zuordnung willst.
+                </div>
+                <div style="margin-top:10px"><button class="btn btn-primary">Generate</button></div>
+            </form>
+        </div>
         <div id="gen-result" style="margin-top:10px"></div>
     </div>
 

@@ -290,6 +290,104 @@ def _rewrite_share_google(url: str) -> str:
     return f"https://www.{domain}/share.google?q={link_id}"
 
 
+@router.post("/redirects/generate-multi", response_class=HTMLResponse)
+async def generate_multi_targets(request: Request,
+                                   targets: str = Form(""),
+                                   count_per_target: int = Form(1),
+                                   gen_threads: int = Form(3),
+                                   pool_id: int = Form(0),
+                                   google_rewrite: str = Form("")):
+    """Ein share.google-Link pro Target-URL (oder N pro Target).
+    Textarea mit einer Target-URL pro Zeile. Antibot-Wrapping wird
+    per-Target angewendet (jedes Target kriegt seinen eigenen Antibot-Token)."""
+    lines = [ln.strip() for ln in targets.splitlines() if ln.strip()]
+    valid_targets = [t for t in lines
+                     if t.startswith("http://") or t.startswith("https://")]
+    if not valid_targets:
+        return HTMLResponse('<div class="alert alert-warning">Keine gültigen URLs (jede muss mit http:// oder https:// anfangen).</div>')
+    valid_targets = valid_targets[:500]  # safety cap
+    count_per_target = max(1, min(int(count_per_target or 1), 100))
+    gen_threads = max(1, min(int(gen_threads or 3), 10))
+    if _gen_progress["running"]:
+        return HTMLResponse('<div class="alert alert-warning">Generation already running.</div>')
+
+    db = request.app.state.db
+    gen_uid = request.state.user["id"]
+    do_rewrite = bool(google_rewrite)
+
+    cfg_snapshot = db.get_config()
+    antibot_active = (cfg_snapshot.get("antibot_enabled")
+                      and cfg_snapshot.get("antibot_base_url")
+                      and cfg_snapshot.get("antibot_hmac_secret"))
+
+    total = len(valid_targets) * count_per_target
+    _gen_progress.update(running=True, total=total, done=0, ok=0, errors=0)
+
+    def worker():
+        try:
+            from mailer.redirect_manager import RedirectManager
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            # Für jedes Target: berechne den submit_target (mit oder ohne antibot)
+            jobs = []   # list of (real_target, submit_target)
+            for real_target in valid_targets:
+                submit_target = real_target
+                if antibot_active:
+                    from .antibot_config import build_antibot_url
+                    submit_target = build_antibot_url(
+                        cfg_snapshot["antibot_base_url"],
+                        cfg_snapshot["antibot_hmac_secret"],
+                        real_target,
+                        ttl_seconds=int(cfg_snapshot.get("antibot_token_ttl_hours", 168)) * 3600,
+                    )
+                for _ in range(count_per_target):
+                    jobs.append((real_target, submit_target))
+
+            done = 0
+            generated = 0
+
+            def gen_one(job):
+                real, submit = job
+                url = RedirectManager._generate_one(submit)
+                return (real, url)
+
+            with ThreadPoolExecutor(max_workers=gen_threads) as executor:
+                futures = [executor.submit(gen_one, j) for j in jobs]
+                for f in as_completed(futures):
+                    done += 1
+                    _gen_progress["done"] = done
+                    try:
+                        real, url = f.result(timeout=15)
+                        if url:
+                            if do_rewrite:
+                                url = _rewrite_share_google(url)
+                            db.add_redirect(url, real, gen_uid, pool_id)
+                            generated += 1
+                            _gen_progress["ok"] = generated
+                        else:
+                            _gen_progress["errors"] += 1
+                    except Exception:
+                        _gen_progress["errors"] += 1
+
+            _gen_progress["done"] = total
+            _gen_progress["ok"] = generated
+        except Exception as e:
+            logger.error("Multi-target gen error: %s", e, exc_info=True)
+            _gen_progress["errors"] += 1
+        finally:
+            _gen_progress["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    label = f" (google.xx format)" if do_rewrite else ""
+    ab_label = " · via antibot" if antibot_active else ""
+    return HTMLResponse(
+        f'<div class="alert alert-info">Generiere {total} Links '
+        f'({len(valid_targets)} Targets × {count_per_target} pro Target){label}{ab_label}…</div>'
+        f'<div id="gen-progress" hx-get="/redirects/status" '
+        f'hx-trigger="every 2s" hx-swap="innerHTML"></div>'
+    )
+
+
 @router.post("/redirects/generate", response_class=HTMLResponse)
 async def generate_redirects(request: Request,
                               target_url: str = Form(""),

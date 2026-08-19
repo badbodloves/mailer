@@ -271,6 +271,43 @@ def _cf_configured(cfg: dict) -> bool:
     return bool(_cf_auth(cfg))
 
 
+def _cf_list_turnstile_widgets(cfg: dict) -> list:
+    """Liste aller Turnstile-Widgets im CF-Account."""
+    account_id = (cfg.get("cloudflare_account_id") or "").strip()
+    if not account_id:
+        return []
+    resp = _cf_get(cfg, f"/accounts/{account_id}/challenges/widgets",
+                   {"per_page": 50})
+    if not resp.get("success"):
+        return []
+    return resp.get("result", []) or []
+
+
+def _cf_get_turnstile_secret(cfg: dict, sitekey: str) -> str:
+    """Holt/rotiert den Secret für ein existierendes Widget.
+    Der LIST-Endpoint gibt Secrets nicht raus; der GET-single-Endpoint
+    manchmal auch nicht. Sicherster Weg: rotate_secret — liefert immer
+    einen Secret zurück. Nachteil: alte Secrets sind ab dann ungültig
+    (aber wenn sie im Antibot nirgends gespeichert waren — was hier der
+    Fall ist — egal)."""
+    account_id = (cfg.get("cloudflare_account_id") or "").strip()
+    if not account_id:
+        return ""
+    # Erst normalen GET versuchen (falls Secret zurückgegeben wird)
+    resp = _cf_get(cfg, f"/accounts/{account_id}/challenges/widgets/{sitekey}")
+    if resp.get("success"):
+        secret = (resp.get("result", {}).get("secret") or "").strip()
+        if secret and secret.startswith("0x"):
+            return secret
+    # Fallback: rotate_secret
+    resp = _cf_post(cfg,
+                    f"/accounts/{account_id}/challenges/widgets/{sitekey}/rotate_secret",
+                    {"invalidate_immediately": False})
+    if resp.get("success"):
+        return (resp.get("result", {}).get("secret") or "").strip()
+    return ""
+
+
 def _cf_create_turnstile_widget(cfg: dict, hostname: str) -> dict:
     """Erstellt ein Turnstile-Widget via CF-API für einen Hostname.
     Braucht account_id. Gibt {ok, site_key, secret_key, msg} zurück."""
@@ -889,6 +926,118 @@ async def pipeline_run(request: Request):
 
 
 # ── Gate: CF-Wolke orange/grau umschalten ────────────────
+
+@router.get("/admin/gates/{gate_id}/turnstile-manage", response_class=HTMLResponse)
+async def gate_turnstile_manage(request: Request, gate_id: int):
+    """Zeigt alle Turnstile-Widgets aus dem CF-Account, matched welche zur
+    Gate-Domain passen. User picked eins → Keys werden geholt und ins Gate
+    übernommen. Alternative: neues Widget für die Domain erstellen."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    gate = db.get_gate(gate_id)
+    if not gate:
+        return HTMLResponse('<div class="alert alert-danger">Gate weg</div>')
+    if not _cf_configured(cfg):
+        return HTMLResponse('<div class="alert alert-warn">Kein CF-Auth im Panel — Turnstile-Management deaktiviert.</div>')
+    if not cfg.get("cloudflare_account_id"):
+        return HTMLResponse('<div class="alert alert-warn">CF Account-ID fehlt — brauch ich für die Turnstile-API.</div>')
+
+    hostname = gate["hostname"]
+    widgets = _cf_list_turnstile_widgets(cfg)
+    matching = [w for w in widgets if hostname in (w.get("domains") or [])]
+    others = [w for w in widgets if w not in matching]
+
+    def _row(w, highlight):
+        sitekey = w.get("sitekey", "")
+        name = w.get("name", "?")
+        domains = ", ".join(w.get("domains", []))
+        bg = "background:#e7f7ea" if highlight else ""
+        return (f'<tr style="{bg}">'
+                 f'<td style="font-family:monospace;font-size:11px">{escape(sitekey[:16])}…{escape(sitekey[-4:] if len(sitekey) > 20 else "")}</td>'
+                 f'<td>{escape(name)}</td>'
+                 f'<td style="font-size:11px">{escape(domains)}</td>'
+                 f'<td><button class="btn btn-success btn-xs" '
+                 f'hx-post="/admin/gates/{gate_id}/turnstile-apply" '
+                 f'hx-vals=\'{{"sitekey":"{escape(sitekey)}"}}\' '
+                 f'hx-target="#ts-manage-result" hx-swap="innerHTML" '
+                 f'hx-confirm="Widget {escape(name)} übernehmen? (Secret wird rotiert falls nicht anders auslesbar)">'
+                 f'Übernehmen</button></td></tr>')
+
+    rows = []
+    if matching:
+        rows.append(f'<tr><td colspan="4" style="background:#e7f7ea;font-size:11px;padding:4px 8px;font-weight:600">Widgets für <code>{escape(hostname)}</code>:</td></tr>')
+        rows.extend(_row(w, True) for w in matching)
+    if others:
+        rows.append(f'<tr><td colspan="4" style="background:#f0f2f5;font-size:11px;padding:4px 8px;color:var(--fg2)">Andere Widgets ({len(others)}):</td></tr>')
+        rows.extend(_row(w, False) for w in others[:20])
+
+    create_btn = (f'<button class="btn btn-primary btn-sm" style="margin-top:12px" '
+                   f'hx-post="/admin/gates/{gate_id}/turnstile-create" '
+                   f'hx-target="#ts-manage-result" hx-swap="innerHTML" '
+                   f'hx-confirm="Neues Turnstile-Widget für {escape(hostname)} erstellen?">'
+                   f'Neues Widget für <code>{escape(hostname)}</code> erstellen</button>')
+
+    tbl = ""
+    if rows:
+        tbl = ('<table style="font-size:12px;margin-top:8px"><thead>'
+               '<tr><th>Site-Key</th><th>Name</th><th>Domains</th><th></th></tr>'
+               '</thead><tbody>' + "".join(rows) + '</tbody></table>')
+    else:
+        tbl = '<p class="muted">Noch keine Widgets im CF-Account.</p>'
+
+    return HTMLResponse(
+        f'<h4 style="margin:0 0 8px">CF-Turnstile-Widgets ({len(widgets)})</h4>'
+        f'<p class="muted" style="font-size:12px;margin:0 0 6px">'
+        f'Grün markiert: Widget das explizit für <code>{escape(hostname)}</code> konfiguriert ist.</p>'
+        f'{tbl}{create_btn}'
+        f'<div id="ts-manage-result" style="margin-top:10px"></div>'
+    )
+
+
+@router.post("/admin/gates/{gate_id}/turnstile-apply", response_class=HTMLResponse)
+async def gate_turnstile_apply(request: Request, gate_id: int,
+                                 sitekey: str = Form("")):
+    db = request.app.state.db
+    cfg = db.get_config()
+    gate = db.get_gate(gate_id)
+    if not gate:
+        return HTMLResponse('<span style="color:var(--red)">Gate weg</span>')
+    sitekey = sitekey.strip()
+    if not sitekey or not sitekey.startswith("0x"):
+        return HTMLResponse('<span style="color:var(--red)">Kein gültiger Site-Key</span>')
+    secret = _cf_get_turnstile_secret(cfg, sitekey)
+    if not secret:
+        return HTMLResponse(
+            '<span style="color:var(--red)">Secret konnte nicht geholt werden. '
+            'Probiere manuell im CF-Dashboard → Widget → Rotate Secret.</span>'
+        )
+    db.update_gate(gate_id, turnstile_site_key=sitekey,
+                    turnstile_secret_key=secret)
+    return HTMLResponse(
+        f'<div class="alert alert-success">✓ Site-Key + Secret übernommen. '
+        f'<a href="/admin/gates/{gate_id}?saved=1">Reload</a> um die Felder zu sehen.</div>'
+    )
+
+
+@router.post("/admin/gates/{gate_id}/turnstile-create", response_class=HTMLResponse)
+async def gate_turnstile_create(request: Request, gate_id: int):
+    db = request.app.state.db
+    cfg = db.get_config()
+    gate = db.get_gate(gate_id)
+    if not gate:
+        return HTMLResponse('<span style="color:var(--red)">Gate weg</span>')
+    ts = _cf_create_turnstile_widget(cfg, gate["hostname"])
+    if not ts["ok"]:
+        return HTMLResponse(
+            f'<span style="color:var(--red)">Widget-Erstellung fehlgeschlagen: {escape(ts.get("msg", "?"))}</span>'
+        )
+    db.update_gate(gate_id, turnstile_site_key=ts["site_key"],
+                    turnstile_secret_key=ts["secret_key"])
+    return HTMLResponse(
+        f'<div class="alert alert-success">✓ Neues Widget für <code>{escape(gate["hostname"])}</code> '
+        f'erstellt und übernommen. <a href="/admin/gates/{gate_id}?saved=1">Reload</a>.</div>'
+    )
+
 
 @router.post("/admin/gates/{gate_id}/health-check", response_class=HTMLResponse)
 async def gate_health_check(request: Request, gate_id: int):
