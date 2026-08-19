@@ -305,9 +305,9 @@ async def generate_multi_targets(request: Request,
                      if t.startswith("http://") or t.startswith("https://")]
     if not valid_targets:
         return HTMLResponse('<div class="alert alert-warning">Keine gültigen URLs (jede muss mit http:// oder https:// anfangen).</div>')
-    valid_targets = valid_targets[:500]  # safety cap
-    count_per_target = max(1, min(int(count_per_target or 1), 100))
-    gen_threads = max(1, min(int(gen_threads or 3), 10))
+    # kein Target-Cap mehr — Textarea kann so viele Zeilen haben wie du willst
+    count_per_target = max(1, int(count_per_target or 1))
+    gen_threads = max(1, min(int(gen_threads or 3), 50))
     if _gen_progress["running"]:
         return HTMLResponse('<div class="alert alert-warning">Generation already running.</div>')
 
@@ -405,8 +405,8 @@ async def generate_redirects(request: Request,
             '<div class="alert alert-warning">Generation already running.</div>'
         )
 
-    count = max(1, min(count, 5000))
-    gen_threads = max(1, min(gen_threads, 10))
+    count = max(1, int(count or 1))            # kein Cap mehr
+    gen_threads = max(1, min(gen_threads, 50))  # bis 50 parallel
     db = request.app.state.db
     gen_uid = request.state.user["id"]
     do_rewrite = bool(google_rewrite)
