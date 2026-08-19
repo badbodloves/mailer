@@ -1014,10 +1014,11 @@ async def gate_turnstile_apply(request: Request, gate_id: int,
         )
     db.update_gate(gate_id, turnstile_site_key=sitekey,
                     turnstile_secret_key=secret)
-    return HTMLResponse(
-        f'<div class="alert alert-success">✓ Site-Key + Secret übernommen. '
-        f'<a href="/admin/gates/{gate_id}?saved=1">Reload</a> um die Felder zu sehen.</div>'
-    )
+    # HX-Redirect: Seite neu laden damit die Felder die frischen Werte zeigen —
+    # sonst überschreibt der nächste "Speichern"-Klick sie mit leer.
+    resp = HTMLResponse('')
+    resp.headers["HX-Redirect"] = f"/admin/gates/{gate_id}?ts_updated=1"
+    return resp
 
 
 @router.post("/admin/gates/{gate_id}/turnstile-create", response_class=HTMLResponse)
@@ -1034,10 +1035,9 @@ async def gate_turnstile_create(request: Request, gate_id: int):
         )
     db.update_gate(gate_id, turnstile_site_key=ts["site_key"],
                     turnstile_secret_key=ts["secret_key"])
-    return HTMLResponse(
-        f'<div class="alert alert-success">✓ Neues Widget für <code>{escape(gate["hostname"])}</code> '
-        f'erstellt und übernommen. <a href="/admin/gates/{gate_id}?saved=1">Reload</a>.</div>'
-    )
+    resp = HTMLResponse('')
+    resp.headers["HX-Redirect"] = f"/admin/gates/{gate_id}?ts_updated=1"
+    return resp
 
 
 @router.post("/admin/gates/{gate_id}/health-check", response_class=HTMLResponse)

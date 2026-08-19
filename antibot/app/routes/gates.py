@@ -229,17 +229,29 @@ async def gate_save(request: Request, gate_id: int,
         return RedirectResponse("/admin/gates", status_code=303)
     if mode not in MODE_PRESETS:
         mode = "medium"
-    # Turnstile-Sanity: nur akzeptieren wenn Format stimmt (0x…) oder komplett leer.
-    # Verhindert dass PW-Manager-Autofill Garbage in die Felder schmiert.
-    ts_site = turnstile_site_key.strip()
-    ts_secret = turnstile_secret_key.strip()
+    # Turnstile-Handling:
+    #   * leer + existierender valider Wert → behalten (verhindert Kill durch
+    #     stale Config-Form nach CF-Picker-Apply)
+    #   * gültiger neuer Wert (0x…) → übernehmen
+    #   * ungültiger Wert → verwerfen (nicht in DB, warnen)
+    # Explizites Löschen geht über den "Turnstile deaktivieren"-Button.
+    current_gate = db.get_gate(gate_id) or {}
+    ts_site_in = turnstile_site_key.strip()
+    ts_secret_in = turnstile_secret_key.strip()
     ts_bad = []
-    if ts_site and not (ts_site.startswith("0x") and len(ts_site) >= 20):
-        ts_bad.append(f"Site-Key ungültig ({len(ts_site)} chars, muss mit 0x anfangen)")
-        ts_site = ""   # nicht speichern → Turnstile bleibt aus
-    if ts_secret and not (ts_secret.startswith("0x") and len(ts_secret) >= 20):
-        ts_bad.append(f"Secret-Key ungültig ({len(ts_secret)} chars, muss mit 0x anfangen)")
-        ts_secret = ""
+
+    def _keep_or_replace(new_val, current_val, label):
+        if not new_val:
+            return current_val  # empty = keep existing
+        if new_val.startswith("0x") and len(new_val) >= 20:
+            return new_val
+        # ungültig — behalten + warnen
+        ts_bad.append(f"{label} ungültig ({len(new_val)} chars, muss mit 0x anfangen)")
+        return current_val
+
+    ts_site = _keep_or_replace(ts_site_in, current_gate.get("turnstile_site_key", ""), "Site-Key")
+    ts_secret = _keep_or_replace(ts_secret_in, current_gate.get("turnstile_secret_key", ""), "Secret-Key")
+
     updates = {
         "mode": mode,
         "target_url": target_url.strip(),
@@ -263,6 +275,19 @@ async def gate_save(request: Request, gate_id: int,
     if ts_bad:
         q += "&ts_bad=" + ",".join(ts_bad).replace(" ", "+")[:200]
     return RedirectResponse(f"/admin/gates/{gate_id}{q}", status_code=303)
+
+
+@router.post("/admin/gates/{gate_id}/turnstile-clear", response_class=HTMLResponse)
+async def gate_turnstile_clear(request: Request, gate_id: int):
+    """Explizit die Turnstile-Keys leeren (weil normales Save leere Felder
+    als 'behalten' interpretiert)."""
+    db = request.app.state.db
+    if not db.get_gate(gate_id):
+        return HTMLResponse('<span style="color:var(--red)">Gate weg</span>')
+    db.update_gate(gate_id, turnstile_site_key="", turnstile_secret_key="")
+    resp = HTMLResponse('')
+    resp.headers["HX-Redirect"] = f"/admin/gates/{gate_id}?ts_cleared=1"
+    return resp
 
 
 @router.post("/admin/gates/{gate_id}/delete")

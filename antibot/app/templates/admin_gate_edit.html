@@ -7,10 +7,16 @@
 </div>
 
 {% if request.query_params.get('saved') %}<div class="alert alert-success">Gespeichert.</div>{% endif %}
+{% if request.query_params.get('ts_updated') %}
+<div class="alert alert-success">✓ Turnstile-Keys aus Cloudflare übernommen und gespeichert.</div>
+{% endif %}
+{% if request.query_params.get('ts_cleared') %}
+<div class="alert alert-success">✓ Turnstile für dieses Gate deaktiviert (Keys geleert).</div>
+{% endif %}
 {% if request.query_params.get('ts_bad') %}
 <div class="alert alert-warn">
-    ⚠ Turnstile-Keys wurden verworfen (Format ungültig): {{ request.query_params.get('ts_bad').replace('+', ' ') }}.
-    Turnstile bleibt aus. Neu eintragen: <strong>echte</strong> Keys aus dem CF-Dashboard (Turnstile → dein Widget), sie starten mit <code>0x4AAA…</code>.
+    ⚠ Turnstile-Keys hatten ungültiges Format: {{ request.query_params.get('ts_bad').replace('+', ' ') }}.
+    <strong>Bestehende Werte wurden behalten</strong> (nicht überschrieben). Neu eintragen: echte Keys aus dem CF-Dashboard, sie starten mit <code>0x4AAA…</code>.
 </div>
 {% endif %}
 
@@ -79,19 +85,35 @@
                    autocomplete="off" data-lpignore="true" data-1p-ignore="true"
                    data-bwignore="true" placeholder="0x4AAAAAA…"
                    style="font-family:monospace;font-size:12px">
-            <div class="form-help" style="color:var(--red)">
-                <strong>Wichtig</strong>: Beide Keys starten mit <code>0x</code>. Falls dein Password-Manager
-                komische Werte reingeflasht hat → einfach LEEREN und speichern (Turnstile ist optional).
+            <div class="form-help" style="color:var(--fg2)">
+                Beide Keys starten mit <code>0x</code>. Leer lassen beim Speichern = existierende Werte
+                bleiben erhalten (Schutz gegen versehentliches Killen nach CF-Picker).
+                Zum echten Löschen: Button „Turnstile deaktivieren" unten.
             </div>
             <div style="margin-top:8px;padding:8px;background:#f5f6f8;border-radius:4px">
-                <button type="button" class="btn btn-secondary btn-xs"
-                        hx-get="/admin/gates/{{ gate.id }}/turnstile-manage"
-                        hx-target="#ts-widget-manager" hx-swap="innerHTML">
-                    Turnstile-Widgets aus CF holen / neues erstellen
-                </button>
-                <span class="muted" style="font-size:11px;margin-left:8px">
-                    (nutzt CF Global-Key aus Domain-Panel — kein manuelles Tippen nötig)
-                </span>
+                <div class="btn-group">
+                    <button type="button" class="btn btn-secondary btn-xs"
+                            hx-get="/admin/gates/{{ gate.id }}/turnstile-manage"
+                            hx-target="#ts-widget-manager" hx-swap="innerHTML">
+                        Turnstile-Widgets aus CF holen / neues erstellen
+                    </button>
+                    {% if gate.turnstile_site_key or gate.turnstile_secret_key %}
+                    <button type="button" class="btn btn-danger btn-xs"
+                            hx-post="/admin/gates/{{ gate.id }}/turnstile-clear"
+                            hx-confirm="Turnstile für dieses Gate wirklich deaktivieren (beide Keys löschen)?">
+                        Turnstile deaktivieren
+                    </button>
+                    {% endif %}
+                </div>
+                <div style="font-size:11px;color:var(--fg2);margin-top:4px">
+                    Status: {% if gate.turnstile_site_key and gate.turnstile_secret_key %}
+                    <span class="v-allow">✓ aktiv</span> — Site-Key
+                    <code>{{ gate.turnstile_site_key[:10] }}…{{ gate.turnstile_site_key[-4:] }}</code>
+                    ({{ gate.turnstile_site_key|length }} chars)
+                    {% else %}
+                    <span class="muted">inaktiv (kein Widget hinterlegt)</span>
+                    {% endif %}
+                </div>
                 <div id="ts-widget-manager" style="margin-top:10px"></div>
             </div>
 
