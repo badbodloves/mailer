@@ -314,12 +314,13 @@ def _cf_create_turnstile_widget(cfg: dict, hostname: str) -> dict:
     account_id = (cfg.get("cloudflare_account_id") or "").strip()
     if not account_id:
         return {"ok": False, "msg": "Keine CF Account-ID gesetzt (nötig für Turnstile-API)."}
+    # bot_fight_mode ist ein Paid-Feature — freie CF-Accounts kriegen dann
+    # "not entitled to widgets with bot_fight_mode set to true". Weglassen.
     resp = _cf_post(cfg, f"/accounts/{account_id}/challenges/widgets", {
         "name": f"antibot-{hostname}",
         "domains": [hostname],
         "mode": "managed",
         "region": "world",
-        "bot_fight_mode": True,
     })
     if not resp.get("success"):
         errs = "; ".join(e.get("message", "") for e in resp.get("errors", []))
