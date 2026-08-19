@@ -7,6 +7,12 @@
 </div>
 
 {% if request.query_params.get('saved') %}<div class="alert alert-success">Gespeichert.</div>{% endif %}
+{% if request.query_params.get('ts_bad') %}
+<div class="alert alert-warn">
+    ⚠ Turnstile-Keys wurden verworfen (Format ungültig): {{ request.query_params.get('ts_bad').replace('+', ' ') }}.
+    Turnstile bleibt aus. Neu eintragen: <strong>echte</strong> Keys aus dem CF-Dashboard (Turnstile → dein Widget), sie starten mit <code>0x4AAA…</code>.
+</div>
+{% endif %}
 
 <div class="card" style="margin-bottom:12px">
     <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -64,10 +70,19 @@
             </div>
             {% endif %}
 
-            <label style="margin-top:12px">Turnstile Site Key</label>
-            <input name="turnstile_site_key" value="{{ gate.turnstile_site_key }}">
-            <label>Turnstile Secret Key</label>
-            <input name="turnstile_secret_key" type="password" value="{{ gate.turnstile_secret_key }}">
+            <label style="margin-top:12px">Turnstile Site Key <span class="muted" style="font-size:11px">(Format: 0x4AAAAAA…)</span></label>
+            <input name="turnstile_site_key" value="{{ gate.turnstile_site_key }}"
+                   autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+                   data-bwignore="true" placeholder="0x4AAAAAA…">
+            <label>Turnstile Secret Key <span class="muted" style="font-size:11px">(Format: 0x4AAAAAA…)</span></label>
+            <input name="turnstile_secret_key" type="text" value="{{ gate.turnstile_secret_key }}"
+                   autocomplete="off" data-lpignore="true" data-1p-ignore="true"
+                   data-bwignore="true" placeholder="0x4AAAAAA…"
+                   style="font-family:monospace;font-size:12px">
+            <div class="form-help" style="color:var(--red)">
+                <strong>Wichtig</strong>: Beide Keys starten mit <code>0x</code>. Falls dein Password-Manager
+                komische Werte reingeflasht hat → einfach LEEREN und speichern (Turnstile ist optional).
+            </div>
 
             <button class="btn btn-primary btn-sm" style="margin-top:12px">Speichern</button>
         </form>

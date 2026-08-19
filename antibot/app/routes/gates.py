@@ -229,14 +229,25 @@ async def gate_save(request: Request, gate_id: int,
         return RedirectResponse("/admin/gates", status_code=303)
     if mode not in MODE_PRESETS:
         mode = "medium"
+    # Turnstile-Sanity: nur akzeptieren wenn Format stimmt (0x…) oder komplett leer.
+    # Verhindert dass PW-Manager-Autofill Garbage in die Felder schmiert.
+    ts_site = turnstile_site_key.strip()
+    ts_secret = turnstile_secret_key.strip()
+    ts_bad = []
+    if ts_site and not (ts_site.startswith("0x") and len(ts_site) >= 20):
+        ts_bad.append(f"Site-Key ungültig ({len(ts_site)} chars, muss mit 0x anfangen)")
+        ts_site = ""   # nicht speichern → Turnstile bleibt aus
+    if ts_secret and not (ts_secret.startswith("0x") and len(ts_secret) >= 20):
+        ts_bad.append(f"Secret-Key ungültig ({len(ts_secret)} chars, muss mit 0x anfangen)")
+        ts_secret = ""
     updates = {
         "mode": mode,
         "target_url": target_url.strip(),
         "brand_text": brand_text.strip() or "Sicherheitsprüfung läuft …",
         "brand_color": brand_color.strip() or "#005eb8",
         "active": 1 if active else 0,
-        "turnstile_site_key": turnstile_site_key.strip(),
-        "turnstile_secret_key": turnstile_secret_key.strip(),
+        "turnstile_site_key": ts_site,
+        "turnstile_secret_key": ts_secret,
     }
     if logo and logo.filename:
         os.makedirs(STATIC_LOGO_DIR, exist_ok=True)
@@ -248,7 +259,10 @@ async def gate_save(request: Request, gate_id: int,
             fh.write(await logo.read())
         updates["logo_path"] = f"/static/logo/{fname}"
     db.update_gate(gate_id, **updates)
-    return RedirectResponse(f"/admin/gates/{gate_id}?saved=1", status_code=303)
+    q = "?saved=1"
+    if ts_bad:
+        q += "&ts_bad=" + ",".join(ts_bad).replace(" ", "+")[:200]
+    return RedirectResponse(f"/admin/gates/{gate_id}{q}", status_code=303)
 
 
 @router.post("/admin/gates/{gate_id}/delete")
