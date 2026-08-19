@@ -204,20 +204,23 @@ def score_request(db, cfg: dict, *, ip: str, user_agent: str,
                 signals["fast_submit_ms"] = ms
         except (TypeError, ValueError):
             pass
-        if client_signals.get("pow_ok") is False:
-            score += 60
-            signals["pow_failed"] = True
         # Turnstile-Verdict: True/False = Gate hat Widget, None = kein Widget
         ts = client_signals.get("turnstile_ok")
         if ts is True:
             # CF sagt "human bestätigt" → das ist der stärkste Human-Beweis
-            # den wir haben, wir subtrahieren ordentlich vom Score
-            score -= 40
+            # den wir haben, kompensiert alle anderen Signals kräftig
+            score -= 60
             signals["turnstile_pass"] = True
         elif ts is False:
             # Widget da, aber nicht/nicht sauber gelöst
             score += 50
             signals["turnstile_fail"] = True
+
+        # PoW-Fail-Penalty NUR wenn kein Turnstile bestanden (weil Client
+        # den PoW dann bewusst überspringt — Turnstile ist Ersatz).
+        if client_signals.get("pow_ok") is False and ts is not True:
+            score += 60
+            signals["pow_failed"] = True
 
     score = max(0, min(100, score))
 

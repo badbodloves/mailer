@@ -87,8 +87,12 @@
     var prefix = new Array(difficulty + 1).join('0');
     var minShow = ({{ cfg.wait_seconds|int }} * 1000) || 0;
     var needsTurnstile = {{ 'true' if cfg.turnstile_site_key else 'false' }};
-    var turnstileOk = !needsTurnstile;  // wenn keins konfiguriert → sofort "ok"
-    var powDone = false;
+    var turnstileOk = !needsTurnstile;
+    // Wenn Turnstile da ist → PoW überspringen (Turnstile ist der stärkere
+    // Human-Beweis, und Browser-crypto.subtle-Loops sind langsam). PoW nur
+    // laufen lassen wenn's KEIN Turnstile-Widget gibt.
+    var powDone = needsTurnstile;   // ohne Turnstile: false → PoW muss laufen
+    var powAttempted = false;
 
     // 1. Client signals
     document.getElementById('webdriver').value =
@@ -160,10 +164,17 @@
         trySubmit();
     };
 
-    solve().then(function(){
-        powDone = true;
-        trySubmit();
-    });
+    // PoW nur laufen wenn's KEIN Turnstile gibt (sonst overkill + slow)
+    if (!needsTurnstile) {
+        powAttempted = true;
+        solve().then(function(){
+            powDone = true;
+            trySubmit();
+        });
+    }
+    // Wenn Turnstile schon fertig ist (invisible-mode) bevor unser Script rennt,
+    // hätte der Callback trySubmit früher aufgerufen und powDone war true
+    // (weil needsTurnstile), also läuft das schon.
 })();
 </script>
 </body>
