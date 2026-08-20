@@ -54,7 +54,16 @@ class WarmupEngine:
             self._db.update_warmup_campaign(campaign_id, start_date=start.isoformat())
 
         current_day = (datetime.date.today() - start).days + 1
-        daily_target, seed_pct = get_curve_values(camp.get("curve_type", "turbo"), current_day)
+
+        # Fixed-Daily-Target-Mode: wenn daily_fixed_target > 0, ignoriere Curve
+        # und nimm den festen Wert (mit leichter Abweichung ±10%). Sonst Curve.
+        fixed_target = int(camp.get("daily_fixed_target") or 0)
+        if fixed_target > 0:
+            variation = random.uniform(0.9, 1.1)
+            daily_target = max(1, int(fixed_target * variation))
+            seed_pct = 100
+        else:
+            daily_target, seed_pct = get_curve_values(camp.get("curve_type", "turbo"), current_day)
         self._db.update_warmup_campaign(campaign_id,
                                          current_day=current_day,
                                          daily_target=daily_target,
@@ -149,11 +158,15 @@ class WarmupEngine:
 
     def _send_to_seeds(self, camp: dict, smtp_row: dict, template_row,
                        seeds: list, from_filter: str) -> int:
-        """Send warmup emails to seed accounts."""
+        """Send warmup emails to seed accounts. Jede Mail kriegt frischen
+        Content (Spintax pro Send), optional PDF-Anhang (uniquified), und
+        einen unsichtbaren Byte-Uniquifier fürs HTML."""
         import json
+        import os
         from .bulk_mime_builder import BulkMIMEBuilder
         from .content_engine import BulkContentEngine
         from .smtp_client import SMTPClient
+        from .warmup_content import generate_local_email, make_unique_html
         from email.utils import formatdate
 
         macros = {r["name"]: json.loads(r["values_json"]) for r in self._db.get_macros()}
@@ -163,31 +176,19 @@ class WarmupEngine:
                             smtp_row["username"], smtp_row["password"],
                             proxy=smtp_row.get("proxy", ""))
 
-        from .warmup_ai import generate_warmup_email
-
         from_email = camp["from_email"]
         from_name = camp.get("from_name", "") or "Newsletter"
         domain = camp["sending_domain"]
 
+        # LLM-Config nur checken, nicht mehr für BATCH benutzen — Content
+        # kommt jetzt pro Send frisch aus dem lokalen Pool. LLM optional
+        # via warmup_ai wenn Key konfiguriert.
         llm_cfg = self._db.get_llm_config()
-        ai_email = generate_warmup_email(
-            llm_cfg.get("api_url", ""), llm_cfg.get("api_key", ""),
-            llm_cfg.get("model", ""), domain, llm_cfg.get("language", "de"))
+        use_llm = bool(llm_cfg.get("api_key", "").strip())
 
-        subject = ai_email.get("subject", f"Newsletter {datetime.date.today().strftime('%d.%m.%Y')}")
-        html_body = ai_email.get("html", "<p>Newsletter content</p>")
-
-        if template_row:
-            html_files = json.loads(template_row.get("html_files_json", "[]") or "[]")
-            if html_files:
-                import os
-                for hf in html_files:
-                    if os.path.isfile(hf):
-                        with open(hf, "r", encoding="utf-8") as f:
-                            html_body = f.read()
-                        break
-            if template_row.get("subject_macro"):
-                subject = template_row["subject_macro"]
+        # PDF-Anhang-Config
+        pdf_attach_pct = int(camp.get("pdf_attach_pct") or 0)
+        pdf_available = pdf_attach_pct > 0
 
         sent = 0
         for seed in seeds:
@@ -195,11 +196,51 @@ class WarmupEngine:
                 break
             try:
                 to_email = seed["email"]
+
+                # Content: pro Send frisch aus dem lokalen Pool
+                content = generate_local_email(sender_hint=from_name)
+                subject = content["subject"]
+                html_body = content["html"]
+
+                # Wenn ein spezifisches Template konfiguriert wurde,
+                # nutz das statt Local-Pool (Override)
+                if template_row:
+                    html_files = json.loads(template_row.get("html_files_json", "[]") or "[]")
+                    if html_files:
+                        for hf in html_files:
+                            if os.path.isfile(hf):
+                                with open(hf, "r", encoding="utf-8") as f:
+                                    html_body = f.read()
+                                break
+                    if template_row.get("subject_macro"):
+                        subject = template_row["subject_macro"]
+
+                # LLM-Overlay optional
+                if use_llm and random.random() < 0.3:  # 30% LLM, 70% local
+                    try:
+                        from .warmup_ai import generate_warmup_email
+                        ai = generate_warmup_email(
+                            llm_cfg.get("api_url", ""), llm_cfg.get("api_key", ""),
+                            llm_cfg.get("model", ""), domain, "de")
+                        if ai.get("subject") and ai.get("html"):
+                            subject = ai["subject"]
+                            html_body = ai["html"]
+                    except Exception:
+                        pass
+
+                # Macros + Byte-Uniquify pro Send
                 processed_subject = engine.process(subject, to_email)
                 processed_html = engine.process(html_body, to_email)
+                processed_html = make_unique_html(processed_html)
                 plain = engine.html_to_plaintext(processed_html)
 
-                raw, envelope, _ = BulkMIMEBuilder.build_email(
+                # PDF-Anhang würfeln
+                pdf_bytes = None
+                pdf_filename = None
+                if pdf_available and random.random() * 100 < pdf_attach_pct:
+                    pdf_bytes, pdf_filename = self._pick_uniquified_pdf()
+
+                mime_kwargs = dict(
                     from_name=engine.process(from_name, to_email),
                     from_email=from_email,
                     reply_to_name="", reply_to_email="",
@@ -211,6 +252,10 @@ class WarmupEngine:
                     feedback_id=f"warmup:{domain}:w1:{domain.replace('.', '-')[:15]}",
                     provider_type=smtp_row.get("provider_type", "generic"),
                 )
+                if pdf_bytes and _mime_supports_pdf():
+                    mime_kwargs["pdf_bytes"] = pdf_bytes
+                    mime_kwargs["pdf_filename"] = pdf_filename
+                raw, envelope, _ = BulkMIMEBuilder.build_email(**mime_kwargs)
                 raw = f"Date: {formatdate(localtime=True, usegmt=False)}\r\n" + raw
 
                 ok, err, code = client.send(envelope, to_email, raw)
@@ -224,6 +269,38 @@ class WarmupEngine:
                 logger.error("Warmup send error to %s: %s", seed["email"], e)
 
         return sent
+
+    def _pick_uniquified_pdf(self):
+        """Nimm ein random PDF aus dem Pool, uniquify Bytes (Metadaten +
+        EOF-Padding, unsichtbar), gib (bytes, filename) zurück."""
+        try:
+            pdf_row = self._db.random_warmup_pdf()
+            if not pdf_row:
+                return None, None
+            import os
+            path = pdf_row.get("file_path", "")
+            if not os.path.isfile(path):
+                return None, None
+            with open(path, "rb") as f:
+                raw = f.read()
+            # Uniquify: leichte Metadaten-Änderung via pikepdf falls verfügbar,
+            # sonst nur EOF-Padding damit Hash-Änderung garantiert ist.
+            try:
+                from .pdf_variator import PDFVariator, LayerSet
+                v = PDFVariator(raw, layers=LayerSet(
+                    filename=False, metadata=True, structure=False,
+                    image=False, byte_noise=True))
+                _, uniq_bytes = v.make_variant(seed=random.randint(0, 2**31))
+                fname = pdf_row.get("filename", "attachment.pdf")
+                return uniq_bytes, fname
+            except Exception:
+                # Fallback ohne pikepdf: nur EOF-random-padding
+                pad = b"\n%" + bytes(random.randint(0, 255) for _ in range(16)).hex().encode() + b"\n"
+                return raw + pad, pdf_row.get("filename", "attachment.pdf")
+        except Exception as e:
+            logger.warning("PDF-Uniquify failed: %s", e)
+            return None, None
+
 
     def execute_pending_actions(self):
         """Execute all pending engagement actions."""
@@ -283,3 +360,14 @@ class WarmupEngine:
             time.sleep(random.uniform(1, 5))
 
         return executed
+
+
+def _mime_supports_pdf() -> bool:
+    """Prüft ob BulkMIMEBuilder.build_email die neuen pdf_bytes-Parameter akzeptiert."""
+    try:
+        from .bulk_mime_builder import BulkMIMEBuilder
+        import inspect
+        sig = inspect.signature(BulkMIMEBuilder.build_email)
+        return "pdf_bytes" in sig.parameters
+    except Exception:
+        return False

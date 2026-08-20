@@ -302,6 +302,24 @@ class BulkDBManager:
                 pixel_tweak INTEGER DEFAULT 1,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
+        # Warmup — neue Campaign-Spalten
+        wc_cols = {r[1] for r in c.execute("PRAGMA table_info(warmup_campaigns)").fetchall()}
+        if "daily_fixed_target" not in wc_cols:
+            c.execute("ALTER TABLE warmup_campaigns ADD COLUMN daily_fixed_target INTEGER DEFAULT 0")
+        if "pdf_attach_pct" not in wc_cols:
+            c.execute("ALTER TABLE warmup_campaigns ADD COLUMN pdf_attach_pct INTEGER DEFAULT 0")
+        if "reply_mode" not in wc_cols:
+            c.execute("ALTER TABLE warmup_campaigns ADD COLUMN reply_mode TEXT DEFAULT 'template'")
+        # Warmup PDF-Pool (uploaded PDFs die random attached werden)
+        if "warmup_pdfs" not in tables:
+            c.execute("""CREATE TABLE warmup_pdfs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                filename TEXT NOT NULL,
+                file_path TEXT NOT NULL,
+                size INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+
         # PDF Variator pools (kv-store, ein Eintrag pro Pool-Typ)
         if "pdf_variator_pools" not in tables:
             c.execute("""CREATE TABLE pdf_variator_pools (
@@ -1018,3 +1036,29 @@ class BulkDBManager:
     def reset_variator_pools(self):
         self._conn().execute("DELETE FROM pdf_variator_pools")
         self._conn().commit()
+
+    # ── Warmup PDF-Pool ─────────────────────────────────────
+    def add_warmup_pdf(self, filename: str, file_path: str, size: int) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO warmup_pdfs (filename, file_path, size) VALUES (?,?,?)",
+                  (filename, file_path, size))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def list_warmup_pdfs(self) -> list:
+        return [dict(r) for r in self._conn().execute(
+            "SELECT * FROM warmup_pdfs ORDER BY id DESC").fetchall()]
+
+    def get_warmup_pdf(self, pid: int):
+        r = self._conn().execute("SELECT * FROM warmup_pdfs WHERE id=?", (pid,)).fetchone()
+        return dict(r) if r else None
+
+    def delete_warmup_pdf(self, pid: int):
+        c = self._conn()
+        c.execute("DELETE FROM warmup_pdfs WHERE id=?", (pid,))
+        c.commit()
+
+    def random_warmup_pdf(self):
+        r = self._conn().execute(
+            "SELECT * FROM warmup_pdfs ORDER BY RANDOM() LIMIT 1").fetchone()
+        return dict(r) if r else None

@@ -7,7 +7,10 @@ from html import escape
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
-from bulk.mailer.warmup_providers import PROVIDERS, get_curve_values, WARMUP_CURVES
+from bulk.mailer.warmup_providers import (PROVIDERS, get_curve_values, WARMUP_CURVES,
+                                            CURVE_LABELS, parse_seed_line,
+                                            detect_provider_from_email,
+                                            infer_config_for_email)
 
 logger = logging.getLogger("bulk.warmup.web")
 router = APIRouter()
@@ -55,11 +58,13 @@ async def warmup_page(request: Request):
         provider_counts[p] = provider_counts.get(p, 0) + 1
 
     llm_cfg = db.get_llm_config()
+    pdfs = db.list_warmup_pdfs() if hasattr(db, "list_warmup_pdfs") else []
     return request.app.state.templates.TemplateResponse(request, "warmup.html", {
         "active": "warmup", "seeds": seeds, "campaigns": campaigns,
         "actions": actions, "smtps": smtps, "templates": templates,
         "providers": providers, "provider_counts": provider_counts,
-        "curves": list(WARMUP_CURVES.keys()), "db": db,
+        "curves": list(WARMUP_CURVES.keys()),
+        "curve_labels": CURVE_LABELS, "pdfs": pdfs, "db": db,
         "llm": llm_cfg,
     })
 
@@ -162,15 +167,23 @@ async def add_campaign(request: Request,
                        template_id: int = Form(0),
                        from_email: str = Form(""),
                        from_name: str = Form(""),
-                       curve_type: str = Form("turbo")):
+                       curve_type: str = Form("turbo"),
+                       daily_fixed_target: int = Form(0),
+                       pdf_attach_pct: int = Form(0),
+                       reply_mode: str = Form("template")):
     db = request.app.state.db
     if not name.strip() or not sending_domain.strip():
         return RedirectResponse("/warmup", status_code=303)
+    if reply_mode not in ("template", "llm", "both"):
+        reply_mode = "template"
     db.create_warmup_campaign(
         name=name.strip(), sending_domain=sending_domain.strip(),
         smtp_preset_id=smtp_preset_id, template_id=template_id,
         from_email=from_email.strip(), from_name=from_name.strip(),
-        curve_type=curve_type)
+        curve_type=curve_type,
+        daily_fixed_target=max(0, int(daily_fixed_target or 0)),
+        pdf_attach_pct=max(0, min(int(pdf_attach_pct or 0), 100)),
+        reply_mode=reply_mode)
     return RedirectResponse("/warmup", status_code=303)
 
 
@@ -251,3 +264,109 @@ async def warmup_log(request: Request):
     return HTMLResponse(
         f'<table><thead><tr><th>Time</th><th>Seed</th><th>Action</th><th>Result</th></tr></thead>'
         f'<tbody>{rows}</tbody></table>')
+
+
+# ── Bulk-Import mit Auto-Provider-Detection ───────────────
+
+@router.post("/warmup/seeds/import", response_class=HTMLResponse)
+async def import_seeds(request: Request, lines: str = Form(""),
+                        proxy: str = Form("")):
+    """Universal-Import: eine Zeile = ein Seed. Format frei mixbar:
+      email:pw
+      email:pw:imap_host
+      email:pw:imap_host:imap_port
+      email:pw:imap_host:imap_port:smtp_host:smtp_port
+      imap_host:port:email:pw
+    Provider wird aus der Email-Domain erkannt; Custom-Fallback:
+    imap.{domain}:993 + smtp.{domain}:587.
+    """
+    db = request.app.state.db
+    added, skipped, errs = 0, 0, []
+    for line in lines.splitlines():
+        if not line.strip():
+            continue
+        cfg = parse_seed_line(line)
+        if not cfg:
+            skipped += 1
+            errs.append(f"Nicht parsebar: {line.strip()[:60]}")
+            continue
+        try:
+            db.add_seed(
+                provider=cfg["provider"],
+                email=cfg["email"],
+                password=cfg["password"],
+                imap_host=cfg["imap_host"],
+                imap_port=cfg["imap_port"],
+                smtp_host=cfg["smtp_host"],
+                smtp_port=cfg["smtp_port"],
+                proxy=proxy.strip(),
+            )
+            added += 1
+        except Exception as e:
+            skipped += 1
+            errs.append(f"DB-Fehler bei {cfg.get('email', '?')}: {e}")
+
+    err_html = ""
+    if errs:
+        err_html = ('<details style="margin-top:8px"><summary style="font-size:11px;color:var(--fg2)">'
+                    f'Details ({len(errs)}) </summary>'
+                    '<pre style="font-size:11px;background:#fdf0f0;padding:6px;border-radius:4px;'
+                    'white-space:pre-wrap;max-height:150px;overflow:auto">'
+                    + escape("\n".join(errs)) + '</pre></details>')
+    return HTMLResponse(
+        f'<div class="alert alert-success">{added} Seeds hinzugefügt'
+        f'{"" if not skipped else f", {skipped} übersprungen"}. '
+        f'<a href="/warmup" style="color:var(--accent)">Reload</a></div>{err_html}'
+    )
+
+
+# ── PDF-Attach-Pool ──────────────────────────────────────
+
+import os as _os
+_PDF_DIR = _os.path.abspath(_os.path.join(
+    _os.path.dirname(__file__), "..", "static", "uploads", "warmup_pdfs"))
+_os.makedirs(_PDF_DIR, exist_ok=True)
+
+
+@router.post("/warmup/pdfs/upload", response_class=HTMLResponse)
+async def upload_warmup_pdf(request: Request):
+    from fastapi import UploadFile
+    import secrets as _s
+    db = request.app.state.db
+    form = await request.form()
+    files = form.getlist("files") if hasattr(form, "getlist") else []
+    added = 0
+    for f in files:
+        if not hasattr(f, "read") or not f.filename:
+            continue
+        if not f.filename.lower().endswith(".pdf"):
+            continue
+        raw = await f.read()
+        if not raw or len(raw) > 20 * 1024 * 1024:  # 20 MB max
+            continue
+        if not raw.startswith(b"%PDF"):
+            continue
+        safe_name = "".join(c for c in f.filename if c.isalnum() or c in ".-_") or "attachment.pdf"
+        fname = f"{int(time.time())}_{_s.token_hex(4)}_{safe_name}"
+        fpath = _os.path.join(_PDF_DIR, fname)
+        with open(fpath, "wb") as fh:
+            fh.write(raw)
+        db.add_warmup_pdf(filename=f.filename, file_path=fpath, size=len(raw))
+        added += 1
+    return HTMLResponse(
+        f'<div class="alert alert-success">{added} PDF(s) hochgeladen. '
+        f'<a href="/warmup" style="color:var(--accent)">Reload</a></div>'
+    )
+
+
+@router.post("/warmup/pdfs/{pid}/delete")
+async def delete_warmup_pdf(request: Request, pid: int):
+    db = request.app.state.db
+    row = db.get_warmup_pdf(pid)
+    if row:
+        try:
+            _os.unlink(row["file_path"])
+        except OSError:
+            pass
+        db.delete_warmup_pdf(pid)
+    return RedirectResponse("/warmup", status_code=303)
