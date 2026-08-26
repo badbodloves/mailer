@@ -43,7 +43,7 @@
         </p>
         <form hx-post="/porkbun/search" hx-target="#pb-search-result" hx-swap="innerHTML"
               hx-include="#pb-search-account">
-            <label>Domains (eine pro Zeile, max. 40)</label>
+            <label>Domains (eine pro Zeile, max. 15 — 11s Wait zwischen Checks)</label>
             <textarea name="query" rows="5" style="font-family:monospace;font-size:12px"
                       placeholder="beispiel.de&#10;meinshop.com&#10;newsletter-xyz.de" required></textarea>
             <button class="btn btn-primary btn-sm" style="margin-top:8px">Verfügbarkeit prüfen</button>

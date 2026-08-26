@@ -77,18 +77,41 @@ def pb_get_ns(api_key: str, api_secret: str, domain: str) -> dict:
     return _pb_call(api_key, api_secret, f"/domain/getNs/{domain}")
 
 
-def pb_check_availability(api_key: str, api_secret: str, domain: str) -> dict:
-    """Rückgabe: {available: bool|None, price: str (USD Dollar), cents: int,
-                  currency: str, premium: bool, raw: dict, error: str}.
-    Preis kommt als Dollar-String rein — wir rechnen Cents für den
-    Register-Endpoint direkt mit aus."""
-    resp = _pb_call(api_key, api_secret, f"/domain/checkDomain/{domain}")
-    if resp.get("status") != "SUCCESS":
+def _is_rate_limit(msg: str) -> bool:
+    """Porkbun-Text: '1 out of 1 checks within 10 seconds used.' etc."""
+    m = (msg or "").lower()
+    return ("checks within" in m or "check within" in m
+            or "10 seconds" in m or "rate limit" in m or "too many" in m)
+
+
+def pb_check_availability(api_key: str, api_secret: str, domain: str,
+                            wait_on_rate_limit: bool = False,
+                            max_retries: int = 3,
+                            log_step=None) -> dict:
+    """Rückgabe: {available, price, cents, currency, premium, raw,
+                  error, rate_limited}.
+    Porkbun erlaubt checkDomain nur 1×/10s. Wenn `wait_on_rate_limit=True`,
+    warten wir 12s und retryen bis zu `max_retries`× ."""
+    resp = {}
+    for attempt in range(max_retries):
+        resp = _pb_call(api_key, api_secret, f"/domain/checkDomain/{domain}")
+        if resp.get("status") == "SUCCESS":
+            break
+        err_msg = resp.get("message") or resp.get("_error") or ""
+        rl = _is_rate_limit(err_msg)
+        if rl and wait_on_rate_limit and attempt < max_retries - 1:
+            if log_step:
+                log_step(f"Rate-Limit hit — warte 12s (Attempt {attempt+2}/{max_retries})")
+            time.sleep(12)
+            continue
+        # kein Success, kein Retry mehr → return mit Flag
         return {
             "available": None, "price": "", "cents": 0, "currency": "USD",
             "premium": False, "raw": resp,
-            "error": resp.get("message") or resp.get("_error") or "unknown",
+            "error": err_msg or "unknown",
+            "rate_limited": rl,
         }
+
     r = resp.get("response") or {}
     avail_raw = r.get("isAvailable") if "isAvailable" in r else (r.get("avail") or r.get("available"))
     if isinstance(avail_raw, str):
@@ -107,7 +130,7 @@ def pb_check_availability(api_key: str, api_secret: str, domain: str) -> dict:
         "available": available, "price": price_str, "cents": cents,
         "currency": "USD",
         "premium": bool(r.get("isPremium") or r.get("premium")),
-        "raw": resp, "error": "",
+        "raw": resp, "error": "", "rate_limited": False,
     }
 
 
@@ -325,7 +348,7 @@ async def search_domains(request: Request, query: str = Form(""),
         logger.warning("owned-lookup failed: %s", e)
 
     rows = ""
-    for d in domains_raw[:40]:
+    for idx, d in enumerate(domains_raw[:15]):
         did = d.replace(".", "-")
         if d in owned:
             rows += (
@@ -345,7 +368,11 @@ async def search_domains(request: Request, query: str = Form(""),
                 f'</tr>'
             )
             continue
-        r = pb_check_availability(key, secret, d)
+        # Search-Row: warten wenn Rate-Limit (Porkbun: 1/10s)
+        if idx > 0:
+            time.sleep(11)
+        r = pb_check_availability(key, secret, d, wait_on_rate_limit=True,
+                                    max_retries=2)
         if r["available"] is True:
             badge = '<span class="badge badge-running">Verfügbar</span>'
             if r["premium"]:
@@ -355,7 +382,7 @@ async def search_domains(request: Request, query: str = Form(""),
             action = (
                 f'<button class="btn btn-primary btn-xs" '
                 f'hx-post="/porkbun/buy" '
-                f'hx-vals=\'{{"domain":"{escape(d)}"}}\' '
+                f'hx-vals=\'{{"domain":"{escape(d)}","cost_cents":"{r["cents"]}"}}\' '
                 f'hx-include="#pb-search-account,#pb-cf-account" '
                 f'hx-target="#pb-buy-result" hx-swap="innerHTML" '
                 f'hx-confirm="{escape(confirm_txt)}">'
@@ -386,31 +413,53 @@ async def search_domains(request: Request, query: str = Form(""),
         '<th>Domain</th><th>Status</th><th>Preis</th><th></th>'
         '</tr></thead><tbody>' + rows + '</tbody></table>'
         '<p class="muted" style="font-size:11px;margin-top:6px">'
-        'Register geht über <code>/domain/create/{domain}</code>. Default-Contacts '
-        'müssen im Porkbun-Dashboard einmal gesetzt sein.</p>'
+        'Porkbun rate-limitet Availability-Checks auf <strong>1 pro 10 Sekunden</strong> — '
+        'wir warten dazwischen, deshalb dauert Bulk-Suche mit N Domains ca. N×11s. '
+        'Cap: 15 pro Batch. Beim „Kaufen" schickt der Button den Preis aus dieser '
+        'Suche mit → kein zweiter Check nötig, kein Rate-Limit-Konflikt.</p>'
     )
 
 
-def _do_buy_pb(db, api_key, api_secret, domain, cf_account_id, log):
+def _do_buy_pb(db, api_key, api_secret, domain, cf_account_id, log,
+                cost_cents: int = 0):
     """Register → CF-Zone → NS bei Porkbun setzen (mit Retry). Analog
-    Dynadot _do_buy."""
-    log.append(f"Availability-Check für {domain}…")
-    av = pb_check_availability(api_key, api_secret, domain)
-    if av["available"] is not True:
-        log.append(f"Nicht verfügbar ({av.get('error') or 'occupied'}) — abbruch.")
-        return
-    if av["cents"] <= 0:
-        log.append("Kein Preis vom Availability-Check — abbruch.")
-        return
-    log.append(f"Verfügbar: {av['price']} USD ({av['cents']} cents).")
-    if av["premium"]:
-        log.append("⚠ Premium-Domain! Weiter mit angegebenem Preis.")
+    Dynadot _do_buy. Wenn `cost_cents>0` übergeben (z.B. vom Search-Result),
+    sparen wir uns den zweiten Availability-Call (Rate-Limit!) und
+    registrieren direkt."""
+    if cost_cents > 0:
+        log.append(f"Preis aus Suche übernommen: {cost_cents/100:.2f} USD "
+                    f"({cost_cents} cents) — kein zweiter Availability-Check.")
+        av_cents = cost_cents
+    else:
+        log.append(f"Availability-Check für {domain}… (retry falls Rate-Limit)")
+        av = pb_check_availability(api_key, api_secret, domain,
+                                    wait_on_rate_limit=True, max_retries=3,
+                                    log_step=lambda m: log.append(m))
+        if av.get("rate_limited"):
+            log.append("Rate-Limit hält an — abbruch.")
+            return
+        if av["available"] is not True:
+            log.append(f"Nicht verfügbar ({av.get('error') or 'occupied'}) — abbruch.")
+            return
+        if av["cents"] <= 0:
+            log.append("Kein Preis vom Availability-Check — abbruch.")
+            return
+        log.append(f"Verfügbar: {av['price']} USD ({av['cents']} cents).")
+        if av["premium"]:
+            log.append("⚠ Premium-Domain! Weiter mit angegebenem Preis.")
+        av_cents = av["cents"]
 
     log.append(f"Register {domain} über /domain/create/{domain}…")
-    reg = pb_register_domain(api_key, api_secret, domain, av["cents"])
+    reg = pb_register_domain(api_key, api_secret, domain, av_cents)
     if not reg["ok"]:
-        log.append(f"Register fehlgeschlagen: {reg['msg']}")
-        return
+        # Ggf. Rate-Limit auf create? Retry mal
+        if _is_rate_limit(reg.get("msg", "")):
+            log.append("Register Rate-Limit — warte 12s und retry.")
+            time.sleep(12)
+            reg = pb_register_domain(api_key, api_secret, domain, av_cents)
+        if not reg["ok"]:
+            log.append(f"Register fehlgeschlagen: {reg['msg']}")
+            return
     log.append(f"✓ Registriert. OrderID: {reg.get('order_id') or '?'}")
     if reg.get("balance") is not None:
         log.append(f"Neue Balance: {reg['balance']}")
@@ -471,8 +520,11 @@ def _do_buy_pb(db, api_key, api_secret, domain, cf_account_id, log):
 @router.post("/porkbun/buy", response_class=HTMLResponse)
 async def buy_domain(request: Request, domain: str = Form(""),
                       account_id: int = Form(0),
-                      cf_account_id: int = Form(0)):
-    """One-Click Register + CF + NS für eine Porkbun-Domain."""
+                      cf_account_id: int = Form(0),
+                      cost_cents: int = Form(0)):
+    """One-Click Register + CF + NS für eine Porkbun-Domain.
+    `cost_cents` optional — aus dem Search-Result-Button — spart einen
+    zweiten checkDomain-Aufruf (der wegen Rate-Limit sonst hängen würde)."""
     db = request.app.state.db
     key, secret, name = _pb_from_account_id(db, account_id)
     if not key or not secret:
@@ -489,7 +541,8 @@ async def buy_domain(request: Request, domain: str = Form(""),
     def worker():
         log = _pb_progress["log"]
         try:
-            _do_buy_pb(db, key, secret, domain, cf_account_id, log)
+            _do_buy_pb(db, key, secret, domain, cf_account_id, log,
+                        cost_cents=cost_cents)
         except Exception as e:
             log.append(f"Fatal: {e}")
         finally:
