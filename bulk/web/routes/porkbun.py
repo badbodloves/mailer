@@ -11,6 +11,7 @@ Alle Requests sind POST mit JSON. Endpoints:
 Wie Spaceship mit Retry-Semantik beim NS-Setzen für frisch registrierte Domains.
 """
 import time
+import threading
 import logging
 from html import escape
 from fastapi import APIRouter, Request, Form
@@ -20,6 +21,9 @@ router = APIRouter()
 logger = logging.getLogger("bulk.porkbun")
 
 PORKBUN_BASE = "https://api.porkbun.com/api/json/v3"
+
+# Live-Log für Buy-Flow (analog Dynadot _buy_progress)
+_pb_progress = {"running": False, "log": [], "domain": "", "done": False}
 
 
 # ── Low-Level API Call ────────────────────────────────────
@@ -74,29 +78,59 @@ def pb_get_ns(api_key: str, api_secret: str, domain: str) -> dict:
 
 
 def pb_check_availability(api_key: str, api_secret: str, domain: str) -> dict:
-    """Rückgabe: {available: bool|None, price: str, currency: str,
-                  premium: bool, raw: dict, error: str}."""
+    """Rückgabe: {available: bool|None, price: str (USD Dollar), cents: int,
+                  currency: str, premium: bool, raw: dict, error: str}.
+    Preis kommt als Dollar-String rein — wir rechnen Cents für den
+    Register-Endpoint direkt mit aus."""
     resp = _pb_call(api_key, api_secret, f"/domain/checkDomain/{domain}")
     if resp.get("status") != "SUCCESS":
         return {
-            "available": None, "price": "", "currency": "USD",
+            "available": None, "price": "", "cents": 0, "currency": "USD",
             "premium": False, "raw": resp,
             "error": resp.get("message") or resp.get("_error") or "unknown",
         }
     r = resp.get("response") or {}
-    avail_raw = r.get("avail") or r.get("available")
+    avail_raw = r.get("isAvailable") if "isAvailable" in r else (r.get("avail") or r.get("available"))
     if isinstance(avail_raw, str):
         available = avail_raw.lower() in ("yes", "true", "available", "1")
     elif isinstance(avail_raw, bool):
         available = avail_raw
     else:
         available = None
-    price = str(r.get("price") or r.get("regular_price") or "")
+    # Bevorzugt Promo-Preis, sonst regulär
+    price_str = str(r.get("price") or r.get("regularPrice") or r.get("regular_price") or "")
+    try:
+        cents = int(round(float(price_str) * 100)) if price_str else 0
+    except ValueError:
+        cents = 0
     return {
-        "available": available, "price": price, "currency": "USD",
-        "premium": bool(r.get("premium")),
+        "available": available, "price": price_str, "cents": cents,
+        "currency": "USD",
+        "premium": bool(r.get("isPremium") or r.get("premium")),
         "raw": resp, "error": "",
     }
+
+
+def pb_register_domain(api_key: str, api_secret: str, domain: str,
+                        cost_cents: int) -> dict:
+    """POST /domain/create/{domain} — Body {cost, agreeToTerms:"yes"}.
+    Cost in Cents, muss zum Availability-Preis passen sonst reject.
+    Nutzt die Default-Kontakte am Account (im Porkbun-Dashboard einmal setzen)."""
+    if cost_cents <= 0:
+        return {"ok": False, "msg": "cost=0 — Availability-Check zuerst nötig",
+                "raw": {}}
+    resp = _pb_call(api_key, api_secret, f"/domain/create/{domain}",
+                    body={"cost": cost_cents, "agreeToTerms": "yes"},
+                    timeout=45)
+    status = (resp.get("status") or "").upper()
+    if status == "SUCCESS":
+        return {"ok": True, "msg": "registriert",
+                "order_id": resp.get("orderId") or resp.get("order_id"),
+                "balance": resp.get("balance"),
+                "raw": resp}
+    return {"ok": False,
+            "msg": resp.get("message") or resp.get("_error") or f"HTTP {resp.get('_status')}",
+            "raw": resp}
 
 
 def pb_get_pricing(api_key: str, api_secret: str) -> dict:
@@ -317,12 +351,15 @@ async def search_domains(request: Request, query: str = Form(""),
             if r["premium"]:
                 badge = '<span class="badge badge-warning">Premium</span>'
             price = f'{r["price"]} {r["currency"]}' if r["price"] else '—'
-            buy_url = f'https://porkbun.com/checkout/search?q={d}'
+            confirm_txt = f"{d} für {price} kaufen und automatisch mit Cloudflare verbinden?"
             action = (
-                f'<a href="{escape(buy_url)}" target="_blank" rel="noopener" '
-                f'class="btn btn-primary btn-xs">→ Bei Porkbun kaufen</a>'
-                f'<span class="muted" style="margin-left:6px;font-size:11px">'
-                f'nach Kauf zurück → „In deinem Account" → CF setzen</span>'
+                f'<button class="btn btn-primary btn-xs" '
+                f'hx-post="/porkbun/buy" '
+                f'hx-vals=\'{{"domain":"{escape(d)}"}}\' '
+                f'hx-include="#pb-search-account,#pb-cf-account" '
+                f'hx-target="#pb-buy-result" hx-swap="innerHTML" '
+                f'hx-confirm="{escape(confirm_txt)}">'
+                f'→ Kaufen + CF anschließen</button>'
             )
         elif r["available"] is False:
             badge = '<span class="badge badge-failed">Vergeben</span>'
@@ -349,8 +386,147 @@ async def search_domains(request: Request, query: str = Form(""),
         '<th>Domain</th><th>Status</th><th>Preis</th><th></th>'
         '</tr></thead><tbody>' + rows + '</tbody></table>'
         '<p class="muted" style="font-size:11px;margin-top:6px">'
-        'Porkbun bietet kein Register-via-API — daher externer Buy-Link.</p>'
+        'Register geht über <code>/domain/create/{domain}</code>. Default-Contacts '
+        'müssen im Porkbun-Dashboard einmal gesetzt sein.</p>'
     )
+
+
+def _do_buy_pb(db, api_key, api_secret, domain, cf_account_id, log):
+    """Register → CF-Zone → NS bei Porkbun setzen (mit Retry). Analog
+    Dynadot _do_buy."""
+    log.append(f"Availability-Check für {domain}…")
+    av = pb_check_availability(api_key, api_secret, domain)
+    if av["available"] is not True:
+        log.append(f"Nicht verfügbar ({av.get('error') or 'occupied'}) — abbruch.")
+        return
+    if av["cents"] <= 0:
+        log.append("Kein Preis vom Availability-Check — abbruch.")
+        return
+    log.append(f"Verfügbar: {av['price']} USD ({av['cents']} cents).")
+    if av["premium"]:
+        log.append("⚠ Premium-Domain! Weiter mit angegebenem Preis.")
+
+    log.append(f"Register {domain} über /domain/create/{domain}…")
+    reg = pb_register_domain(api_key, api_secret, domain, av["cents"])
+    if not reg["ok"]:
+        log.append(f"Register fehlgeschlagen: {reg['msg']}")
+        return
+    log.append(f"✓ Registriert. OrderID: {reg.get('order_id') or '?'}")
+    if reg.get("balance") is not None:
+        log.append(f"Neue Balance: {reg['balance']}")
+
+    # CF-Zone anlegen + NS setzen
+    from .dynadot import _cf_headers_for
+    cf_headers, account_id = _cf_headers_for(db, cf_account_id)
+    if not cf_headers:
+        log.append("Kein CF-Account konfiguriert — überspringe Zone-Anlage.")
+        log.append(f"Fertig: {domain} gehört dir, NS noch beim Porkbun-Default.")
+        return
+
+    log.append("Cloudflare-Zone anlegen…")
+    try:
+        import requests as _req
+        body = {"name": domain, "type": "full"}
+        if account_id:
+            body["account"] = {"id": account_id}
+        r = _req.post("https://api.cloudflare.com/client/v4/zones",
+                      headers=cf_headers, json=body, timeout=20)
+        data = r.json()
+        if not data.get("success"):
+            # Vielleicht existiert die Zone schon
+            r = _req.get("https://api.cloudflare.com/client/v4/zones",
+                         headers=cf_headers, params={"name": domain}, timeout=15)
+            data = r.json()
+            if not data.get("success") or not data.get("result"):
+                errs = "; ".join(e.get("message", "") for e in data.get("errors", []))
+                log.append(f"CF-Zone Fehler: {errs or 'unknown'}")
+                return
+            zone = data["result"][0]
+        else:
+            zone = data["result"]
+        ns_list = zone.get("name_servers", [])
+        zone_id = zone.get("id", "")
+        log.append(f"CF-Zone: {zone_id[:12]}… NS: {', '.join(ns_list)}")
+    except Exception as e:
+        log.append(f"CF-Zone Ausnahme: {e}")
+        return
+
+    if not ns_list:
+        log.append("Keine NS von CF geliefert — abbruch NS-Set.")
+        return
+
+    log.append("Nameserver bei Porkbun setzen…")
+    res = pb_set_ns_with_retry(
+        api_key, api_secret, domain, ns_list,
+        log_step=lambda label, ok, detail: log.append(
+            f"{'✓' if ok else '…'} {label}"
+            f"{': ' + detail if detail else ''}"))
+    if res["ok"]:
+        log.append(f"✓ NS gesetzt. {domain} zeigt jetzt auf Cloudflare.")
+    else:
+        log.append(f"✗ NS-Set fehlgeschlagen: {res['msg']} — "
+                    "später manuell via '→ CF-Zone + NS' retryen.")
+
+
+@router.post("/porkbun/buy", response_class=HTMLResponse)
+async def buy_domain(request: Request, domain: str = Form(""),
+                      account_id: int = Form(0),
+                      cf_account_id: int = Form(0)):
+    """One-Click Register + CF + NS für eine Porkbun-Domain."""
+    db = request.app.state.db
+    key, secret, name = _pb_from_account_id(db, account_id)
+    if not key or not secret:
+        return HTMLResponse('<div class="alert alert-danger">Kein Porkbun-Account gesetzt.</div>')
+    domain = domain.strip().lower()
+    if not domain or "." not in domain:
+        return HTMLResponse('<div class="alert alert-warning">Ungültige Domain.</div>')
+    if _pb_progress["running"]:
+        return HTMLResponse(
+            '<div class="alert alert-warning">Bereits ein Kauf am laufen. '
+            'Warte bis der aktuelle fertig ist.</div>')
+    _pb_progress.update(running=True, log=[], domain=domain, done=False)
+
+    def worker():
+        log = _pb_progress["log"]
+        try:
+            _do_buy_pb(db, key, secret, domain, cf_account_id, log)
+        except Exception as e:
+            log.append(f"Fatal: {e}")
+        finally:
+            _pb_progress["done"] = True
+            _pb_progress["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    return HTMLResponse(
+        f'<div class="alert alert-info">Kaufe <code>{escape(domain)}</code>…</div>'
+        f'<div id="pb-buy-live" hx-get="/porkbun/buy-progress" '
+        f'hx-trigger="every 2s" hx-swap="innerHTML"></div>'
+    )
+
+
+@router.get("/porkbun/buy-progress", response_class=HTMLResponse)
+async def buy_progress(request: Request):
+    log = _pb_progress["log"]
+    done = _pb_progress["done"]
+    lines = ""
+    for line in log:
+        color = "var(--fg)"
+        low = line.lower()
+        if "✓" in line or "registriert" in low or "fertig" in low or "gesetzt" in low:
+            color = "var(--green)"
+        elif "✗" in line or "fehlgeschlagen" in low or "fehler" in low or "fatal" in low or "abbruch" in low:
+            color = "var(--red)"
+        elif "warte" in low or "⚠" in line:
+            color = "var(--yellow)"
+        lines += f'<div style="color:{color};padding:2px 0">{escape(line)}</div>'
+    html = (
+        '<div style="font-family:monospace;font-size:12px;background:var(--bg);'
+        'padding:12px;border-radius:var(--radius)">' + lines + '</div>'
+    )
+    if not done:
+        html += ('<div hx-get="/porkbun/buy-progress" hx-trigger="every 2s" '
+                 'hx-swap="outerHTML"></div>')
+    return HTMLResponse(html)
 
 
 @router.post("/porkbun/quick-cf", response_class=HTMLResponse)

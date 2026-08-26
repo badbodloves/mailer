@@ -37,9 +37,9 @@
     <div class="card">
         <h3>Domain-Suche</h3>
         <p class="muted" style="font-size:12px">
-            Bulk-Check auf Verfügbarkeit + Preis. Wenn die Domain schon im Account ist,
-            direkt CF-Zone + Nameserver setzen. Porkbun bietet <strong>kein
-            Register-via-API</strong>, daher externer Buy-Link.
+            Bulk-Check auf Verfügbarkeit + Preis. Verfügbare Domains kannst du direkt
+            per API kaufen (Register → CF-Zone → NS setzen alles in einem).
+            Domains die schon im Account sind → direkt CF-Zone + NS setzen.
         </p>
         <form hx-post="/porkbun/search" hx-target="#pb-search-result" hx-swap="innerHTML"
               hx-include="#pb-search-account">
@@ -49,6 +49,7 @@
             <button class="btn btn-primary btn-sm" style="margin-top:8px">Verfügbarkeit prüfen</button>
         </form>
         <div id="pb-search-result" style="margin-top:12px"></div>
+        <div id="pb-buy-result" style="margin-top:12px"></div>
     </div>
 
     <div class="card">
