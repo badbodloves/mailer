@@ -74,7 +74,33 @@ def pb_get_ns(api_key: str, api_secret: str, domain: str) -> dict:
 
 
 def pb_check_availability(api_key: str, api_secret: str, domain: str) -> dict:
-    return _pb_call(api_key, api_secret, f"/domain/checkDomain/{domain}")
+    """Rückgabe: {available: bool|None, price: str, currency: str,
+                  premium: bool, raw: dict, error: str}."""
+    resp = _pb_call(api_key, api_secret, f"/domain/checkDomain/{domain}")
+    if resp.get("status") != "SUCCESS":
+        return {
+            "available": None, "price": "", "currency": "USD",
+            "premium": False, "raw": resp,
+            "error": resp.get("message") or resp.get("_error") or "unknown",
+        }
+    r = resp.get("response") or {}
+    avail_raw = r.get("avail") or r.get("available")
+    if isinstance(avail_raw, str):
+        available = avail_raw.lower() in ("yes", "true", "available", "1")
+    elif isinstance(avail_raw, bool):
+        available = avail_raw
+    else:
+        available = None
+    price = str(r.get("price") or r.get("regular_price") or "")
+    return {
+        "available": available, "price": price, "currency": "USD",
+        "premium": bool(r.get("premium")),
+        "raw": resp, "error": "",
+    }
+
+
+def pb_get_pricing(api_key: str, api_secret: str) -> dict:
+    return _pb_call(api_key, api_secret, "/pricing/get")
 
 
 def pb_set_nameservers(api_key: str, api_secret: str, domain: str,
@@ -138,12 +164,14 @@ async def porkbun_page(request: Request):
         dlist = pb_list_domains(pd["api_key"], pd["api_secret"])
         if dlist.get("status") == "SUCCESS":
             domains = dlist.get("domains") or []
+    cf_accounts = [dict(a) for a in db.get_cf_accounts()]
     return request.app.state.templates.TemplateResponse(request, "porkbun.html", {
         "active": "porkbun",
         "accounts": accounts,
         "primary": primary and dict(primary),
         "domains": domains[:200],
         "ping_ip": ping_ip,
+        "cf_accounts": cf_accounts,
     })
 
 
@@ -235,6 +263,103 @@ async def set_ns_route(request: Request, domain: str = Form(""),
         f'<div style="color:var(--red)">✗ {escape(res["msg"])}</div>'
         f'<ul style="font-size:11px;color:var(--fg2)">{log_html}</ul>'
     )
+
+
+@router.post("/porkbun/search", response_class=HTMLResponse)
+async def search_domains(request: Request, query: str = Form(""),
+                          account_id: int = Form(0)):
+    """Bulk-Availability. Porkbun bietet KEIN API-Register — daher für
+    verfügbare Domains ein Deep-Link zu Porkbun-Cart."""
+    db = request.app.state.db
+    key, secret, name = _pb_from_account_id(db, account_id)
+    if not key or not secret:
+        return HTMLResponse('<div class="alert alert-danger">Kein Porkbun-Account gesetzt.</div>')
+    domains_raw = [d.strip().lower() for d in query.replace(",", "\n").splitlines() if d.strip()]
+    if not domains_raw:
+        return HTMLResponse('<div class="alert alert-warning">Mindestens eine Domain eingeben.</div>')
+
+    # Domains im Account? (aus /domain/listAll)
+    owned = set()
+    try:
+        dl = pb_list_domains(key, secret)
+        if dl.get("status") == "SUCCESS":
+            for it in dl.get("domains") or []:
+                nm = (it.get("domain") or it.get("name") or "").lower()
+                if nm:
+                    owned.add(nm)
+    except Exception as e:
+        logger.warning("owned-lookup failed: %s", e)
+
+    rows = ""
+    for d in domains_raw[:40]:
+        did = d.replace(".", "-")
+        if d in owned:
+            rows += (
+                f'<tr>'
+                f'<td style="font-family:monospace">{escape(d)}</td>'
+                f'<td><span class="badge badge-info">In deinem Account</span></td>'
+                f'<td>—</td>'
+                f'<td>'
+                f'<button class="btn btn-primary btn-xs" '
+                f'hx-post="/porkbun/quick-cf" '
+                f'hx-vals=\'{{"domain":"{escape(d)}"}}\' '
+                f'hx-include="#pb-cf-account,#pb-search-account" '
+                f'hx-target="#pb-search-result-{did}" hx-swap="innerHTML">'
+                f'→ CF-Zone + NS setzen</button>'
+                f'<div id="pb-search-result-{did}" style="margin-top:4px;font-size:11px"></div>'
+                f'</td>'
+                f'</tr>'
+            )
+            continue
+        r = pb_check_availability(key, secret, d)
+        if r["available"] is True:
+            badge = '<span class="badge badge-running">Verfügbar</span>'
+            if r["premium"]:
+                badge = '<span class="badge badge-warning">Premium</span>'
+            price = f'{r["price"]} {r["currency"]}' if r["price"] else '—'
+            buy_url = f'https://porkbun.com/checkout/search?q={d}'
+            action = (
+                f'<a href="{escape(buy_url)}" target="_blank" rel="noopener" '
+                f'class="btn btn-primary btn-xs">→ Bei Porkbun kaufen</a>'
+                f'<span class="muted" style="margin-left:6px;font-size:11px">'
+                f'nach Kauf zurück → „In deinem Account" → CF setzen</span>'
+            )
+        elif r["available"] is False:
+            badge = '<span class="badge badge-failed">Vergeben</span>'
+            price = "—"
+            action = '<span class="muted" style="font-size:11px">—</span>'
+        else:
+            badge = '<span class="badge badge-warning">?</span>'
+            price = "—"
+            action = (
+                f'<span class="muted" style="font-size:11px">'
+                f'{escape(r["error"][:80])}</span>'
+            )
+        rows += (
+            f'<tr>'
+            f'<td style="font-family:monospace">{escape(d)}</td>'
+            f'<td>{badge}</td>'
+            f'<td style="font-size:12px">{escape(price)}</td>'
+            f'<td>{action}</td>'
+            f'</tr>'
+        )
+
+    return HTMLResponse(
+        '<table style="font-size:12px"><thead><tr>'
+        '<th>Domain</th><th>Status</th><th>Preis</th><th></th>'
+        '</tr></thead><tbody>' + rows + '</tbody></table>'
+        '<p class="muted" style="font-size:11px;margin-top:6px">'
+        'Porkbun bietet kein Register-via-API — daher externer Buy-Link.</p>'
+    )
+
+
+@router.post("/porkbun/quick-cf", response_class=HTMLResponse)
+async def porkbun_quick_cf(request: Request, domain: str = Form(""),
+                            cf_account_id: int = Form(0),
+                            account_id: int = Form(0)):
+    return await set_ns_from_cf(request, domain=domain,
+                                 cf_account_id=cf_account_id,
+                                 account_id=account_id)
 
 
 @router.post("/porkbun/set-ns-cf", response_class=HTMLResponse)

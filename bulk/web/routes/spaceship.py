@@ -86,14 +86,57 @@ def ss_get_domain(api_key: str, api_secret: str, domain: str) -> dict:
 
 
 def ss_check_availability(api_key: str, api_secret: str, domain: str) -> dict:
-    """Availability-Check — endpoint variiert je Version, wir versuchen zwei."""
-    resp = _ss_call(api_key, api_secret, "GET",
-                    f"/domains/{domain}/registration/availability")
-    if resp.get("_status") == 404:
-        # Fallback: alter Pfad
-        resp = _ss_call(api_key, api_secret, "GET",
-                        f"/domains/availability", params={"domain": domain})
-    return resp
+    """Availability-Check — mehrere mögliche Endpoints (docs sind unklar).
+    Rückgabe: {available: bool|None, price: str, currency: str,
+               premium: bool, raw: dict, error: str}."""
+    tried = []
+    endpoints = [
+        ("GET", f"/domains/{domain}/registration/availability", None, None),
+        ("GET", "/domains/availability", {"domainName": domain}, None),
+        ("GET", "/domains/availability", {"domain": domain}, None),
+        ("POST", "/domains/availability", None, {"domainNames": [domain]}),
+    ]
+    last_resp = {}
+    for method, path, params, body in endpoints:
+        resp = _ss_call(api_key, api_secret, method, path,
+                        params=params, body=body)
+        tried.append({"path": path, "status": resp.get("_status")})
+        last_resp = resp
+        if resp.get("_status") and resp["_status"] < 400:
+            item = resp
+            if isinstance(resp.get("items"), list) and resp["items"]:
+                item = resp["items"][0]
+            elif isinstance(resp.get("results"), list) and resp["results"]:
+                item = resp["results"][0]
+            avail_raw = (item.get("isAvailable") or item.get("available")
+                         or item.get("availability"))
+            if isinstance(avail_raw, str):
+                available = avail_raw.lower() in ("true", "yes", "available", "1")
+            elif isinstance(avail_raw, bool):
+                available = avail_raw
+            else:
+                available = None
+            price_obj = item.get("price") or item.get("premiumPrice") or {}
+            if isinstance(price_obj, (int, float, str)):
+                price_str = str(price_obj)
+                currency = item.get("currency", "USD")
+            elif isinstance(price_obj, dict):
+                price_str = str(price_obj.get("amount") or price_obj.get("value") or "?")
+                currency = price_obj.get("currency", item.get("currency", "USD"))
+            else:
+                price_str = ""
+                currency = ""
+            premium = bool(item.get("isPremium") or item.get("premium"))
+            return {
+                "available": available, "price": price_str,
+                "currency": currency, "premium": premium,
+                "raw": resp, "error": "",
+            }
+    return {
+        "available": None, "price": "", "currency": "", "premium": False,
+        "raw": last_resp,
+        "error": last_resp.get("_error") or f"kein Endpoint hat funktioniert (tried: {tried})",
+    }
 
 
 def ss_register(api_key: str, api_secret: str, domain: str,
@@ -172,12 +215,14 @@ async def spaceship_page(request: Request):
             items = dlist.get("items") or dlist.get("data") or []
             if isinstance(items, list):
                 domains = items[:100]
+    cf_accounts = [dict(a) for a in db.get_cf_accounts()]
     return request.app.state.templates.TemplateResponse(request, "spaceship.html", {
         "active": "spaceship",
         "accounts": accounts,
         "primary": primary and dict(primary),
         "domains": domains,
         "balance": balance,
+        "cf_accounts": cf_accounts,
     })
 
 
@@ -271,6 +316,107 @@ async def set_ns_route(request: Request, domain: str = Form(""),
         f'<div style="color:var(--red)">✗ {escape(res["msg"])}</div>'
         f'<ul style="font-size:11px;color:var(--fg2)">{log_html}</ul>'
     )
+
+
+@router.post("/spaceship/search", response_class=HTMLResponse)
+async def search_domains(request: Request, query: str = Form(""),
+                          account_id: int = Form(0)):
+    """Bulk-Availability-Check. Registrieren via API bräuchte Contact-Profile,
+    daher zeigen wir für „available" nur einen Deep-Link zur Spaceship-Cart."""
+    db = request.app.state.db
+    key, secret, name = _ss_from_account_id(db, account_id)
+    if not key or not secret:
+        return HTMLResponse('<div class="alert alert-danger">Kein Spaceship-Account gesetzt.</div>')
+    domains_raw = [d.strip().lower() for d in query.replace(",", "\n").splitlines() if d.strip()]
+    if not domains_raw:
+        return HTMLResponse('<div class="alert alert-warning">Mindestens eine Domain eingeben.</div>')
+
+    # Bereits im Account? → dann Set-NS-Button, kein Buy-Link
+    owned = set()
+    try:
+        dlist = ss_list_domains(key, secret, take=500)
+        if not dlist.get("_error"):
+            items = dlist.get("items") or dlist.get("data") or []
+            for it in items:
+                nm = (it.get("name") or it.get("domain") or "").lower()
+                if nm:
+                    owned.add(nm)
+    except Exception as e:
+        logger.warning("owned-lookup failed: %s", e)
+
+    rows = ""
+    for d in domains_raw[:40]:
+        did = d.replace(".", "-")
+        if d in owned:
+            rows += (
+                f'<tr>'
+                f'<td style="font-family:monospace">{escape(d)}</td>'
+                f'<td><span class="badge badge-info">In deinem Account</span></td>'
+                f'<td>—</td>'
+                f'<td>'
+                f'<button class="btn btn-primary btn-xs" '
+                f'hx-post="/spaceship/quick-cf" '
+                f'hx-vals=\'{{"domain":"{escape(d)}"}}\' '
+                f'hx-include="#ss-cf-account,#ss-search-account" '
+                f'hx-target="#ss-search-result-{did}" hx-swap="innerHTML">'
+                f'→ CF-Zone + NS setzen</button>'
+                f'<div id="ss-search-result-{did}" style="margin-top:4px;font-size:11px"></div>'
+                f'</td>'
+                f'</tr>'
+            )
+            continue
+        r = ss_check_availability(key, secret, d)
+        if r["available"] is True:
+            badge = '<span class="badge badge-running">Verfügbar</span>'
+            if r["premium"]:
+                badge = '<span class="badge badge-warning">Premium</span>'
+            price = f'{r["price"]} {r["currency"]}' if r["price"] else '—'
+            buy_url = f'https://www.spaceship.com/domain-search/?query={d}'
+            action = (
+                f'<a href="{escape(buy_url)}" target="_blank" rel="noopener" '
+                f'class="btn btn-primary btn-xs">→ Bei Spaceship kaufen</a>'
+                f'<span class="muted" style="margin-left:6px;font-size:11px">'
+                f'nach Kauf zurück → „In deinem Account" → CF setzen</span>'
+            )
+        elif r["available"] is False:
+            badge = '<span class="badge badge-failed">Vergeben</span>'
+            price = "—"
+            action = '<span class="muted" style="font-size:11px">—</span>'
+        else:
+            badge = '<span class="badge badge-warning">?</span>'
+            price = "—"
+            action = (
+                f'<span class="muted" style="font-size:11px">'
+                f'{escape(r["error"][:80])}</span>'
+            )
+        rows += (
+            f'<tr>'
+            f'<td style="font-family:monospace">{escape(d)}</td>'
+            f'<td>{badge}</td>'
+            f'<td style="font-size:12px">{escape(price)}</td>'
+            f'<td>{action}</td>'
+            f'</tr>'
+        )
+
+    return HTMLResponse(
+        '<table style="font-size:12px"><thead><tr>'
+        '<th>Domain</th><th>Status</th><th>Preis</th><th></th>'
+        '</tr></thead><tbody>' + rows + '</tbody></table>'
+        '<p class="muted" style="font-size:11px;margin-top:6px">'
+        'Register-via-API braucht Contact-Profile in Spaceship — daher '
+        'externer Buy-Link.</p>'
+    )
+
+
+@router.post("/spaceship/quick-cf", response_class=HTMLResponse)
+async def spaceship_quick_cf(request: Request, domain: str = Form(""),
+                              cf_account_id: int = Form(0),
+                              account_id: int = Form(0)):
+    """One-Click für Domains die schon im Account sind: CF-Zone anlegen
+    (falls nicht da) → NS bei Spaceship setzen. Ruft intern set_ns_from_cf."""
+    return await set_ns_from_cf(request, domain=domain,
+                                 cf_account_id=cf_account_id,
+                                 account_id=account_id)
 
 
 @router.post("/spaceship/set-ns-cf", response_class=HTMLResponse)
