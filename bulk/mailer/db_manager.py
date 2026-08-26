@@ -331,6 +331,17 @@ class BulkDBManager:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
 
+        # Porkbun Registrar Accounts
+        if "porkbun_accounts" not in tables:
+            c.execute("""CREATE TABLE porkbun_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                api_key TEXT DEFAULT '',
+                api_secret TEXT DEFAULT '',
+                is_primary INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )""")
+
         # PDF Variator pools (kv-store, ein Eintrag pro Pool-Typ)
         if "pdf_variator_pools" not in tables:
             c.execute("""CREATE TABLE pdf_variator_pools (
@@ -1127,4 +1138,59 @@ class BulkDBManager:
                 "SELECT id FROM spaceship_accounts ORDER BY id LIMIT 1").fetchone()
             if first:
                 c.execute("UPDATE spaceship_accounts SET is_primary=1 WHERE id=?", (first[0],))
+        c.commit()
+
+    # ── Porkbun Registrar-Accounts ─────────────────────────
+    def add_porkbun_account(self, name: str, api_key: str,
+                              api_secret: str = "") -> int:
+        c = self._conn()
+        existing = c.execute("SELECT COUNT(*) FROM porkbun_accounts").fetchone()[0]
+        is_primary = 1 if existing == 0 else 0
+        c.execute("INSERT INTO porkbun_accounts (name, api_key, api_secret, is_primary) "
+                  "VALUES (?,?,?,?)",
+                  (name, api_key, api_secret, is_primary))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def update_porkbun_account(self, aid: int, **fields):
+        if not fields:
+            return
+        c = self._conn()
+        sets = ", ".join(f"{k}=?" for k in fields)
+        c.execute(f"UPDATE porkbun_accounts SET {sets} WHERE id=?",
+                  list(fields.values()) + [aid])
+        c.commit()
+
+    def get_porkbun_accounts(self) -> list:
+        return self._conn().execute(
+            "SELECT * FROM porkbun_accounts ORDER BY is_primary DESC, name").fetchall()
+
+    def get_porkbun_account(self, aid: int):
+        return self._conn().execute(
+            "SELECT * FROM porkbun_accounts WHERE id=?", (aid,)).fetchone()
+
+    def get_primary_porkbun_account(self):
+        row = self._conn().execute(
+            "SELECT * FROM porkbun_accounts WHERE is_primary=1 LIMIT 1").fetchone()
+        if row:
+            return row
+        return self._conn().execute(
+            "SELECT * FROM porkbun_accounts ORDER BY id LIMIT 1").fetchone()
+
+    def set_primary_porkbun_account(self, aid: int):
+        c = self._conn()
+        c.execute("UPDATE porkbun_accounts SET is_primary=0")
+        c.execute("UPDATE porkbun_accounts SET is_primary=1 WHERE id=?", (aid,))
+        c.commit()
+
+    def delete_porkbun_account(self, aid: int):
+        c = self._conn()
+        was_primary = c.execute(
+            "SELECT is_primary FROM porkbun_accounts WHERE id=?", (aid,)).fetchone()
+        c.execute("DELETE FROM porkbun_accounts WHERE id=?", (aid,))
+        if was_primary and was_primary[0]:
+            first = c.execute(
+                "SELECT id FROM porkbun_accounts ORDER BY id LIMIT 1").fetchone()
+            if first:
+                c.execute("UPDATE porkbun_accounts SET is_primary=1 WHERE id=?", (first[0],))
         c.commit()
