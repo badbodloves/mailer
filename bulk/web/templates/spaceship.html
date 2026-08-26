@@ -1,0 +1,140 @@
+{% extends "base.html" %}
+{% block title %} — Spaceship{% endblock %}
+{% block content %}
+<div class="page-header">
+    <h1>Spaceship Registrar</h1>
+</div>
+
+<div class="grid-2" style="align-items:start">
+    <div class="card">
+        <h3>Accounts</h3>
+        <p class="muted" style="font-size:12px">
+            Zwei Header pro Account: <code>X-API-Key</code> + <code>X-API-Secret</code>.
+            Aus dem Spaceship-Dashboard unter „API Management" holen.
+        </p>
+        {% if accounts %}
+        <table style="font-size:12px">
+            <thead><tr><th>Name</th><th>API-Key</th><th>Primary</th><th></th></tr></thead>
+            <tbody>
+            {% for a in accounts %}
+            <tr>
+                <td>{{ a.name }}</td>
+                <td style="font-family:monospace;font-size:11px">{{ a.api_key[:6] }}…{{ a.api_key[-4:] if a.api_key|length > 10 else '' }}</td>
+                <td>{% if a.is_primary %}<span class="badge badge-running">Primary</span>{% else %}
+                    <form method="post" action="/spaceship/accounts/{{ a.id }}/set-primary" style="display:inline">
+                        <button class="btn btn-secondary btn-xs">Set primary</button>
+                    </form>{% endif %}
+                </td>
+                <td>
+                    <button type="button" class="btn btn-secondary btn-xs"
+                            hx-post="/spaceship/test"
+                            hx-vals='{"account_id":"{{ a.id }}"}'
+                            hx-target="#test-{{ a.id }}" hx-swap="innerHTML">Test</button>
+                    <form method="post" action="/spaceship/accounts/{{ a.id }}/delete" style="display:inline"
+                          onsubmit="return confirm('Delete account?')">
+                        <button class="btn btn-danger btn-xs">×</button>
+                    </form>
+                    <div id="test-{{ a.id }}" style="margin-top:4px;font-size:11px"></div>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+        {% endif %}
+        <details {{ 'open' if not accounts }} style="margin-top:12px">
+            <summary style="cursor:pointer;font-size:12px">+ Account hinzufügen</summary>
+            <form method="post" action="/spaceship/accounts/add" style="margin-top:8px">
+                <label>Name</label>
+                <input name="name" placeholder="Main-Account" required>
+                <label>API Key</label>
+                <input name="api_key" type="password" required>
+                <label>API Secret</label>
+                <input name="api_secret" type="password" required>
+                <button class="btn btn-primary btn-sm" style="margin-top:8px">Hinzufügen</button>
+            </form>
+        </details>
+    </div>
+
+    <div class="card">
+        <h3>Nameserver setzen (mit Auto-CF-Zone)</h3>
+        <p class="muted" style="font-size:12px">
+            Zwei Wege:<br>
+            <strong>a)</strong> „Auto CF": Domain eintragen → CF-Zone wird angelegt (falls nicht schon da) →
+            NS bei Spaceship gesetzt. Braucht CF-Account im <a href="/cloudflare">CF-Panel</a>.<br>
+            <strong>b)</strong> „Manuell": NS-Liste (eine pro Zeile) selbst reintippen.
+        </p>
+
+        <details open>
+            <summary style="cursor:pointer;font-size:12px"><strong>a) Auto CF-Connect</strong></summary>
+            <form hx-post="/spaceship/set-ns-cf" hx-target="#cf-connect-result" hx-swap="innerHTML"
+                  style="margin-top:8px">
+                <label>Domain</label>
+                <input name="domain" placeholder="deine-domain.de" required>
+                <div class="grid-2">
+                    <div>
+                        <label>CF-Account-ID (0 = erster)</label>
+                        <input name="cf_account_id" type="number" value="0" min="0">
+                    </div>
+                    <div>
+                        <label>Spaceship-Account-ID (0 = primary)</label>
+                        <input name="account_id" type="number" value="0" min="0">
+                    </div>
+                </div>
+                <button class="btn btn-primary btn-sm" style="margin-top:8px">CF-Zone + NS setzen</button>
+            </form>
+            <div id="cf-connect-result" style="margin-top:10px"></div>
+        </details>
+
+        <details style="margin-top:12px">
+            <summary style="cursor:pointer;font-size:12px"><strong>b) Manuell</strong></summary>
+            <form hx-post="/spaceship/set-ns" hx-target="#ns-manual-result" hx-swap="innerHTML"
+                  style="margin-top:8px">
+                <label>Domain</label>
+                <input name="domain" placeholder="deine-domain.de" required>
+                <label>Nameserver (eine pro Zeile)</label>
+                <textarea name="nameservers" rows="4" style="font-family:monospace;font-size:12px" required
+                          placeholder="alice.ns.cloudflare.com&#10;bob.ns.cloudflare.com"></textarea>
+                <label>Spaceship-Account-ID (0 = primary)</label>
+                <input name="account_id" type="number" value="0" min="0">
+                <button class="btn btn-primary btn-sm" style="margin-top:8px">NS setzen (mit Retry)</button>
+            </form>
+            <div id="ns-manual-result" style="margin-top:10px"></div>
+        </details>
+    </div>
+</div>
+
+{% if primary %}
+<div class="card" style="margin-top:16px">
+    <h3>Domains im Account „{{ primary.name }}"</h3>
+    <p class="muted" style="font-size:12px">Balance: <strong>{{ balance }}</strong>
+        · {{ domains|length }} Domain(s) geladen</p>
+    {% if domains %}
+    <table style="font-size:12px">
+        <thead><tr><th>Domain</th><th>Status</th><th>Auto-Renew</th><th>Expiry</th><th></th></tr></thead>
+        <tbody>
+        {% for d in domains %}
+        <tr>
+            <td style="font-family:monospace">{{ d.name or d.domain or '?' }}</td>
+            <td>{{ d.status or '—' }}</td>
+            <td>{% if d.autoRenew %}✓{% else %}—{% endif %}</td>
+            <td style="font-size:11px">{{ (d.expirationDate or d.expiresAt or '')[:10] }}</td>
+            <td>
+                <button type="button" class="btn btn-secondary btn-xs"
+                        onclick="document.querySelector('[name=domain]').value='{{ d.name or d.domain }}'; window.scrollTo(0,0)">
+                    → NS setzen
+                </button>
+            </td>
+        </tr>
+        {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p class="muted">Keine Domains geladen (oder Endpoint-Format anders). Wenn du sicher bist dass welche existieren, check ob dein API-Key die richtigen Scopes hat.</p>
+    {% endif %}
+</div>
+{% else %}
+<div class="card" style="margin-top:16px">
+    <p class="muted">Erst einen Spaceship-Account hinzufügen um Domains + Balance zu sehen.</p>
+</div>
+{% endif %}
+{% endblock %}
