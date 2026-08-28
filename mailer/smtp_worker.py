@@ -99,6 +99,14 @@ class SMTPAccount:
     warmup_done: bool = False
     fail_count: int = 0
     suspended_until: float = 0.0
+    # Provider-Typ — "smtp" (Standard) oder "ses_api". Bei ses_api sind:
+    #   user  = IAM Access Key ID
+    #   password = IAM Secret Access Key
+    #   host = "ses-api" (Marker, ignoriert)
+    #   port = 0 (ignoriert)
+    provider: str = "smtp"
+    region: str = ""
+    config_set: str = ""
     _warmup_sends: int = field(default=0, repr=False)
 
     @property
@@ -111,7 +119,13 @@ class SMTPAccount:
 
     @property
     def key(self) -> str:
+        if self.provider == "ses_api":
+            return f"ses:{self.region}:{self.user[:8]}"
         return f"{self.host}:{self.port}:{self.user}"
+
+    @property
+    def is_ses_api(self) -> bool:
+        return self.provider == "ses_api"
 
 
 class SMTPPool:
@@ -145,6 +159,11 @@ class SMTPPool:
             self._parse_smtp_file(fpath)
 
     def _parse_smtp_file(self, path: str) -> None:
+        """Zeilenformat:
+          Klassisch SMTP: host,port,user,password[,proxy]
+          SES-API:        ses-api,0,IAM_KEY,IAM_SECRET,,ses_api,REGION[,CONFIGSET]
+                          (leerer 5. Slot = kein Proxy, dann provider,region,cfgset)
+        """
         try:
             with open(path, "r", encoding="utf-8") as fh:
                 for line in fh:
@@ -161,8 +180,15 @@ class SMTPPool:
                         continue
                     user = parts[2].strip()
                     password = parts[3].strip()
-                    proxy = ProxyConfig.parse(parts[4]) if len(parts) >= 5 else None
-                    self._accounts.append(SMTPAccount(host, port, user, password, proxy=proxy))
+                    proxy_str = parts[4].strip() if len(parts) >= 5 else ""
+                    proxy = ProxyConfig.parse(proxy_str) if proxy_str else None
+                    provider = parts[5].strip() if len(parts) >= 6 else "smtp"
+                    region = parts[6].strip() if len(parts) >= 7 else ""
+                    config_set = parts[7].strip() if len(parts) >= 8 else ""
+                    self._accounts.append(SMTPAccount(
+                        host, port, user, password,
+                        proxy=proxy, provider=provider or "smtp",
+                        region=region, config_set=config_set))
         except OSError:
             pass
 
@@ -302,7 +328,11 @@ class SMTPPool:
             return s
         return None
 
-    def connect(self, account: SMTPAccount) -> smtplib.SMTP:
+    def connect(self, account: SMTPAccount):
+        """SMTP-Server-Object oder SES-Shim (quackt wie smtplib.SMTP)."""
+        if account.is_ses_api:
+            return _SESConnectionShim(account)
+
         ctx = self._build_ssl_context()
         if not account.proxy and self._proxies:
             account.proxy = self.get_current_proxy()
@@ -488,3 +518,165 @@ class SMTPWorker:
         else:
             base = self._normal_delay
         return max(0.05, random.gauss(base, base * 0.3))
+
+
+class _SESConnectionShim:
+    """Quackt wie smtplib.SMTP für die Sende-Loop, ruft aber SES v2
+    Simple-API. Nimmt das schon gebaute Raw-MIME entgegen, zerlegt es in
+    From/To/Subject/HTML/Text/Headers und schickt es strukturiert an SES.
+
+    So bleibt der bestehende _build_and_send-Pfad unverändert."""
+
+    def __init__(self, account: SMTPAccount):
+        self._account = account
+        # Wir cachen SES-Auth-Ergebnis nicht — einfach jeder Call ist ein
+        # HTTPS-Roundtrip. Keine langlebigen Sessions wie bei SMTP.
+
+    # ── SMTP-API-Kompatibilität ──────────────────────────
+    def noop(self):
+        # Simuliere gesundheit ohne echten Roundtrip — die Auth-Fehler
+        # kommen dann beim ersten sendmail() als Exception.
+        return (250, b"OK")
+
+    def ehlo(self, name=None):
+        return (250, b"ses-api-shim")
+
+    def has_extn(self, ext):
+        return False   # kein STARTTLS/PIPELINING etc.
+
+    def starttls(self, context=None):
+        return (220, b"noop")
+
+    def login(self, user, password):
+        return (235, b"noop")
+
+    def quit(self):
+        return (221, b"bye")
+
+    def close(self):
+        pass
+
+    def sendmail(self, from_addr, to_addrs, msg):
+        """Parst das Raw-MIME zurück in Simple-Content und schickt via SES."""
+        from email import message_from_string, message_from_bytes
+        from mailer.ses_api import (
+            ses_send_simple, SESAPIError, classify_ses_error,
+        )
+
+        if isinstance(msg, bytes):
+            parsed = message_from_bytes(msg)
+        else:
+            parsed = message_from_string(msg)
+
+        # Subject + From-Display-Name aus dem MIME lesen
+        subject = parsed.get("Subject", "") or ""
+        from_hdr = parsed.get("From", from_addr) or from_addr
+        display_name, from_email = _parse_from_header(from_hdr, fallback=from_addr)
+        reply_to = parsed.get("Reply-To", "") or ""
+
+        # HTML- und Text-Parts extrahieren
+        html_body, plain_body = _extract_html_text(parsed)
+
+        # Custom-Header die SES whitelistet — mit-übergeben.
+        # SES erlaubt in Content.Simple.Headers[]: List-Unsubscribe,
+        # List-Unsubscribe-Post, List-Help, List-Id, List-Owner,
+        # List-Archive, List-Subscribe, Message-ID sowie X-*.
+        allowed_prefixes = ("x-",)
+        allowed_exact = {
+            "list-unsubscribe", "list-unsubscribe-post", "list-help",
+            "list-id", "list-owner", "list-archive", "list-subscribe",
+            "message-id",
+        }
+        extra_headers = []
+        seen_names = set()
+        for hname, hval in parsed.items():
+            low = hname.lower()
+            if low in seen_names:
+                continue
+            if low in allowed_exact or low.startswith(allowed_prefixes):
+                extra_headers.append({"Name": hname, "Value": str(hval)})
+                seen_names.add(low)
+
+        # Empfänger aus to_addrs (Liste oder String)
+        if isinstance(to_addrs, (list, tuple)):
+            to_addr = to_addrs[0]
+        else:
+            to_addr = to_addrs
+
+        try:
+            resp = ses_send_simple(
+                iam_key=self._account.user,
+                iam_secret=self._account.password,
+                region=self._account.region or "us-east-1",
+                from_addr=from_email,
+                from_name=display_name,
+                to_addr=to_addr,
+                subject=subject,
+                html_body=html_body,
+                plain_body=plain_body,
+                extra_headers=extra_headers or None,
+                reply_to=reply_to,
+                configuration_set=self._account.config_set or "",
+            )
+            return {}   # smtplib.sendmail-kompatibel (leerer dict = success)
+        except SESAPIError as e:
+            # In SMTP-Exception übersetzen damit die bestehende
+            # Klassifizierung in campaigns.py greift
+            cat = classify_ses_error(e)
+            if cat == "auth":
+                raise smtplib.SMTPAuthenticationError(
+                    e.status or 535, str(e).encode())
+            if cat == "hard":
+                # Recipient-refused-Äquivalent (permanent)
+                raise smtplib.SMTPRecipientsRefused({
+                    to_addr: (550, str(e).encode())
+                })
+            # transient
+            raise smtplib.SMTPResponseException(
+                e.status or 421, str(e))
+
+
+def _parse_from_header(hdr: str, fallback: str = "") -> tuple:
+    """"Name <mail@x>" → ("Name", "mail@x"). Ohne Angle-Brackets: ("", hdr)."""
+    hdr = (hdr or "").strip()
+    if "<" in hdr and ">" in hdr:
+        name = hdr.split("<", 1)[0].strip().strip('"').strip()
+        addr = hdr.split("<", 1)[1].split(">", 1)[0].strip()
+        return name, addr or fallback
+    return "", hdr or fallback
+
+
+def _extract_html_text(msg) -> tuple:
+    """Return (html, plain) — strippt multipart-Wrapper. Base64/QP wird
+    dekodiert."""
+    html = ""
+    plain = ""
+    if msg.is_multipart():
+        for part in msg.walk():
+            ctype = part.get_content_type()
+            if part.is_multipart():
+                continue
+            try:
+                payload = part.get_payload(decode=True)
+                if payload is None:
+                    continue
+                charset = part.get_content_charset() or "utf-8"
+                text = payload.decode(charset, errors="replace")
+            except Exception:
+                continue
+            if ctype == "text/html" and not html:
+                html = text
+            elif ctype == "text/plain" and not plain:
+                plain = text
+    else:
+        try:
+            payload = msg.get_payload(decode=True)
+            charset = msg.get_content_charset() or "utf-8"
+            text = payload.decode(charset, errors="replace") if payload else ""
+        except Exception:
+            text = str(msg.get_payload() or "")
+        if msg.get_content_type() == "text/html":
+            html = text
+        else:
+            plain = text
+    return html, plain

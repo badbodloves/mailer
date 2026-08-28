@@ -739,12 +739,18 @@ def _run_campaign(db, cid: int):
         db.update_campaign(cid, status="FAILED")
         return
 
-    # Write temp SMTP file for SMTPPool
+    # Write temp SMTP file for SMTPPool.
+    # Zeilenformat: host,port,user,pass,proxy,provider,region,config_set
     smtp_file = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False)
     for s in smtps:
         if s.get("is_dead"):
             continue
-        smtp_file.write(f"{s['host']},{s['port']},{s['username']},{s['password']}\n")
+        provider = (s.get("provider_type") or "smtp").strip()
+        region = (s.get("ses_region") or "").strip()
+        cfg_set = (s.get("ses_config_set") or "").strip()
+        smtp_file.write(
+            f"{s['host']},{s['port']},{s['username']},{s['password']},"
+            f",{provider},{region},{cfg_set}\n")
     smtp_file.close()
 
     # Write temp proxy file if configured

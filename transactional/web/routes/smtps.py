@@ -146,6 +146,20 @@ async def import_smtps(request: Request, lid: int, smtp_text: str = Form("")):
                         f'<a href="/smtps" style="color:var(--accent)">Reload</a></div>')
 
 
+@router.post("/smtps/{lid}/import-ses", response_class=HTMLResponse)
+async def import_ses(request: Request, lid: int, ses_text: str = Form(""),
+                      region: str = Form("eu-central-1"),
+                      config_set: str = Form("")):
+    """IAM-Key/Secret zeilenweise. Format:
+       AKIA...,secret[,region[,config_set]]  oder pipe-getrennt."""
+    added = request.app.state.db.import_ses_accounts(
+        lid, ses_text, default_region=region.strip() or "eu-central-1",
+        default_config_set=config_set.strip())
+    return HTMLResponse(
+        f'<div class="alert alert-success">{added} SES-API Accounts imported. '
+        f'<a href="/smtps" style="color:var(--accent)">Reload</a></div>')
+
+
 @router.post("/smtps/{lid}/import-file")
 async def import_smtps_file(request: Request, lid: int):
     from fastapi import UploadFile
@@ -177,6 +191,31 @@ async def test_smtp(request: Request, sid: int):
     if not row:
         return HTMLResponse('<span style="color:var(--red)">Not found</span>')
     row = dict(row)
+    # SES-API-Account? Dann GetAccount statt SMTP-Handshake.
+    if (row.get("provider_type") or "smtp") == "ses_api":
+        from mailer.ses_api import ses_ping, SESAPIError
+        try:
+            info = ses_ping(row["username"], row["password"],
+                             row.get("ses_region") or "us-east-1")
+            quota = (info.get("SendQuota") or {})
+            max_24h = quota.get("Max24HourSend", "?")
+            rate = quota.get("MaxSendRate", "?")
+            sent_24h = quota.get("SentLast24Hours", "?")
+            prod_ok = info.get("ProductionAccessEnabled", False)
+            badge = "" if prod_ok else " · <b>Sandbox</b>"
+            return HTMLResponse(
+                f'<span style="color:var(--green)">&#10003; SES OK: '
+                f'{sent_24h:g}/{max_24h:g}·24h, {rate:g}/s{badge}</span>'
+                if isinstance(max_24h, (int, float))
+                else f'<span style="color:var(--green)">&#10003; SES OK</span>'
+            )
+        except SESAPIError as e:
+            return HTMLResponse(
+                f'<span style="color:var(--red)">&#10007; {escape(str(e)[:120])}</span>')
+        except Exception as e:
+            return HTMLResponse(
+                f'<span style="color:var(--red)">&#10007; {escape(str(e)[:120])}</span>')
+
     cfg = db.get_config()
     proxy = cfg.get("proxy_value", "").split("\n")[0].strip() if cfg.get("proxy_mode") != "off" else ""
     server, error, _ = _connect_smtp(row["host"], row["port"], row["username"], row["password"], proxy)
@@ -199,9 +238,11 @@ async def check_all(request: Request, lid: int,
         return HTMLResponse('<div class="alert alert-warning">Already running.</div>')
 
     db = request.app.state.db
-    smtps = [dict(s) for s in db.get_smtps(lid)]
+    smtps = [dict(s) for s in db.get_smtps(lid)
+             if (dict(s).get("provider_type") or "smtp") == "smtp"]
     if not smtps:
-        return HTMLResponse('<div class="alert alert-warning">No SMTPs.</div>')
+        return HTMLResponse('<div class="alert alert-warning">No classic SMTPs to check '
+                            '(SES-API accounts use the per-row Test button).</div>')
 
     proxy = ""
     if proxy_id:

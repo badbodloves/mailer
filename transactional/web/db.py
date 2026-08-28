@@ -230,6 +230,15 @@ class TransDB:
             c.execute("""CREATE TABLE IF NOT EXISTS trans_app_config (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 login_logo TEXT DEFAULT '', app_name TEXT DEFAULT 'Transactional Mailer')""")
+        # SES-API-Provider für trans_smtps
+        if "trans_smtps" in tables:
+            scols = {r[1] for r in c.execute("PRAGMA table_info(trans_smtps)").fetchall()}
+            if "provider_type" not in scols:
+                c.execute("ALTER TABLE trans_smtps ADD COLUMN provider_type TEXT DEFAULT 'smtp'")
+            if "ses_region" not in scols:
+                c.execute("ALTER TABLE trans_smtps ADD COLUMN ses_region TEXT DEFAULT ''")
+            if "ses_config_set" not in scols:
+                c.execute("ALTER TABLE trans_smtps ADD COLUMN ses_config_set TEXT DEFAULT ''")
         for tbl in ["trans_smtp_lists", "trans_lead_lists", "trans_macros",
                      "trans_templates", "trans_logos", "trans_redirect_links",
                      "trans_campaigns", "trans_proxies"]:
@@ -539,6 +548,39 @@ class TransDB:
                 c.execute("INSERT INTO trans_smtps (list_id,host,port,username,password) VALUES (?,?,?,?,?)",
                           (list_id, parts[0].strip(), int(parts[1].strip()),
                            parts[2].strip(), parts[3].strip()))
+                added += 1
+            except Exception:
+                pass
+        c.commit()
+        return added
+
+    def import_ses_accounts(self, list_id: int, text: str,
+                              default_region: str = "eu-central-1",
+                              default_config_set: str = "") -> int:
+        """Zeilenformat: IAM_KEY,IAM_SECRET[,region[,config_set]]
+        Auch pipe-getrennt (|) erlaubt für Copy-Paste aus Textblöcken."""
+        c = self._conn()
+        added = 0
+        for line in text.splitlines():
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            sep = "|" if "|" in line else ","
+            parts = [p.strip() for p in line.split(sep)]
+            if len(parts) < 2:
+                continue
+            iam_key, iam_secret = parts[0], parts[1]
+            if not iam_key or not iam_secret:
+                continue
+            region = parts[2] if len(parts) >= 3 and parts[2] else default_region
+            cfg_set = parts[3] if len(parts) >= 4 else default_config_set
+            try:
+                c.execute(
+                    "INSERT INTO trans_smtps "
+                    "(list_id,host,port,username,password,provider_type,"
+                    " ses_region,ses_config_set) VALUES (?,?,?,?,?,?,?,?)",
+                    (list_id, "ses-api", 0, iam_key, iam_secret,
+                     "ses_api", region, cfg_set))
                 added += 1
             except Exception:
                 pass
