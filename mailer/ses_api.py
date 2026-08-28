@@ -120,12 +120,22 @@ def ses_send_simple(iam_key: str, iam_secret: str, region: str,
                      html_body: str, plain_body: str = "",
                      extra_headers: Optional[list] = None,
                      reply_to: str = "",
-                     configuration_set: str = "") -> dict:
+                     configuration_set: str = "",
+                     attachments: Optional[list] = None) -> dict:
     """SES v2 SendEmail mit Content.Simple.
 
     extra_headers: [{"Name": "...", "Value": "..."}] — SES whitelistet nur
     bestimmte Header-Namen (List-Unsubscribe, List-Unsubscribe-Post,
     List-Help, List-Id, Reply-To, Message-ID sind erlaubt).
+
+    attachments (seit SES-API-Erweiterung 2025 in Simple erlaubt):
+      [{
+        "FileName": "katalog.pdf", "ContentType": "application/pdf",
+        "RawContent": "<base64 str>",           # base64 vom Datei-Byte-Inhalt
+        "ContentDisposition": "ATTACHMENT" | "INLINE",  # optional
+        "ContentId": "logo@mail",               # nur INLINE, für cid:...
+        "ContentTransferEncoding": "BASE64"     # optional
+      }]
 
     Returns {MessageId: ...}. Wirft SESAPIError bei Fehler."""
     display_from = (f"{from_name} <{from_addr}>" if from_name else from_addr)
@@ -140,6 +150,8 @@ def ses_send_simple(iam_key: str, iam_secret: str, region: str,
     }
     if extra_headers:
         simple["Headers"] = extra_headers
+    if attachments:
+        simple["Attachments"] = attachments
 
     payload = {
         "FromEmailAddress": display_from,

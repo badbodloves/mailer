@@ -87,8 +87,10 @@
                         <p class="form-help" style="font-size:11px;margin-top:6px">
                             IAM-User braucht <code>ses:SendEmail</code> + <code>ses:GetAccount</code>.
                             Nutzt SES v2 <strong>Simple</strong>-Content (SES baut MIME nach ihrem
-                            deliverability-optimierten Schema). <code>List-Unsubscribe</code>-Header
-                            werden aus dem Template durchgereicht.
+                            deliverability-optimierten Schema). <code>List-Unsubscribe</code> +
+                            <code>X-*</code>-Header, PDF-Attachments und CID-Inline-Bilder werden
+                            aus dem Template durchgereicht (Simple.Attachments seit AWS 2025).
+                            Limits: 40 MB pro Mail inkl. base64-Overhead.
                         </p>
                         <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Import SES Accounts</button></div>
                     </form>

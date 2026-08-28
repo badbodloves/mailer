@@ -577,6 +577,9 @@ class _SESConnectionShim:
         # HTML- und Text-Parts extrahieren
         html_body, plain_body = _extract_html_text(parsed)
 
+        # Attachments (seit 2025 in SES Simple erlaubt) + CID-Inline-Bilder
+        ses_attachments = _extract_ses_attachments(parsed)
+
         # Custom-Header die SES whitelistet — mit-übergeben.
         # SES erlaubt in Content.Simple.Headers[]: List-Unsubscribe,
         # List-Unsubscribe-Post, List-Help, List-Id, List-Owner,
@@ -617,6 +620,7 @@ class _SESConnectionShim:
                 extra_headers=extra_headers or None,
                 reply_to=reply_to,
                 configuration_set=self._account.config_set or "",
+                attachments=ses_attachments or None,
             )
             return {}   # smtplib.sendmail-kompatibel (leerer dict = success)
         except SESAPIError as e:
@@ -644,6 +648,52 @@ def _parse_from_header(hdr: str, fallback: str = "") -> tuple:
         addr = hdr.split("<", 1)[1].split(">", 1)[0].strip()
         return name, addr or fallback
     return "", hdr or fallback
+
+
+def _extract_ses_attachments(msg) -> list:
+    """Zieht Attachment- + Inline-Parts aus dem MIME und packt sie ins
+    SES-v2-Format. HTML/Plain-Bodies werden übersprungen (die gehen
+    strukturiert über Body.Html/Body.Text)."""
+    import base64
+    out = []
+    if not msg.is_multipart():
+        return out
+    for part in msg.walk():
+        if part.is_multipart():
+            continue
+        ctype = part.get_content_type()
+        disp_hdr = (part.get("Content-Disposition") or "").lower()
+        is_inline_cid = "inline" in disp_hdr and part.get("Content-ID")
+        is_attachment = "attachment" in disp_hdr or part.get_filename()
+        # Body-Parts überspringen (nur HTML/Plain die nicht als
+        # Attachment gekennzeichnet sind)
+        if ctype in ("text/html", "text/plain") and not (is_attachment or is_inline_cid):
+            continue
+        try:
+            payload = part.get_payload(decode=True)
+            if payload is None:
+                continue
+        except Exception:
+            continue
+        entry = {
+            "ContentType": ctype,
+            "RawContent": base64.b64encode(payload).decode("ascii"),
+            "ContentTransferEncoding": "BASE64",
+        }
+        fname = part.get_filename()
+        if fname:
+            entry["FileName"] = fname
+        if is_inline_cid:
+            entry["ContentDisposition"] = "INLINE"
+            cid = part.get("Content-ID", "").strip().lstrip("<").rstrip(">")
+            if cid:
+                entry["ContentId"] = cid
+            entry.setdefault("FileName", cid or "inline")
+        else:
+            entry["ContentDisposition"] = "ATTACHMENT"
+            entry.setdefault("FileName", "attachment")
+        out.append(entry)
+    return out
 
 
 def _extract_html_text(msg) -> tuple:
