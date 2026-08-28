@@ -174,7 +174,10 @@ class WarmupEngine:
 
         client = SMTPClient(smtp_row["host"], smtp_row["port"],
                             smtp_row["username"], smtp_row["password"],
-                            proxy=smtp_row.get("proxy", ""))
+                            proxy=smtp_row.get("proxy", ""),
+                            send_mode=smtp_row.get("send_mode", "smtp") or "smtp",
+                            region=smtp_row.get("ses_region", "") or "",
+                            config_set=smtp_row.get("ses_config_set", "") or "")
 
         from_email = camp["from_email"]
         from_name = camp.get("from_name", "") or "Newsletter"

@@ -80,7 +80,10 @@ class BulkMailerCore:
         proxy_required = bool(proxy_str and smtp_row.get("proxy_required", False))
         smtp = SMTPClient(smtp_row["host"], smtp_row["port"],
                           smtp_row["username"], smtp_row["password"],
-                          proxy=proxy_str, proxy_required=proxy_required)
+                          proxy=proxy_str, proxy_required=proxy_required,
+                          send_mode=smtp_row.get("send_mode", "smtp") or "smtp",
+                          region=smtp_row.get("ses_region", "") or "",
+                          config_set=smtp_row.get("ses_config_set", "") or "")
 
         daily_limit = mailing["daily_limit"] or smtp_row.get("daily_limit", 0) or 0
         limiter = RateLimiter(daily_limit=daily_limit)

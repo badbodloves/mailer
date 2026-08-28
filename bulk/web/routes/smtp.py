@@ -56,6 +56,23 @@ async def save_smtp(request: Request, sid: int,
     return RedirectResponse("/smtp", status_code=303)
 
 
+@router.post("/smtp/import-ses", response_class=HTMLResponse)
+async def import_ses(request: Request,
+                      ses_text: str = Form(""),
+                      region: str = Form("eu-central-1"),
+                      config_set: str = Form(""),
+                      daily_limit: int = Form(0)):
+    """Bulk-Import SES-Accounts. Zeilenformat:
+       IAM_KEY,IAM_SECRET[,region[,config_set[,name]]]
+       Pipe (|) statt Komma auch OK."""
+    added = request.app.state.db.import_ses_smtps(
+        ses_text, default_region=region.strip() or "eu-central-1",
+        default_config_set=config_set.strip(), daily_limit=daily_limit)
+    return HTMLResponse(
+        f'<div class="alert alert-success">{added} SES-Account(s) importiert. '
+        f'<a href="/smtp" style="color:var(--accent)">Reload</a></div>')
+
+
 @router.post("/smtp/{sid}/delete")
 async def delete_smtp(request: Request, sid: int):
     request.app.state.db.delete_smtp(sid)
@@ -75,11 +92,15 @@ async def test_smtp(request: Request, sid: int):
         row["host"], row["port"], row["username"], row["password"],
         proxy=row.get("proxy", ""),
         proxy_required=bool(row.get("proxy_required", 0)),
+        send_mode=row.get("send_mode", "smtp") or "smtp",
+        region=row.get("ses_region", "") or "",
+        config_set=row.get("ses_config_set", "") or "",
     )
 
     results = []
 
-    if client.has_proxy:
+    # SES-Accounts nutzen kein Proxy und kein SMTP-Handshake
+    if not client.is_ses_api and client.has_proxy:
         ok, msg = client.test_proxy()
         color = "var(--green)" if ok else "var(--red)"
         icon = "&#10003;" if ok else "&#10007;"
@@ -88,6 +109,7 @@ async def test_smtp(request: Request, sid: int):
     ok, msg = client.test_connection()
     color = "var(--green)" if ok else "var(--red)"
     icon = "&#10003;" if ok else "&#10007;"
-    results.append(f'<div style="color:{color};font-size:13px">{icon} SMTP: {msg}</div>')
+    label = "SES-API" if client.is_ses_api else "SMTP"
+    results.append(f'<div style="color:{color};font-size:13px">{icon} {label}: {msg}</div>')
 
     return HTMLResponse("".join(results))

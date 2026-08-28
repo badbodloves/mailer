@@ -257,6 +257,14 @@ class BulkDBManager:
             c.execute("ALTER TABLE smtp_presets ADD COLUMN proxy_required INTEGER DEFAULT 0")
         if "threads_per_smtp" not in existing:
             c.execute("ALTER TABLE smtp_presets ADD COLUMN threads_per_smtp INTEGER DEFAULT 1")
+        # SES-API-Adapter: send_mode = 'smtp' (default) oder 'ses_api'.
+        # Bei ses_api ist username=IAM_KEY, password=IAM_SECRET, host/port ignoriert.
+        if "send_mode" not in existing:
+            c.execute("ALTER TABLE smtp_presets ADD COLUMN send_mode TEXT DEFAULT 'smtp'")
+        if "ses_region" not in existing:
+            c.execute("ALTER TABLE smtp_presets ADD COLUMN ses_region TEXT DEFAULT ''")
+        if "ses_config_set" not in existing:
+            c.execute("ALTER TABLE smtp_presets ADD COLUMN ses_config_set TEXT DEFAULT ''")
         existing = {r[1] for r in c.execute("PRAGMA table_info(domains)").fetchall()}
         if "unsub_domain" not in existing:
             c.execute("ALTER TABLE domains ADD COLUMN unsub_domain TEXT DEFAULT ''")
@@ -453,6 +461,54 @@ class BulkDBManager:
 
     def get_smtps(self) -> list:
         return self._conn().execute("SELECT * FROM smtp_presets ORDER BY name").fetchall()
+
+    def add_ses_smtp(self, name: str, iam_key: str, iam_secret: str,
+                      region: str = "eu-central-1", config_set: str = "",
+                      daily_limit: int = 0) -> int:
+        """SES-API-Preset. username=IAM_KEY, password=IAM_SECRET,
+        host='ses-api' als Marker."""
+        c = self._conn()
+        c.execute(
+            "INSERT INTO smtp_presets "
+            "(name,host,port,username,password,provider_type,daily_limit,"
+            " proxy,proxy_required,send_mode,ses_region,ses_config_set) "
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (name, "ses-api", 0, iam_key, iam_secret, "amazon_ses",
+             daily_limit, "", 0, "ses_api", region, config_set))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def import_ses_smtps(self, text: str,
+                          default_region: str = "eu-central-1",
+                          default_config_set: str = "",
+                          default_name_prefix: str = "SES-",
+                          daily_limit: int = 0) -> int:
+        """Zeilenformat: IAM_KEY,IAM_SECRET[,region[,config_set[,name]]]
+        Pipe (|) statt Komma auch erlaubt."""
+        added = 0
+        for i, line in enumerate(text.splitlines()):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            sep = "|" if "|" in line else ","
+            parts = [p.strip() for p in line.split(sep)]
+            if len(parts) < 2:
+                continue
+            iam_key, iam_secret = parts[0], parts[1]
+            if not iam_key or not iam_secret:
+                continue
+            region = parts[2] if len(parts) >= 3 and parts[2] else default_region
+            cfg_set = parts[3] if len(parts) >= 4 else default_config_set
+            name = parts[4] if len(parts) >= 5 and parts[4] \
+                   else f"{default_name_prefix}{iam_key[:8]}"
+            try:
+                self.add_ses_smtp(name, iam_key, iam_secret,
+                                   region=region, config_set=cfg_set,
+                                   daily_limit=daily_limit)
+                added += 1
+            except Exception:
+                pass
+        return added
 
     def delete_smtp(self, smtp_id: int):
         c = self._conn()
