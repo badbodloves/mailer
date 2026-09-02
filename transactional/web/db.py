@@ -274,6 +274,9 @@ class TransDB:
             ("trans_redirect_links", "pool_id", "0"),
             ("trans_macros", "preset_name", "''"),
             ("trans_macros", "is_active", "1"),
+            # Sticky: derselbe Wert für alle Vorkommen INNERHALB einer Mail.
+            # Für {Name} in From + Signatur konsistent zu halten.
+            ("trans_macros", "sticky", "0"),
         ]:
             if tbl in tables:
                 cols = {r[1] for r in c.execute(f"PRAGMA table_info({tbl})").fetchall()}

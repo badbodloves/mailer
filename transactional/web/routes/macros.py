@@ -39,13 +39,21 @@ async def add_macro(request: Request, name: str = Form(""),
 @router.post("/macros/{mid}/save")
 async def save_macro(request: Request, mid: int,
                      values_text: str = Form(""), rotate_every: int = Form(0),
-                     preset_name: str = Form("")):
+                     preset_name: str = Form(""),
+                     sticky: int = Form(0)):
     db = request.app.state.db
     db.update_macro(mid, values_text, rotate_every)
+    c = db._conn()
+    updates = []
+    params = []
     if preset_name.strip():
-        c = db._conn()
-        c.execute("UPDATE trans_macros SET preset_name=? WHERE id=?", (preset_name.strip(), mid))
-        c.commit()
+        updates.append("preset_name=?")
+        params.append(preset_name.strip())
+    updates.append("sticky=?")
+    params.append(1 if sticky else 0)
+    params.append(mid)
+    c.execute(f"UPDATE trans_macros SET {', '.join(updates)} WHERE id=?", params)
+    c.commit()
     return RedirectResponse("/macros", status_code=303)
 
 

@@ -49,6 +49,11 @@
                             <input name="rotate_every" type="number" value="{{ p.rotate_every or 0 }}" min="0">
                         </div>
                     </div>
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-weight:400;margin-bottom:8px">
+                        <input type="checkbox" name="sticky" value="1" style="width:auto"
+                               {{ 'checked' if p.sticky }}>
+                        <span style="font-size:13px">Sticky — <strong>gleicher Wert pro Mail</strong> für alle Vorkommen (From + Signatur konsistent)</span>
+                    </label>
                     <label>Values (one per line) — {{ p.line_count }} entries</label>
                     <textarea id="macro-ta-{{ p.id }}" name="values_text" rows="{{ [p.line_count + 1, 3]|max }}" style="font-family:monospace;font-size:12px">{{ p.values_text }}</textarea>
                     <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">

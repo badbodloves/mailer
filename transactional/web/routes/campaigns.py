@@ -927,11 +927,14 @@ def _run_campaign(db, cid: int):
                 auto_ctrl = None
 
         macros = {}
+        sticky_macros = set()   # Namen der Macros die pro Mail nur EINMAL gewürfelt werden
         for m in db.get_active_macros(uid):
             md = dict(m)
             lines = [l.strip() for l in (md.get("values_text") or "").splitlines() if l.strip()]
             if lines:
                 macros[md["name"]] = lines
+                if md.get("sticky"):
+                    sticky_macros.add(md["name"])
 
         from_name_cfg = cfg.get("from_name", "") or "Newsletter"
         from_email_cfg = cfg.get("from_email", "")
@@ -1338,12 +1341,27 @@ def _run_campaign(db, cid: int):
         if auto_ctrl:
             threading.Thread(target=_auto_mode_watchdog, daemon=True).start()
 
-        def _process(text, email):
+        def _process(text, email, sticky_cache=None):
+            """sticky_cache: dict pro Mail, wird über alle _process-Calls
+            desselben Mails geteilt (from_name, subject, html body etc.).
+            Für sticky-Macros: einmal würfeln, dann derselbe Wert überall.
+            Non-sticky Macros bleiben pro Vorkommen zufällig."""
             user = email.split("@")[0] if "@" in email else email
             domain = email.split("@")[1] if "@" in email else ""
             text = text.replace("{email}", email).replace("{email_user}", user).replace("{domain}", domain)
             for mname, mlines in macros.items():
-                text = text.replace(f"{{{mname}}}", random.choice(mlines))
+                token = f"{{{mname}}}"
+                if token not in text:
+                    continue
+                if mname in sticky_macros:
+                    cache = sticky_cache if sticky_cache is not None else {}
+                    if mname not in cache:
+                        cache[mname] = random.choice(mlines)
+                    text = text.replace(token, cache[mname])
+                else:
+                    # nicht sticky → jedes Vorkommen darf ein anderer Wert sein
+                    while token in text:
+                        text = text.replace(token, random.choice(mlines), 1)
             def _spintax(m):
                 return random.choice(m.group(1).split("|"))
             for _ in range(20):
@@ -1380,9 +1398,13 @@ def _run_campaign(db, cid: int):
                 return True
             cur_from_email = from_email_cfg or account.user
             html_arm = None    # Bandit-Arm-ID für auto-mode reporting
+            # Shared sticky-cache für alle _process-Calls dieser Mail — so
+            # kriegen {Name} in From, Subject, HTML-Body und Signatur alle
+            # denselben Wert (wenn das Macro als sticky markiert ist).
+            sticky_cache = {}
             try:
-                cur_from_name = _process(from_name_cfg, email)
-                cur_subject = _process(subject_cfg, email)
+                cur_from_name = _process(from_name_cfg, email, sticky_cache)
+                cur_subject = _process(subject_cfg, email, sticky_cache)
                 if html_bodies:
                     if auto_ctrl:
                         arms = list(range(len(html_bodies)))
@@ -1392,7 +1414,7 @@ def _run_campaign(db, cid: int):
                         html = random.choice(html_bodies)
                 else:
                     html = "<p>Hello {email_user}</p>"
-                html = _process(html, email)
+                html = _process(html, email, sticky_cache)
 
                 if redirect_links and "{RedirectLink}" in html:
                     link = random.choice(redirect_links)
@@ -1411,7 +1433,7 @@ def _run_campaign(db, cid: int):
                         else:
                             html = html.replace("{Logo}", "")
                     elif image_mode == "text":
-                        logo_text = _process(cfg.get("logo_text", "{Logo}"), email)
+                        logo_text = _process(cfg.get("logo_text", "{Logo}"), email, sticky_cache)
                         html = html.replace("{Logo}",
                             f'<span style="font-weight:bold;font-size:16px;color:{cfg.get("logo_text_color", "#333333")};">{logo_text}</span>')
                     elif image_mode == "cloudinary" and logo_cdn_urls:
