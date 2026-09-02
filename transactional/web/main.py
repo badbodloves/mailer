@@ -69,11 +69,17 @@ _static_dir = os.path.join(os.path.dirname(__file__), "static")
 os.makedirs(_static_dir, exist_ok=True)
 app.mount("/static", StaticFiles(directory=_static_dir), name="static")
 
-# Reuse bulk mailer CSS
+# Reuse bulk mailer CSS. Wenn die Ziel-style.css jemand anderem gehört
+# (typisch nach einem git pull als root) → nicht crashen. Die alte CSS
+# reicht dann für diesen Boot.
 _bulk_css = os.path.join(_project_root, "bulk", "web", "static", "style.css")
 if os.path.isfile(_bulk_css):
     import shutil
-    shutil.copy2(_bulk_css, os.path.join(_static_dir, "style.css"))
+    try:
+        shutil.copy2(_bulk_css, os.path.join(_static_dir, "style.css"))
+    except (PermissionError, OSError) as _css_err:
+        logging.warning("could not sync bulk style.css (ownership issue?): %s",
+                         _css_err)
 
 tpl_dir = os.path.join(os.path.dirname(__file__), "templates")
 jinja_templates = Jinja2Templates(directory=tpl_dir)
