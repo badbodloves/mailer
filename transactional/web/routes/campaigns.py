@@ -1,5 +1,6 @@
 """Campaigns — CRUD, start/stop, live stats."""
 import re
+import json
 import time
 import random
 import logging
@@ -138,10 +139,20 @@ async def save_campaign(request: Request, cid: int,
                         lead_list_id: int = Form(0),
                         template_id: int = Form(0),
                         redirect_pool_id: int = Form(0),
-                        schedule_time: str = Form("")):
+                        schedule_time: str = Form(""),
+                        auto_mode_enabled: int = Form(0),
+                        auto_hard_bounce_pct: float = Form(5.0),
+                        auto_spam_reject_pct: float = Form(8.0),
+                        auto_auth_fail_pct: float = Form(20.0),
+                        auto_bandit_epsilon: float = Form(0.15)):
     db = request.app.state.db
     updates = {"name": name.strip(), "schedule_time": schedule_time.strip(),
-               "template_id": template_id, "redirect_pool_id": redirect_pool_id}
+               "template_id": template_id, "redirect_pool_id": redirect_pool_id,
+               "auto_mode_enabled": 1 if auto_mode_enabled else 0,
+               "auto_hard_bounce_pct": auto_hard_bounce_pct,
+               "auto_spam_reject_pct": auto_spam_reject_pct,
+               "auto_auth_fail_pct": auto_auth_fail_pct,
+               "auto_bandit_epsilon": auto_bandit_epsilon}
     if smtp_list_id:
         updates["smtp_list_id"] = smtp_list_id
     if lead_list_id:
@@ -149,6 +160,92 @@ async def save_campaign(request: Request, cid: int,
         updates["total_leads"] = db.get_lead_count(lead_list_id)
     db.update_campaign(cid, **updates)
     return RedirectResponse("/campaigns", status_code=303)
+
+
+@router.get("/campaigns/{cid}/auto-status", response_class=HTMLResponse)
+async def auto_status(request: Request, cid: int):
+    """Live view: watchdog stats + top bandit templates. Für Polling."""
+    db = request.app.state.db
+    row = db._conn().execute("SELECT auto_mode_enabled, auto_stats_json, "
+                              "auto_pause_reason, status FROM trans_campaigns WHERE id=?",
+                              (cid,)).fetchone()
+    if not row:
+        return HTMLResponse('<span style="color:var(--red)">Kampagne weg</span>')
+    row = dict(row)
+    if not row.get("auto_mode_enabled"):
+        return HTMLResponse('<span style="font-size:12px;color:var(--fg2)">Auto-Mode aus.</span>')
+    snap_raw = row.get("auto_stats_json") or ""
+    if not snap_raw:
+        return HTMLResponse('<span style="font-size:12px;color:var(--fg2)">Noch keine Daten (Warmup).</span>')
+    try:
+        snap = json.loads(snap_raw)
+    except Exception:
+        return HTMLResponse('<span style="font-size:12px;color:var(--red)">Snapshot corrupt.</span>')
+
+    wd = snap.get("watchdog", {}).get("stats", {})
+    verdict = snap.get("watchdog", {}).get("last_verdict") or {}
+    arms = snap.get("bandit", {}).get("arms", {}) or {}
+
+    # Watchdog-Zeile
+    total = wd.get("total_sends", 0) or 0
+    fails = wd.get("total_fails", 0) or 0
+    win_hard = wd.get("window_hard_pct", 0)
+    win_spam = wd.get("window_spam_pct", 0)
+    win_auth = wd.get("window_auth_pct", 0)
+    by_type = wd.get("by_type", {}) or {}
+    action = (verdict.get("action") or "ok").upper()
+    reason = verdict.get("reason", "")
+    reason_html = ""
+    if row.get("auto_pause_reason"):
+        reason_html = (
+            f'<div style="color:var(--red);font-size:12px;margin-bottom:6px">'
+            f'⚠ Auto-Pause: {escape(row["auto_pause_reason"])}</div>'
+        )
+    color = "var(--green)" if action == "OK" else "var(--red)"
+
+    # Top-Templates
+    scored = []
+    for arm_key, s in arms.items():
+        total_arm = s.get("succ", 0) + s.get("fail", 0)
+        if total_arm == 0:
+            continue
+        score = (s.get("succ", 0) + 1) / (total_arm + 2)   # Beta(1,1)
+        scored.append((score, arm_key, total_arm, s.get("succ", 0), s.get("fail", 0)))
+    scored.sort(reverse=True)
+    top_html = ""
+    for score, arm, total_arm, succ, fail in scored[:10]:
+        top_html += (
+            f'<tr><td style="font-family:monospace">#{escape(str(arm))}</td>'
+            f'<td>{total_arm}</td>'
+            f'<td style="color:var(--green)">{succ}</td>'
+            f'<td style="color:var(--red)">{fail}</td>'
+            f'<td><strong>{score:.3f}</strong></td></tr>'
+        )
+    if top_html:
+        top_html = (
+            '<h5 style="margin-top:8px;font-size:12px">Template-Bandit-Scores '
+            '(Top 10)</h5>'
+            '<table style="font-size:11px"><thead><tr>'
+            '<th>Template-Idx</th><th>Sends</th><th>✓</th><th>✗</th>'
+            '<th>Score</th></tr></thead><tbody>' + top_html + '</tbody></table>'
+        )
+    by_type_html = ""
+    if by_type:
+        chunks = [f'{k}: {v}' for k, v in sorted(by_type.items(), key=lambda x: -x[1])]
+        by_type_html = (
+            f'<div style="font-size:11px;color:var(--fg2);margin-top:4px">'
+            f'{escape(" · ".join(chunks))}</div>'
+        )
+
+    return HTMLResponse(
+        reason_html +
+        f'<div style="font-size:12px">'
+        f'<span style="color:{color};font-weight:600">Watchdog: {action}</span> '
+        f'· sent={total} fails={fails}'
+        f' · window: hard={win_hard}% spam={win_spam}% auth={win_auth}%'
+        f'{f" — <em>{escape(reason)}</em>" if reason and reason != "healthy" else ""}'
+        f'</div>' + by_type_html + top_html
+    )
 
 
 @router.post("/campaigns/{cid}/reset")
@@ -159,7 +256,10 @@ async def reset_campaign(request: Request, cid: int):
     camp = db.get_campaign(cid)
     if camp:
         db.reset_leads(camp["lead_list_id"])
-        db.update_campaign(cid, sent=0, failed=0, status="DRAFT")
+        # Full reset: alte Auto-Mode-Historie ist ungültig weil sich die
+        # Templates/Leads oft geändert haben. Bandit + Watchdog neu starten.
+        db.update_campaign(cid, sent=0, failed=0, status="DRAFT",
+                            auto_stats_json="", auto_pause_reason="")
     return RedirectResponse("/campaigns", status_code=303)
 
 
@@ -277,6 +377,12 @@ async def start_campaign(request: Request, cid: int):
     if cid in _runners:
         return RedirectResponse("/campaigns", status_code=303)
     _speed[cid] = 0
+    # Alte Auto-Pause-Ursache clearen — sonst zeigt die UI die weiter an
+    # obwohl die Kampagne wieder läuft.
+    try:
+        db.update_campaign(cid, auto_pause_reason="")
+    except Exception:
+        pass
 
     def run():
         try:
@@ -793,6 +899,33 @@ def _run_campaign(db, cid: int):
         # send (workers read via random.choice which sees the swap).
         html_bodies = list(db.get_all_template_htmls(uid, template_id=campaign_template_id))
 
+        # Auto-Mode: Watchdog + Multi-Armed Bandit für selbstoptimierendes
+        # Senden. Bandit wählt Templates gewichtet nach Bounce/Complaint-
+        # Rate. Watchdog pausiert Kampagne wenn Fehlerraten explodieren.
+        auto_ctrl = None
+        if camp.get("auto_mode_enabled"):
+            try:
+                from mailer.auto_mode import AutoModeController
+                bandit_state = None
+                snap_raw = camp.get("auto_stats_json") or ""
+                if snap_raw:
+                    try:
+                        snap = json.loads(snap_raw)
+                        bandit_state = snap.get("bandit")
+                    except Exception:
+                        bandit_state = None
+                auto_ctrl = AutoModeController(
+                    hard_bounce_pct=float(camp.get("auto_hard_bounce_pct", 5.0) or 5.0),
+                    spam_reject_pct=float(camp.get("auto_spam_reject_pct", 8.0) or 8.0),
+                    auth_fail_pct=float(camp.get("auto_auth_fail_pct", 20.0) or 20.0),
+                    bandit_epsilon=float(camp.get("auto_bandit_epsilon", 0.15) or 0.15),
+                    bandit_state=bandit_state,
+                )
+                logger.info("Campaign %d: auto-mode enabled (watchdog + bandit)", cid)
+            except Exception as e:
+                logger.warning("Campaign %d: auto-mode init failed: %s", cid, e)
+                auto_ctrl = None
+
         macros = {}
         for m in db.get_active_macros(uid):
             md = dict(m)
@@ -1102,6 +1235,12 @@ def _run_campaign(db, cid: int):
                             html_bodies.extend(new_bodies)
                             logger.info("Campaign %d: html pool refreshed (%d new bodies)",
                                          cid, len(new_bodies))
+                            # Bandit-Scores für die alten Arm-Indizes sind
+                            # jetzt sinnlos — Indexe zeigen auf neue Templates.
+                            if auto_ctrl:
+                                for i in range(200):
+                                    auto_ctrl.bandit.reset_arm(i)
+                                logger.info("Campaign %d: bandit arms reset after pool regen", cid)
 
                     if freshness_logos and logo_group_id and group_logos_for_freshness:
                         # Logo regen only meaningfully helps modes that
@@ -1157,6 +1296,48 @@ def _run_campaign(db, cid: int):
         threading.Thread(target=speed_tracker, daemon=True).start()
         threading.Thread(target=_freshness_monitor, daemon=True).start()
 
+        def _auto_mode_watchdog():
+            """Alle 15s: Watchdog auswerten. Bei pause-Verdict Campaign
+            stoppen und Grund in DB persistieren. Alle 60s: Bandit-Snapshot
+            in trans_campaigns.auto_stats_json schreiben."""
+            if not auto_ctrl:
+                return
+            check_interval = 15
+            snapshot_every = 4     # * check_interval = 60s
+            tick = 0
+            while campaign_id in _runners:
+                time.sleep(check_interval)
+                tick += 1
+                try:
+                    verdict = auto_ctrl.check_watchdog()
+                    if verdict.action == "pause":
+                        logger.warning("Campaign %d: AUTO-WATCHDOG pause: %s",
+                                        campaign_id, verdict.reason)
+                        with _lock:
+                            snap = json.dumps(auto_ctrl.snapshot())
+                            db.update_campaign(campaign_id,
+                                                status="PAUSED",
+                                                auto_pause_reason=verdict.reason,
+                                                auto_stats_json=snap)
+                        _runners.pop(campaign_id, None)
+                        break
+                    if tick % snapshot_every == 0:
+                        try:
+                            snap = json.dumps(auto_ctrl.snapshot())
+                            db.update_campaign(campaign_id,
+                                                auto_stats_json=snap)
+                        except Exception as e:
+                            logger.warning("Campaign %d: auto snapshot save failed: %s",
+                                            campaign_id, e)
+                except Exception as e:
+                    logger.error("Campaign %d: auto-watchdog crashed: %s",
+                                  campaign_id, e)
+                    # Nicht die Kampagne killen wegen watchdog-bug
+                    time.sleep(30)
+
+        if auto_ctrl:
+            threading.Thread(target=_auto_mode_watchdog, daemon=True).start()
+
         def _process(text, email):
             user = email.split("@")[0] if "@" in email else email
             domain = email.split("@")[1] if "@" in email else ""
@@ -1198,10 +1379,19 @@ def _run_campaign(db, cid: int):
                     suppressed += 1
                 return True
             cur_from_email = from_email_cfg or account.user
+            html_arm = None    # Bandit-Arm-ID für auto-mode reporting
             try:
                 cur_from_name = _process(from_name_cfg, email)
                 cur_subject = _process(subject_cfg, email)
-                html = random.choice(html_bodies) if html_bodies else "<p>Hello {email_user}</p>"
+                if html_bodies:
+                    if auto_ctrl:
+                        arms = list(range(len(html_bodies)))
+                        html_arm = auto_ctrl.bandit.pick(arms)
+                        html = html_bodies[html_arm]
+                    else:
+                        html = random.choice(html_bodies)
+                else:
+                    html = "<p>Hello {email_user}</p>"
                 html = _process(html, email)
 
                 if redirect_links and "{RedirectLink}" in html:
@@ -1309,6 +1499,9 @@ def _run_campaign(db, cid: int):
                         db.mark_failed(lead_id, err_str[:500])
                         failed += 1
 
+                if auto_ctrl and html_arm is not None:
+                    auto_ctrl.report(html_arm, False, etype)
+
                 if etype in SMTP_FATAL:
                     # SMTP account is broken — kick it out of the pool
                     # immediately, do not pick it again this campaign.
@@ -1328,6 +1521,8 @@ def _run_campaign(db, cid: int):
                 if (sent + failed) % 20 == 0:
                     db.update_campaign(campaign_id, sent=sent, failed=failed)
             pool.record_success(account)
+            if auto_ctrl and html_arm is not None:
+                auto_ctrl.report(html_arm, True, "")
 
             delay = worker.get_delay(email)
             if delay > 0:
@@ -1506,8 +1701,15 @@ def _run_campaign(db, cid: int):
         from datetime import datetime
         logger.info("Campaign %d %s: sent=%d, failed=%d, suppressed=%d",
                      cid, status, sent, failed, suppressed)
-        db.update_campaign(cid, status=status, sent=sent, failed=failed,
-                           finished_at=datetime.now().isoformat())
+        finalize_fields = {"status": status, "sent": sent, "failed": failed,
+                            "finished_at": datetime.now().isoformat()}
+        # Bandit-Scores + Watchdog-Stats fürs nächste Mal aufheben
+        if auto_ctrl:
+            try:
+                finalize_fields["auto_stats_json"] = json.dumps(auto_ctrl.snapshot())
+            except Exception as e:
+                logger.warning("Campaign %d: final auto snapshot failed: %s", cid, e)
+        db.update_campaign(cid, **finalize_fields)
         db.reset_in_progress(lead_list_id)
 
         if status == "FINISHED":
