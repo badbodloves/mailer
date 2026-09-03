@@ -139,6 +139,51 @@ async def merge_all_lists(request: Request, name: str = Form("")):
     return RedirectResponse("/smtps", status_code=303)
 
 
+@router.get("/smtps/{lid}/rows", response_class=HTMLResponse)
+async def list_rows(request: Request, lid: int):
+    """Lazy-loaded SMTP-row-Tabelle für eine Liste. Wird beim
+    Aufklappen des <details> per HTMX abgerufen — spart massiv DOM/HTML
+    beim initialen Seitenaufbau wenn viele Listen×Einträge existieren."""
+    db = request.app.state.db
+    smtps = [dict(s) for s in db.get_smtps(lid)]
+    if not smtps:
+        return HTMLResponse('<span class="muted" style="font-size:12px">Keine Einträge</span>')
+    rows = []
+    for sm in smtps:
+        is_ses = (sm.get("provider_type") or "smtp") == "ses_api"
+        provider_cell = (
+            '<span class="badge badge-info" title="AWS SES v2 SendEmail (Simple)">SES-API</span>'
+            if is_ses else '<span class="badge">SMTP</span>'
+        )
+        if is_ses:
+            host_cell = f'<span style="font-family:monospace">{escape(sm.get("ses_region","") or "—")}</span>'
+            port_cell = "—"
+            user_cell = (escape(sm["username"][:8]) + "…"
+                          + (escape(sm["username"][-4:]) if len(sm["username"]) > 12 else ""))
+        else:
+            host_cell = escape(sm.get("host", "") or "")
+            port_cell = str(sm.get("port", "") or "")
+            user_cell = escape(sm.get("username", "") or "")
+        rows.append(
+            f'<tr><td>{provider_cell}</td>'
+            f'<td>{host_cell}</td><td>{port_cell}</td>'
+            f'<td style="font-family:monospace">{user_cell}</td>'
+            f'<td><div class="btn-group">'
+            f'<button class="btn btn-secondary btn-xs" hx-post="/smtps/{sm["id"]}/test" '
+            f'hx-target="#st-{sm["id"]}" hx-swap="innerHTML">Test</button>'
+            f'<form method="post" action="/smtps/{sm["id"]}/delete" style="display:inline">'
+            f'<button class="btn btn-danger btn-xs btn-icon">&#10005;</button></form>'
+            f'</div><span id="st-{sm["id"]}" style="font-size:11px"></span></td></tr>'
+        )
+    return HTMLResponse(
+        '<div style="max-height:300px;overflow-y:auto">'
+        '<table style="font-size:12px"><thead><tr>'
+        '<th>Provider</th><th>Host / Region</th><th>Port</th>'
+        '<th>Username / IAM-Key</th><th></th></tr></thead>'
+        '<tbody>' + "".join(rows) + '</tbody></table></div>'
+    )
+
+
 @router.post("/smtps/{lid}/import", response_class=HTMLResponse)
 async def import_smtps(request: Request, lid: int, smtp_text: str = Form("")):
     added = request.app.state.db.import_smtps(lid, smtp_text)
