@@ -28,24 +28,42 @@ BLOCK_NAMES = ["logo", "referenz", "satz", "hinweis", "frist", "link", "gruss", 
 # forbid wins over allow.
 _THEMES = {
     "clean_light": {
-        # Calm white-card look. No red accent in Frist, no dark Footer,
-        # no full coloured Footer background.
-        "footer":  {"allow": set(),                 "forbid": {"dark", "colored"}},
-        "frist":   {"allow": {"colored", "grey"},   "forbid": {"accent", "yellow"}},
-        "link":    {"allow": set(),                 "forbid": {"pill"}},
+        # Calm white-card look. Zurückhaltend — plain Sätze, einfache
+        # Grüße, kein has_bg/colored auf mittleren Blocks, kein dark
+        # Footer. Header/Logo dezent (border-bottom eher als thick).
+        "footer":   {"allow": set(),                     "forbid": {"dark", "colored"}},
+        "frist":    {"allow": {"colored", "grey"},       "forbid": {"accent", "yellow"}},
+        "link":     {"allow": set(),                     "forbid": {"pill"}},
+        "satz":     {"allow": set(),                     "forbid": {"grouped", "has_bg", "darker"}},
+        "gruss":    {"allow": {"simple", "em", "bold-name"}, "forbid": {"centered"}},
+        "hinweis":  {"allow": {"italic", "border-left"}, "forbid": {"has_bg"}},
+        "logo":     {"allow": set(),                     "forbid": {"border-bottom-thick", "border-left-thick"}},
+        "referenz": {"allow": {"plain", "bold-label", "letterspaced"}, "forbid": {"has_bg", "colored", "badge"}},
     },
     "dark_footer": {
-        # Contrast look. Dark footer paired with the red accent Frist.
-        "footer":  {"allow": {"dark"},              "forbid": set()},
-        "frist":   {"allow": {"accent", "colored"}, "forbid": {"yellow"}},
-        "link":    {"allow": {"pill", "outline"},   "forbid": set()},
+        # Contrast look. Darker footer paired with the red accent Frist —
+        # der Mittelteil darf reichhaltiger sein (grouped, has_bg), Grüße
+        # zentriert erlaubt, Referenz auch als Badge.
+        "footer":   {"allow": {"dark"},                  "forbid": set()},
+        "frist":    {"allow": {"accent", "colored"},     "forbid": {"yellow"}},
+        "link":     {"allow": {"pill", "outline"},       "forbid": set()},
+        "satz":     {"allow": {"plain", "spaced", "grouped", "border-left"}, "forbid": set()},
+        "gruss":    {"allow": set(),                     "forbid": set()},
+        "hinweis":  {"allow": {"has_bg", "border-left"}, "forbid": set()},
+        "logo":     {"allow": set(),                     "forbid": set()},
+        "referenz": {"allow": set(),                     "forbid": set()},
     },
     "primary_band": {
-        # Layouts that already paint a {pc} band. Keep everything on the
-        # primary side — no red, no dark, no yellow.
-        "footer":  {"allow": set(),                 "forbid": {"dark"}},
-        "frist":   {"allow": {"colored", "grey"},   "forbid": {"accent", "yellow"}},
-        "link":    {"allow": set(),                 "forbid": {"pill"}},
+        # Layouts that already paint a {pc} band. Alles bleibt auf der
+        # primary-Seite — kein red, kein dark, mittlerer Reichtum.
+        "footer":   {"allow": set(),                     "forbid": {"dark"}},
+        "frist":    {"allow": {"colored", "grey"},       "forbid": {"accent", "yellow"}},
+        "link":     {"allow": set(),                     "forbid": {"pill"}},
+        "satz":     {"allow": {"plain", "spaced", "border-left"}, "forbid": {"darker"}},
+        "gruss":    {"allow": {"simple", "em", "bold-name", "split"}, "forbid": set()},
+        "hinweis":  {"allow": {"border-left", "italic"}, "forbid": {"has_bg"}},
+        "logo":     {"allow": set(),                     "forbid": set()},
+        "referenz": {"allow": {"plain", "bold-label", "letterspaced", "colored"}, "forbid": {"has_bg"}},
     },
 }
 
