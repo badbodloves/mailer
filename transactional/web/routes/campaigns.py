@@ -157,7 +157,10 @@ async def save_campaign(request: Request, cid: int,
                         auto_hard_bounce_pct: float = Form(5.0),
                         auto_spam_reject_pct: float = Form(8.0),
                         auto_auth_fail_pct: float = Form(20.0),
-                        auto_bandit_epsilon: float = Form(0.15)):
+                        auto_bandit_epsilon: float = Form(0.15),
+                        assembly_mode_enabled: int = Form(0),
+                        antifp_passthrough_rate: float = Form(0.02),
+                        antifp_light_rate: float = Form(0.10)):
     db = request.app.state.db
     updates = {"name": name.strip(), "schedule_time": schedule_time.strip(),
                "template_id": template_id, "redirect_pool_id": redirect_pool_id,
@@ -165,7 +168,10 @@ async def save_campaign(request: Request, cid: int,
                "auto_hard_bounce_pct": auto_hard_bounce_pct,
                "auto_spam_reject_pct": auto_spam_reject_pct,
                "auto_auth_fail_pct": auto_auth_fail_pct,
-               "auto_bandit_epsilon": auto_bandit_epsilon}
+               "auto_bandit_epsilon": auto_bandit_epsilon,
+               "assembly_mode_enabled": 1 if assembly_mode_enabled else 0,
+               "antifp_passthrough_rate": max(0.0, min(1.0, antifp_passthrough_rate)),
+               "antifp_light_rate": max(0.0, min(1.0, antifp_light_rate))}
     if smtp_list_id:
         updates["smtp_list_id"] = smtp_list_id
     if lead_list_id:
@@ -918,14 +924,36 @@ def _run_campaign(db, cid: int):
             normal_delay=cfg.get("normal_delay", 0.3),
             provider_delay=cfg.get("provider_delay", 6.0))
 
+        # Anti-FP-Rates pro Kampagne konfigurierbar
+        _afp_pt = float(camp.get("antifp_passthrough_rate", 0.02) or 0.02)
+        _afp_light = float(camp.get("antifp_light_rate", 0.10) or 0.10)
         if cfg.get("advanced_antifingerprint"):
             afp = AdvancedAntiFingerprintEngine(
                 enable_classes=cfg.get("antifingerprint_classes", True),
-                structure_variation=cfg.get("structure_variation", 0.5))
+                structure_variation=cfg.get("structure_variation", 0.5),
+                pass_through_rate=_afp_pt, light_touch_rate=_afp_light)
         elif cfg.get("antifingerprint_classes"):
-            afp = AntiFingerprintEngine(enable_classes=True)
+            afp = AntiFingerprintEngine(enable_classes=True,
+                                          pass_through_rate=_afp_pt,
+                                          light_touch_rate=_afp_light)
         else:
             afp = None
+
+        # Assembly-Mode: aus Snippet-Pools live pro Send zusammensetzen
+        assembly_enabled = bool(camp.get("assembly_mode_enabled"))
+        assembly_snippets = {}
+        if assembly_enabled:
+            from mailer.assembly import group_snippets_by_slot
+            assembly_snippets = group_snippets_by_slot(
+                db.get_active_snippets(uid))
+            if not any(assembly_snippets.values()):
+                logger.warning("Campaign %d: assembly-mode enabled but no "
+                                "active snippets — falling back to html_bodies", cid)
+                assembly_enabled = False
+            else:
+                logger.info(
+                    "Campaign %d: assembly-mode ON — %s",
+                    cid, ", ".join(f"{k}:{len(v)}" for k, v in assembly_snippets.items()))
 
         campaign_template_id = camp.get("template_id", 0) or 0
         # html_bodies + logo_variants are kept as mutable lists so the
@@ -1439,7 +1467,11 @@ def _run_campaign(db, cid: int):
             try:
                 cur_from_name = _process(from_name_cfg, email, sticky_cache)
                 cur_subject = _process(subject_cfg, email, sticky_cache)
-                if html_bodies:
+                if assembly_enabled and assembly_snippets:
+                    # Live-Assembly: pro Slot random pick, concat, wrap
+                    from mailer.assembly import assemble_html
+                    html = assemble_html(assembly_snippets)
+                elif html_bodies:
                     if auto_ctrl:
                         arms = list(range(len(html_bodies)))
                         html_arm = auto_ctrl.bandit.pick(arms)

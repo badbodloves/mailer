@@ -47,12 +47,24 @@ CLASS_SCHEMES = (
 )
 
 
-def _gen_profile(enable_classes: bool) -> dict:
+def _gen_profile(enable_classes: bool,
+                  pass_through_rate: float = 0.02,
+                  light_touch_rate: float = 0.10) -> dict:
     """One profile per HTML — defines what transforms run, in what order,
-    and at what intensity. The point of randomising the profile is to
-    make the engine's output distribution wide enough that a filter can't
-    fingerprint the engine itself by looking at a batch of mails."""
-    pass_through = random.random() < 0.02  # ~2% raw, rare enough not to spike Jaccard
+    and at what intensity.
+
+    Drei mögliche Intensitäts-Modi pro Mail:
+      * `pass_through` (default 2%): keine Änderungen, HTML raus wie rein
+      * `light_touch` (default 10%): nur Pixel-Jitter + Attr-Shuffle,
+        keine Tag-Swaps oder Class-Injection — sieht "clean" aus
+      * `full` (rest): alle Ops random gemischt
+
+    Diese Verteilung macht die Ausgabe-Distribution breit genug dass
+    Filter das Engine nicht per Batch-Fingerprint erkennen können."""
+    roll = random.random()
+    pass_through = roll < pass_through_rate
+    light_touch = (not pass_through and
+                    roll < pass_through_rate + light_touch_rate)
     swap_strategy = random.choice([
         "random", "random", "random",   # weighted: usually random
         "prefer_short",
@@ -61,6 +73,7 @@ def _gen_profile(enable_classes: bool) -> dict:
     ])
     return {
         "pass_through": pass_through,
+        "light_touch":  light_touch,
         "swap_tags":      random.random() < 0.90,
         "swap_strategy":  swap_strategy,
         # Pixel jitter is cheap noise — always run, just vary intensity widely.
@@ -93,34 +106,51 @@ def _gen_profile(enable_classes: bool) -> dict:
 
 
 class AntiFingerprintEngine:
-    def __init__(self, enable_classes: bool = True):
+    def __init__(self, enable_classes: bool = True,
+                  pass_through_rate: float = 0.02,
+                  light_touch_rate: float = 0.10):
         self._enable_classes = enable_classes
+        self._pass_through_rate = pass_through_rate
+        self._light_touch_rate = light_touch_rate
 
     def transform(self, html: str) -> str:
-        profile = _gen_profile(self._enable_classes)
+        profile = _gen_profile(self._enable_classes,
+                                self._pass_through_rate,
+                                self._light_touch_rate)
         if profile["pass_through"]:
             return html
 
         # Each op is a closure capturing the per-mail profile.
         ops = []
-        if profile["swap_tags"] and profile["swap_strategy"] != "no_swap":
-            ops.append(lambda h: _swap_tags(h, profile["swap_strategy"]))
-        if profile["vary_pixels"]:
-            ops.append(lambda h: _vary_pixels(h, profile["jitter_prob"], profile["jitter_delta"]))
-        if profile["shuffle_css"]:
-            ops.append(lambda h: _shuffle_css_properties(h, profile["css_shuffle_rate"]))
-        if profile["shuffle_img"]:
-            ops.append(lambda h: _shuffle_image_attributes(h, profile["img_shuffle_rate"]))
-        if profile["inject_classes"]:
-            ops.append(lambda h: _inject_classes(h, profile["class_scheme"],
-                                                  profile["inject_rate"],
-                                                  profile["style_block"]))
-        if profile["noise_comments"]:
-            ops.append(lambda h: _inject_noise_comments(h, profile["noise_comment_rate"]))
-        if profile["noise_invisible"]:
-            ops.append(lambda h: _inject_invisible_chars(h, profile["noise_invisible_rate"]))
-        if profile["attr_shuffle"]:
-            ops.append(lambda h: _shuffle_element_attrs(h, profile["attr_shuffle_rate"]))
+        if profile["light_touch"]:
+            # Nur die subtileren Ops — kein Tag-Swap, keine Class-Inject,
+            # keine Noise-Kommentare. Ergebnis sieht "sauber" aus.
+            if profile["vary_pixels"]:
+                ops.append(lambda h: _vary_pixels(h, profile["jitter_prob"] * 0.5,
+                                                    profile["jitter_delta"]))
+            if profile["attr_shuffle"]:
+                ops.append(lambda h: _shuffle_element_attrs(h, profile["attr_shuffle_rate"] * 0.5))
+            if profile["shuffle_css"]:
+                ops.append(lambda h: _shuffle_css_properties(h, profile["css_shuffle_rate"] * 0.5))
+        else:
+            if profile["swap_tags"] and profile["swap_strategy"] != "no_swap":
+                ops.append(lambda h: _swap_tags(h, profile["swap_strategy"]))
+            if profile["vary_pixels"]:
+                ops.append(lambda h: _vary_pixels(h, profile["jitter_prob"], profile["jitter_delta"]))
+            if profile["shuffle_css"]:
+                ops.append(lambda h: _shuffle_css_properties(h, profile["css_shuffle_rate"]))
+            if profile["shuffle_img"]:
+                ops.append(lambda h: _shuffle_image_attributes(h, profile["img_shuffle_rate"]))
+            if profile["inject_classes"]:
+                ops.append(lambda h: _inject_classes(h, profile["class_scheme"],
+                                                      profile["inject_rate"],
+                                                      profile["style_block"]))
+            if profile["noise_comments"]:
+                ops.append(lambda h: _inject_noise_comments(h, profile["noise_comment_rate"]))
+            if profile["noise_invisible"]:
+                ops.append(lambda h: _inject_invisible_chars(h, profile["noise_invisible_rate"]))
+            if profile["attr_shuffle"]:
+                ops.append(lambda h: _shuffle_element_attrs(h, profile["attr_shuffle_rate"]))
 
         random.shuffle(ops)
         for op in ops:

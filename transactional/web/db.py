@@ -230,6 +230,20 @@ class TransDB:
             c.execute("""CREATE TABLE IF NOT EXISTS trans_app_config (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 login_logo TEXT DEFAULT '', app_name TEXT DEFAULT 'Transactional Mailer')""")
+        # Assembly-Mode Snippets — pro Slot ein Pool, live pro Send
+        # zufällig kombiniert. Optionales Feature pro Kampagne.
+        if "trans_snippets" not in tables:
+            c.execute("""CREATE TABLE trans_snippets (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                slot TEXT NOT NULL,
+                label TEXT DEFAULT '',
+                content TEXT NOT NULL DEFAULT '',
+                is_active INTEGER DEFAULT 1,
+                user_id INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_tsnip_slot ON trans_snippets(slot, is_active)")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_tsnip_user ON trans_snippets(user_id, slot)")
+
         # SES-API-Provider für trans_smtps
         if "trans_smtps" in tables:
             scols = {r[1] for r in c.execute("PRAGMA table_info(trans_smtps)").fetchall()}
@@ -267,6 +281,10 @@ class TransDB:
             ("trans_campaigns", "auto_bandit_epsilon", "0.15"),
             ("trans_campaigns", "auto_stats_json", "''"),
             ("trans_campaigns", "auto_pause_reason", "''"),
+            # Assembly-Mode + Anti-FP-Rates pro Kampagne
+            ("trans_campaigns", "assembly_mode_enabled", "0"),
+            ("trans_campaigns", "antifp_passthrough_rate", "0.02"),
+            ("trans_campaigns", "antifp_light_rate", "0.10"),
             ("trans_templates", "logo_group_id", "0"),
             ("trans_logos", "group_id", "0"),
             ("trans_logos", "cdn_url", "''"),
@@ -1104,6 +1122,69 @@ class TransDB:
     def delete_redirect(self, rid: int):
         c = self._conn()
         c.execute("DELETE FROM trans_redirect_links WHERE id=?", (rid,))
+        c.commit()
+
+    # ── Snippets (Assembly-Mode) ───────────────────────────
+    SNIPPET_SLOTS = ("header", "intro", "body", "outro", "footer")
+
+    def add_snippet(self, slot: str, label: str, content: str,
+                     user_id: int = 0) -> int:
+        if slot not in self.SNIPPET_SLOTS:
+            raise ValueError(f"unknown snippet slot: {slot}")
+        c = self._conn()
+        c.execute("INSERT INTO trans_snippets (slot,label,content,user_id,is_active) "
+                  "VALUES (?,?,?,?,1)",
+                  (slot, label.strip(), content, user_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_snippets(self, user_id: int = 0, slot: str = "") -> list:
+        c = self._conn()
+        where = []
+        params = []
+        if user_id:
+            where.append("user_id=?")
+            params.append(user_id)
+        if slot:
+            where.append("slot=?")
+            params.append(slot)
+        clause = f"WHERE {' AND '.join(where)}" if where else ""
+        return c.execute(
+            f"SELECT * FROM trans_snippets {clause} ORDER BY slot, id"
+        , params).fetchall()
+
+    def get_active_snippets(self, user_id: int = 0, slot: str = "") -> list:
+        c = self._conn()
+        where = ["is_active=1"]
+        params = []
+        if user_id:
+            where.append("user_id=?")
+            params.append(user_id)
+        if slot:
+            where.append("slot=?")
+            params.append(slot)
+        return c.execute(
+            f"SELECT * FROM trans_snippets WHERE {' AND '.join(where)} "
+            f"ORDER BY slot, id", params).fetchall()
+
+    def update_snippet(self, sid: int, **kw):
+        if not kw:
+            return
+        c = self._conn()
+        cols = ", ".join(f"{k}=?" for k in kw)
+        c.execute(f"UPDATE trans_snippets SET {cols} WHERE id=?",
+                  list(kw.values()) + [sid])
+        c.commit()
+
+    def delete_snippet(self, sid: int):
+        c = self._conn()
+        c.execute("DELETE FROM trans_snippets WHERE id=?", (sid,))
+        c.commit()
+
+    def toggle_snippet(self, sid: int):
+        c = self._conn()
+        c.execute("UPDATE trans_snippets SET is_active=1-is_active WHERE id=?",
+                  (sid,))
         c.commit()
 
     # ── Bounce Log ─────────────────────────────────────────

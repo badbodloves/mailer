@@ -19,8 +19,13 @@ _TD_RE = re.compile(r"<td\b([^>]*)>(.*?)</td>", re.IGNORECASE | re.DOTALL)
 
 
 class AdvancedAntiFingerprintEngine(AntiFingerprintEngine):
-    def __init__(self, enable_classes: bool = True, structure_variation: float = 0.5):
-        super().__init__(enable_classes=enable_classes)
+    def __init__(self, enable_classes: bool = True,
+                  structure_variation: float = 0.5,
+                  pass_through_rate: float = 0.02,
+                  light_touch_rate: float = 0.10):
+        super().__init__(enable_classes=enable_classes,
+                          pass_through_rate=pass_through_rate,
+                          light_touch_rate=light_touch_rate)
         self._structure_variation = max(0.0, min(1.0, structure_variation))
 
     def transform(self, html: str) -> str:
