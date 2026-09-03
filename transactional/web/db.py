@@ -546,19 +546,59 @@ class TransDB:
         c.commit()
 
     def import_smtps(self, list_id: int, text: str) -> int:
+        """Parst SMTP-Zeilen. Zwei Formate werden automatisch erkannt:
+
+        1) CSV-Standard:   host,port,user,pass[,proxy]
+        2) Pipe-Export (SmtpChecker/AtomicMail o.ä. mit vielen Feldern):
+             host|port|N|N|N|bool|...|user@x|pass|N|N|...
+           Host in Feld 0, Port in Feld 1, User (email) in Feld 10 und
+           Pass in Feld 11 sind zuverlässig; falls das nicht passt,
+           versuchen wir die erste Email-Adresse + das direkt folgende
+           Feld als User/Pass zu greifen.
+        """
+        import re
         c = self._conn()
         added = 0
+
+        def _parse_pipe(parts):
+            # Bevorzugter Positions-Fallback aus dem Export-Beispiel
+            if (len(parts) >= 12 and "@" in parts[10] and parts[11]
+                    and parts[1].isdigit()):
+                return parts[0].strip(), int(parts[1]), parts[10].strip(), parts[11].strip()
+            # Fallback: erste Email finden, Passwort ist das Feld danach
+            email_re = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+            for i, p in enumerate(parts):
+                if email_re.match(p.strip()) and i + 1 < len(parts) and parts[i + 1].strip():
+                    if parts[1].strip().isdigit():
+                        return parts[0].strip(), int(parts[1]), p.strip(), parts[i + 1].strip()
+            return None
+
         for line in text.splitlines():
             line = line.strip()
             if not line or line.startswith("#"):
                 continue
-            parts = line.split(",")
-            if len(parts) < 4:
+
+            row = None
+            if "|" in line and line.count("|") >= 4:
+                parts = line.split("|")
+                row = _parse_pipe(parts)
+
+            if row is None:
+                parts = line.split(",")
+                if len(parts) < 4:
+                    continue
+                try:
+                    row = (parts[0].strip(), int(parts[1].strip()),
+                           parts[2].strip(), parts[3].strip())
+                except ValueError:
+                    continue
+
+            host, port, user, pw = row
+            if not host or not user or not pw or not port:
                 continue
             try:
                 c.execute("INSERT INTO trans_smtps (list_id,host,port,username,password) VALUES (?,?,?,?,?)",
-                          (list_id, parts[0].strip(), int(parts[1].strip()),
-                           parts[2].strip(), parts[3].strip()))
+                          (list_id, host, port, user, pw))
                 added += 1
             except Exception:
                 pass

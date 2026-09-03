@@ -39,8 +39,13 @@
             <div id="imp-tabs-{{ sl.id }}">
                 <div id="imp-smtp-{{ sl.id }}" class="tab-content active">
                     <form hx-post="/smtps/{{ sl.id }}/import" hx-target="#import-{{ sl.id }}" hx-swap="innerHTML">
-                        <label>Import SMTPs (host,port,user,pass — NO proxy)</label>
-                        <textarea name="smtp_text" rows="4" placeholder="smtp.gmail.com,587,user@gmail.com,password&#10;smtp.outlook.com,465,user@outlook.com,password" style="font-family:monospace;font-size:12px"></textarea>
+                        <label>Import SMTPs — Format wird auto-erkannt</label>
+                        <textarea name="smtp_text" rows="4" placeholder="smtp.gmail.com,587,user@gmail.com,password&#10;oder Pipe-Export:&#10;host.tld|465|15|1|1|true|1|0|1|0|user@x.de|passwort|0|1|0|20|5|||||||||0||" style="font-family:monospace;font-size:12px"></textarea>
+                        <div class="form-help" style="font-size:11px;margin-top:4px">
+                            CSV: <code>host,port,user,pass</code> · Pipe-Export
+                            (SmtpChecker & Co, viele Felder): Host/Port/User/Pass werden
+                            automatisch extrahiert.
+                        </div>
                         <div style="margin-top:8px"><button class="btn btn-primary btn-sm">Import SMTPs</button></div>
                     </form>
                 </div>
