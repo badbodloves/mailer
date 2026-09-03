@@ -196,13 +196,13 @@
                 <span>Regenerate HTML templates (random layouts)</span>
             </label>
             <label>How many HTMLs per reset</label>
-            <input name="freshness_html_count" type="number" min="1" max="500" value="{{ cfg.freshness_html_count or 25 }}">
+            <input name="freshness_html_count" type="number" min="1" max="5000" value="{{ cfg.freshness_html_count or 25 }}">
             <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:8px">
                 <input type="checkbox" name="freshness_reset_logos" {{ 'checked' if cfg.freshness_reset_logos }} style="width:auto">
                 <span>Regenerate logo variants (wipe and re-derive from source logos)</span>
             </label>
             <label>How many variants per reset</label>
-            <input name="freshness_logo_count" type="number" min="1" max="500" value="{{ cfg.freshness_logo_count or 25 }}">
+            <input name="freshness_logo_count" type="number" min="1" max="5000" value="{{ cfg.freshness_logo_count or 25 }}">
             <div class="form-help" style="margin-top:4px">
                 Logo regen only fires for image modes <code>cid</code> and <code>url</code>.
                 <code>text</code> mode never reads variants so the reset is skipped.
