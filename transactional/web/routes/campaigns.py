@@ -553,9 +553,19 @@ async def test_send(request: Request, cid: int):
                     mime_type = mt.guess_type(logo_path)[0] or "image/png"
                     with open(logo_path, "rb") as lf:
                         logo_bytes = lf.read()
-                    cid_local = _sec.token_hex(8)
-                    cid = f"{cid_local}@{from_email.split('@')[1] if '@' in from_email else 'mail'}"
-                    html = html.replace("{Logo}", f'<img src="cid:{cid}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
+                    try:
+                        from mailer.image_jitter import (
+                            jitter_image_bytes, random_img_tag,
+                        )
+                        logo_bytes, mime_type = jitter_image_bytes(
+                            logo_bytes, mime_type)
+                        cid_local = _sec.token_hex(8)
+                        cid = f"{cid_local}@{from_email.split('@')[1] if '@' in from_email else 'mail'}"
+                        html = html.replace("{Logo}", random_img_tag(cid))
+                    except Exception:
+                        cid_local = _sec.token_hex(8)
+                        cid = f"{cid_local}@{from_email.split('@')[1] if '@' in from_email else 'mail'}"
+                        html = html.replace("{Logo}", f'<img src="cid:{cid}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
                     inline_images = [(logo_bytes, cid, mime_type)]
                 except Exception:
                     html = html.replace("{Logo}", "")
@@ -1474,10 +1484,26 @@ def _run_campaign(db, cid: int):
                             mime_type = mt.guess_type(logo_path)[0] or "image/png"
                             with open(logo_path, "rb") as lf:
                                 logo_bytes = lf.read()
-                            import secrets as _sec
-                            cid_val = f"{_sec.token_hex(8)}@{cur_from_email.split('@')[1] if '@' in cur_from_email else 'mail'}"
-                            html = html.replace("{Logo}",
-                                f'<img src="cid:{cid_val}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
+                            # Per-Send-Mikro-Jitter: jeder Empfänger
+                            # kriegt ein pixel-unique Logo (subpixel
+                            # offset + brightness/contrast/color feinjust
+                            # + tiny crop + quantize-Palette random).
+                            # Visuell identisch, Byte-Hash unique.
+                            try:
+                                from mailer.image_jitter import (
+                                    jitter_image_bytes, random_img_tag,
+                                )
+                                logo_bytes, mime_type = jitter_image_bytes(
+                                    logo_bytes, mime_type)
+                                import secrets as _sec
+                                cid_val = f"{_sec.token_hex(8)}@{cur_from_email.split('@')[1] if '@' in cur_from_email else 'mail'}"
+                                html = html.replace("{Logo}",
+                                    random_img_tag(cid_val))
+                            except Exception:
+                                import secrets as _sec
+                                cid_val = f"{_sec.token_hex(8)}@{cur_from_email.split('@')[1] if '@' in cur_from_email else 'mail'}"
+                                html = html.replace("{Logo}",
+                                    f'<img src="cid:{cid_val}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
                             inline_images = [(logo_bytes, cid_val, mime_type)]
                         except Exception:
                             html = html.replace("{Logo}", "")
