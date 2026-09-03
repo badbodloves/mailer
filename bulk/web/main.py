@@ -15,11 +15,24 @@ from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 
 # Form-Field-Size-Limit hoch (Default 1MB) — für große Textareas
+_MAX_FIELD = 50 * 1024 * 1024
+_MAX_FILE  = 200 * 1024 * 1024
 try:
     from starlette.formparsers import FormParser as _FormParser, MultiPartParser as _MultiPartParser
-    _FormParser.max_field_size = 50 * 1024 * 1024
-    _MultiPartParser.max_field_size = 50 * 1024 * 1024
-    _MultiPartParser.max_file_size = 200 * 1024 * 1024
+    _FormParser.max_field_size = _MAX_FIELD
+    _MultiPartParser.max_field_size = _MAX_FIELD
+    _MultiPartParser.max_file_size = _MAX_FILE
+except Exception:
+    pass
+try:
+    import inspect as _inspect
+    from starlette.requests import Request as _Req
+    _orig_form = _Req.form
+    if "max_part_size" in _inspect.signature(_orig_form).parameters:
+        async def _bigger_form(self, *args, **kwargs):
+            kwargs.setdefault("max_part_size", _MAX_FIELD)
+            return await _orig_form(self, *args, **kwargs)
+        _Req.form = _bigger_form
 except Exception:
     pass
 
