@@ -14,6 +14,17 @@ from fastapi.responses import RedirectResponse
 from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 
+# python-multipart limitiert Form-Felder auf 1MB by default. Für große
+# Macros/Templates/Snippets/Lead-Blocks brauchen wir mehr. Setzt sowohl
+# das class-attribute (Starlette >= 0.35) als auch die Multipart-Config.
+try:
+    from starlette.formparsers import FormParser as _FormParser, MultiPartParser as _MultiPartParser
+    _FormParser.max_field_size = 50 * 1024 * 1024        # 50 MB
+    _MultiPartParser.max_field_size = 50 * 1024 * 1024
+    _MultiPartParser.max_file_size  = 200 * 1024 * 1024  # 200 MB
+except Exception:
+    pass
+
 from .db import TransDB
 from .routes import campaigns, smtps, leads, templates, auth, logos, redirects, macros, proxies, pools, config as config_route, settings, ai, admin, testlab, bounces, htmlgen, inboxtest, exporter, cloudinary, smtp_check, antibot_config, snippets
 

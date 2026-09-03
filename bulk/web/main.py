@@ -14,6 +14,15 @@ from fastapi.responses import RedirectResponse
 from contextlib import asynccontextmanager
 from starlette.middleware.base import BaseHTTPMiddleware
 
+# Form-Field-Size-Limit hoch (Default 1MB) — für große Textareas
+try:
+    from starlette.formparsers import FormParser as _FormParser, MultiPartParser as _MultiPartParser
+    _FormParser.max_field_size = 50 * 1024 * 1024
+    _MultiPartParser.max_field_size = 50 * 1024 * 1024
+    _MultiPartParser.max_file_size = 200 * 1024 * 1024
+except Exception:
+    pass
+
 from bulk.mailer.db_manager import BulkDBManager
 
 from .routes import mailings, brands, smtp, lists, composer, macros, preview, cloudflare, logs, macro_help
