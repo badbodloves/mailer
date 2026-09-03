@@ -160,7 +160,8 @@ async def save_campaign(request: Request, cid: int,
                         auto_bandit_epsilon: float = Form(0.15),
                         assembly_mode_enabled: int = Form(0),
                         antifp_passthrough_rate: float = Form(0.02),
-                        antifp_light_rate: float = Form(0.10)):
+                        antifp_light_rate: float = Form(0.10),
+                        live_html_gen_enabled: int = Form(0)):
     db = request.app.state.db
     updates = {"name": name.strip(), "schedule_time": schedule_time.strip(),
                "template_id": template_id, "redirect_pool_id": redirect_pool_id,
@@ -171,7 +172,8 @@ async def save_campaign(request: Request, cid: int,
                "auto_bandit_epsilon": auto_bandit_epsilon,
                "assembly_mode_enabled": 1 if assembly_mode_enabled else 0,
                "antifp_passthrough_rate": max(0.0, min(1.0, antifp_passthrough_rate)),
-               "antifp_light_rate": max(0.0, min(1.0, antifp_light_rate))}
+               "antifp_light_rate": max(0.0, min(1.0, antifp_light_rate)),
+               "live_html_gen_enabled": 1 if live_html_gen_enabled else 0}
     if smtp_list_id:
         updates["smtp_list_id"] = smtp_list_id
     if lead_list_id:
@@ -955,6 +957,34 @@ def _run_campaign(db, cid: int):
                     "Campaign %d: assembly-mode ON — %s",
                     cid, ", ".join(f"{k}:{len(v)}" for k, v in assembly_snippets.items()))
 
+        # Live-HTML-Generation: pro Send ein frisches Template aus der
+        # htmlgen-Engine würfeln statt aus vorgeneriertem Pool zu picken.
+        # Blocks+Layouts werden einmal geladen und via `_cache` an jeden
+        # generate_one() weitergereicht → pro Send <5ms zusätzlich.
+        live_html_gen = bool(camp.get("live_html_gen_enabled"))
+        htmlgen_cfg = None
+        htmlgen_base = None
+        htmlgen_cache = None
+        htmlgen_generate_one = None
+        if live_html_gen:
+            try:
+                from pathlib import Path as _Path
+                from htmlgen.config import load_config as _load_htmlgen_cfg
+                from htmlgen.engine import _load_all as _htmlgen_load_all, generate_one as _htmlgen_generate_one
+                htmlgen_base = _Path(__file__).resolve().parents[3] / "htmlgen"
+                if not htmlgen_base.exists():
+                    logger.warning("Campaign %d: htmlgen base not found (%s)",
+                                    cid, htmlgen_base)
+                    live_html_gen = False
+                else:
+                    htmlgen_cfg = _load_htmlgen_cfg(htmlgen_base / "config.yaml")
+                    htmlgen_cache = _htmlgen_load_all(htmlgen_base)
+                    htmlgen_generate_one = _htmlgen_generate_one
+                    logger.info("Campaign %d: live-html-gen ON (htmlgen)", cid)
+            except Exception as e:
+                logger.warning("Campaign %d: live-html-gen init failed: %s", cid, e)
+                live_html_gen = False
+
         campaign_template_id = camp.get("template_id", 0) or 0
         # html_bodies + logo_variants are kept as mutable lists so the
         # freshness monitor can swap their contents in-place during the
@@ -1467,7 +1497,19 @@ def _run_campaign(db, cid: int):
             try:
                 cur_from_name = _process(from_name_cfg, email, sticky_cache)
                 cur_subject = _process(subject_cfg, email, sticky_cache)
-                if assembly_enabled and assembly_snippets:
+                if live_html_gen and htmlgen_generate_one is not None:
+                    # Per-Send fresh HTML aus der htmlgen-Engine.
+                    # Enthält noch die Macros ({Satz1}, {Ende}, ...), die
+                    # gleich unten in _process() aufgelöst werden.
+                    try:
+                        html = htmlgen_generate_one(htmlgen_cfg, htmlgen_base,
+                                                     _cache=htmlgen_cache)
+                    except Exception as _hg_err:
+                        logger.warning("Campaign %d: htmlgen fail, fallback: %s",
+                                        campaign_id, _hg_err)
+                        html = (random.choice(html_bodies) if html_bodies
+                                else "<p>Hello {email_user}</p>")
+                elif assembly_enabled and assembly_snippets:
                     # Live-Assembly: pro Slot random pick, concat, wrap
                     from mailer.assembly import assemble_html
                     html = assemble_html(assembly_snippets)

@@ -129,23 +129,34 @@
                     </div>
                 </details>
 
-                <details {{ 'open' if c.get('assembly_mode_enabled') }} style="margin-top:12px">
+                <details {{ 'open' if c.get('live_html_gen_enabled') or c.get('assembly_mode_enabled') }} style="margin-top:12px">
                     <summary style="cursor:pointer;font-weight:600;font-size:13px">
-                        Assembly Mode + Anti-FP Feintuning
+                        HTML-Modi + Anti-FP Feintuning
+                        {% if c.get('live_html_gen_enabled') %}<span class="badge badge-running" style="margin-left:6px">Live-Gen ON</span>{% endif %}
                         {% if c.get('assembly_mode_enabled') %}<span class="badge badge-running" style="margin-left:6px">Assembly ON</span>{% endif %}
                     </summary>
                     <div style="padding:10px 0 4px 0;font-size:12px;color:var(--fg2);margin-bottom:6px">
-                        <strong>Assembly:</strong> HTML wird pro Send live aus dem
-                        <a href="/snippets" style="color:var(--accent)">Snippet-Pool</a>
-                        zusammengesetzt (header → intro → body → outro → footer,
-                        pro Slot random ein aktiver Snippet).
-                        Braucht mindestens einen aktiven Snippet in irgendeinem Slot,
-                        sonst wird stumm auf klassische Template-Auswahl zurückgefallen.
+                        <strong>Standard:</strong> Kampagne wählt pro Send ein Template
+                        aus dem vorhandenen HTML-Pool (siehe Config → freshness_html_count).<br>
+                        <strong>Live HTML Gen:</strong> pro Send erzeugt die
+                        htmlgen-Engine live ein frisches Template (mit Macros wie
+                        <code>{Satz1}</code>, <code>{Ende}</code>, <code>{Footer1}</code>
+                        die dann normal aufgelöst werden). Kein Pool nötig,
+                        maximale Variation pro Empfänger, ~5ms overhead pro Send.<br>
+                        <strong>Assembly:</strong> Snippet-Pool-basiert
+                        (<a href="/snippets" style="color:var(--accent)">/snippets</a>) —
+                        alternative wenn du eigene HTML-Fragmente pro Slot pflegen willst.<br>
+                        Priorität: Live-Gen &gt; Assembly &gt; Pool.
                     </div>
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:6px">
+                        <input type="checkbox" name="live_html_gen_enabled" value="1" style="width:auto"
+                               {{ 'checked' if c.get('live_html_gen_enabled') }}>
+                        <span><strong>Live HTML Gen</strong> — pro Send frisch aus htmlgen (empfohlen)</span>
+                    </label>
                     <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
                         <input type="checkbox" name="assembly_mode_enabled" value="1" style="width:auto"
                                {{ 'checked' if c.get('assembly_mode_enabled') }}>
-                        <span>Assembly Mode aktivieren</span>
+                        <span>Snippet Assembly (nur wenn Live-Gen aus)</span>
                     </label>
                     <div class="grid-2" style="margin-top:10px">
                         <div>

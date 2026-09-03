@@ -285,6 +285,8 @@ class TransDB:
             ("trans_campaigns", "assembly_mode_enabled", "0"),
             ("trans_campaigns", "antifp_passthrough_rate", "0.02"),
             ("trans_campaigns", "antifp_light_rate", "0.10"),
+            # Live-HTML-Gen: pro Send frisches HTML aus htmlgen-Engine
+            ("trans_campaigns", "live_html_gen_enabled", "0"),
             ("trans_templates", "logo_group_id", "0"),
             ("trans_logos", "group_id", "0"),
             ("trans_logos", "cdn_url", "''"),
