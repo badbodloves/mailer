@@ -37,6 +37,19 @@ def _enrich(db, cd):
     total = cd.get("total_leads", 0) or 0
     sent = cd.get("sent", 0) or 0
     failed = cd.get("failed", 0) or 0
+    # Live-Zähler aus trans_leads — sent-Spalte in trans_campaigns wird
+    # nur alle 20 Sends persistiert, hinkt deshalb hinter dem echten
+    # Stand hinterher. Der COUNT ist billig (Index auf state).
+    lid = cd.get("lead_list_id", 0) or 0
+    if lid and cd["running"]:
+        try:
+            states = db.get_lead_states(lid)
+            sent = int(states.get("SENT", 0)) or sent
+            failed = int(states.get("FAILED", 0)) or failed
+            cd["sent"] = sent
+            cd["failed"] = failed
+        except Exception:
+            pass
     cd["pct"] = int(sent / total * 100) if total > 0 else 0
     cd["remaining"] = max(0, total - sent)
     try:
@@ -670,8 +683,19 @@ async def campaign_stats(request: Request, cid: int):
         return HTMLResponse("<div>Not found</div>")
     cd = dict(camp)
     total = cd.get("total_leads", 0) or 0
+    # Live-Zähler direkt aus trans_leads statt aus trans_campaigns.sent —
+    # der wird nur alle 20 Sends persistiert und läuft dem echten Stand
+    # deshalb sichtbar hinterher.
+    lead_list_id = cd.get("lead_list_id", 0) or 0
     sent = cd.get("sent", 0) or 0
     failed = cd.get("failed", 0) or 0
+    if lead_list_id:
+        try:
+            states = db.get_lead_states(lead_list_id)
+            sent = int(states.get("SENT", 0)) or sent
+            failed = int(states.get("FAILED", 0)) or failed
+        except Exception:
+            pass
     remaining = max(0, total - sent)
     pct = int(sent / total * 100) if total > 0 else 0
     running = cid in _runners
@@ -1540,7 +1564,10 @@ def _run_campaign(db, cid: int):
             with _lock:
                 db.mark_sent(lead_id)
                 sent += 1
-                if (sent + failed) % 20 == 0:
+                # Persist alle 5 Sends statt alle 20 — sonst hinkt der
+                # UI-Counter (der ist jetzt live aus trans_leads, aber
+                # nach Restart wird trans_campaigns.sent gebraucht).
+                if (sent + failed) % 5 == 0:
                     db.update_campaign(campaign_id, sent=sent, failed=failed)
             pool.record_success(account)
             if auto_ctrl and html_arm is not None:
