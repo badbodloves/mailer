@@ -161,7 +161,9 @@ async def save_campaign(request: Request, cid: int,
                         assembly_mode_enabled: int = Form(0),
                         antifp_passthrough_rate: float = Form(0.02),
                         antifp_light_rate: float = Form(0.10),
-                        live_html_gen_enabled: int = Form(0)):
+                        live_html_gen_enabled: int = Form(0),
+                        live_primary_color: str = Form(""),
+                        live_accent_color: str = Form("")):
     db = request.app.state.db
     updates = {"name": name.strip(), "schedule_time": schedule_time.strip(),
                "template_id": template_id, "redirect_pool_id": redirect_pool_id,
@@ -173,7 +175,9 @@ async def save_campaign(request: Request, cid: int,
                "assembly_mode_enabled": 1 if assembly_mode_enabled else 0,
                "antifp_passthrough_rate": max(0.0, min(1.0, antifp_passthrough_rate)),
                "antifp_light_rate": max(0.0, min(1.0, antifp_light_rate)),
-               "live_html_gen_enabled": 1 if live_html_gen_enabled else 0}
+               "live_html_gen_enabled": 1 if live_html_gen_enabled else 0,
+               "live_primary_color": live_primary_color.strip(),
+               "live_accent_color": live_accent_color.strip()}
     if smtp_list_id:
         updates["smtp_list_id"] = smtp_list_id
     if lead_list_id:
@@ -978,9 +982,26 @@ def _run_campaign(db, cid: int):
                     live_html_gen = False
                 else:
                     htmlgen_cfg = _load_htmlgen_cfg(htmlgen_base / "config.yaml")
+                    # Brand-Farb-Overrides pro Kampagne (leer = Pool-Random)
+                    _prim = (camp.get("live_primary_color") or "").strip()
+                    _acc = (camp.get("live_accent_color") or "").strip()
+                    if _prim:
+                        htmlgen_cfg.setdefault("colors", {})["primary"] = [_prim]
+                        try:
+                            from htmlgen.colors import lighten_color
+                            htmlgen_cfg["colors"]["light_accent_bg"] = [
+                                lighten_color(_prim,
+                                    htmlgen_cfg.get("lighten_amount", 0.85))
+                            ]
+                        except Exception:
+                            pass
+                    if _acc:
+                        htmlgen_cfg.setdefault("colors", {})["accent"] = [_acc]
                     htmlgen_cache = _htmlgen_load_all(htmlgen_base)
                     htmlgen_generate_one = _htmlgen_generate_one
-                    logger.info("Campaign %d: live-html-gen ON (htmlgen)", cid)
+                    logger.info(
+                        "Campaign %d: live-html-gen ON (primary=%s accent=%s)",
+                        cid, _prim or "pool", _acc or "pool")
             except Exception as e:
                 logger.warning("Campaign %d: live-html-gen init failed: %s", cid, e)
                 live_html_gen = False

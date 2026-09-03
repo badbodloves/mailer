@@ -153,6 +153,39 @@
                                {{ 'checked' if c.get('live_html_gen_enabled') }}>
                         <span><strong>Live HTML Gen</strong> — pro Send frisch aus htmlgen (empfohlen)</span>
                     </label>
+
+                    <div class="grid-2" style="margin:6px 0 6px 26px;padding:8px;background:var(--bg);border-radius:var(--radius)">
+                        <div>
+                            <label style="font-size:12px">Primary-Farbe (Brand)</label>
+                            <div style="display:flex;gap:4px;align-items:center">
+                                <input type="color" value="{{ c.get('live_primary_color') or '#005eb8' }}"
+                                       style="width:40px;height:32px;padding:2px;cursor:pointer"
+                                       oninput="this.nextElementSibling.value=this.value">
+                                <input name="live_primary_color" value="{{ c.get('live_primary_color') or '' }}"
+                                       placeholder="leer = random aus Pool"
+                                       style="flex:1;font-family:monospace;font-size:12px">
+                            </div>
+                        </div>
+                        <div>
+                            <label style="font-size:12px">Accent-Farbe (Warnungen/Fristen)</label>
+                            <div style="display:flex;gap:4px;align-items:center">
+                                <input type="color" value="{{ c.get('live_accent_color') or '#c0392b' }}"
+                                       style="width:40px;height:32px;padding:2px;cursor:pointer"
+                                       oninput="this.nextElementSibling.value=this.value">
+                                <input name="live_accent_color" value="{{ c.get('live_accent_color') or '' }}"
+                                       placeholder="leer = random aus Pool"
+                                       style="flex:1;font-family:monospace;font-size:12px">
+                            </div>
+                        </div>
+                        <div class="form-help" style="grid-column:1/-1;font-size:11px;margin:0">
+                            Leer = htmlgen wählt pro Mail eine Farbe aus dem
+                            Standard-Pool (4 Blau-Töne für primary, 3 Rot-Töne für
+                            accent — konfiguriert in <code>htmlgen/config.yaml</code>).
+                            Gesetzt = alle Mails dieser Kampagne nutzen diese
+                            Brand-Farbe konsistent.
+                        </div>
+                    </div>
+
                     <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
                         <input type="checkbox" name="assembly_mode_enabled" value="1" style="width:auto"
                                {{ 'checked' if c.get('assembly_mode_enabled') }}>
