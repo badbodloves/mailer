@@ -27,6 +27,27 @@ HEADERS = {
 }
 
 
+def _normalize_proxy(raw: str) -> Optional[str]:
+    """Nimmt ein Proxy-String und liefert eine URL für requests.proxies.
+    Akzeptiert:
+      * bereits URL-Form: `socks5://user:pass@host:port`, `http://host:port`
+      * host:port
+      * host:port:user:pass  (klassisches Mailer-Format)
+    Default-Schema: socks5h (DNS auch durch Proxy)."""
+    s = raw.strip()
+    if not s:
+        return None
+    if "://" in s:
+        return s
+    parts = s.split(":")
+    if len(parts) == 2:
+        return f"socks5h://{parts[0]}:{parts[1]}"
+    if len(parts) == 4:
+        host, port, user, pw = parts
+        return f"socks5h://{user}:{pw}@{host}:{port}"
+    return None
+
+
 class RedirectManager:
     def __init__(self, target_url: str = "", db_path: str = "redirects.db",
                  enabled: bool = False, rotate_every: int = 10,
@@ -119,7 +140,10 @@ class RedirectManager:
         print(f"  Redirect pool: {self.pool_size} links")
 
     @staticmethod
-    def _generate_one(target_url: str) -> Optional[str]:
+    def _generate_one(target_url: str, proxy: str = "") -> Optional[str]:
+        """Generate a share.google link. If `proxy` is set (SOCKS5 or
+        HTTP URL like `socks5://user:pass@host:port` or `http://host:port`),
+        the API call goes through it."""
         reqpld = json.dumps([[[target_url], 1, None, None, None, None, 35]])
         params = {
             "sca_esv": "2f77f72a12157cd0",
@@ -129,8 +153,13 @@ class RedirectManager:
             "msc": "gwsrpc",
             "opi": "89978449",
         }
+        kwargs = {"params": params, "headers": HEADERS, "timeout": 20}
+        if proxy and proxy.strip():
+            p = _normalize_proxy(proxy.strip())
+            if p:
+                kwargs["proxies"] = {"http": p, "https": p}
         try:
-            resp = _requests.get(API_URL, params=params, headers=HEADERS, timeout=15)
+            resp = _requests.get(API_URL, **kwargs)
             resp.raise_for_status()
             raw = resp.text
             if raw.startswith(")]}'"):

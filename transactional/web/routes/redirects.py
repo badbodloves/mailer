@@ -87,6 +87,21 @@ def _resolve_proxy_by_id(db, proxy_id: int) -> str:
     return (dict(row).get("value") or "").strip()
 
 
+def _resolve_proxy_list(db, proxy_id: int) -> list:
+    """Nimmt eine Proxy-Row (single oder pool) und liefert eine Liste
+    von Proxy-URLs die zum round-robin genutzt werden können.
+    Format: host:port oder host:port:user:pass oder full URL."""
+    if not proxy_id:
+        return []
+    row = db.get_proxy(proxy_id)
+    if not row:
+        return []
+    value = (dict(row).get("value") or "").strip()
+    if not value:
+        return []
+    return [ln.strip() for ln in value.splitlines() if ln.strip()]
+
+
 def _resolve_s3_account(db, uid: int, account_id: int = 0,
                         region_override: str = "") -> dict:
     """Return {name, access_key, secret_key, region, bucket_prefix, proxy_val}.
@@ -296,7 +311,8 @@ async def generate_multi_targets(request: Request,
                                    count_per_target: int = Form(1),
                                    gen_threads: int = Form(3),
                                    pool_id: int = Form(0),
-                                   google_rewrite: str = Form("")):
+                                   google_rewrite: str = Form(""),
+                                   gen_proxy_id: int = Form(0)):
     """Ein share.google-Link pro Target-URL (oder N pro Target).
     Textarea mit einer Target-URL pro Zeile. Antibot-Wrapping wird
     per-Target angewendet (jedes Target kriegt seinen eigenen Antibot-Token)."""
@@ -323,6 +339,11 @@ async def generate_multi_targets(request: Request,
     total = len(valid_targets) * count_per_target
     _gen_progress.update(running=True, total=total, done=0, ok=0, errors=0)
 
+    # Proxies für die Generierung: aus dem Pool holen (kann mehrere Zeilen
+    # sein), pro Job rotieren. Rate-Limits/Google-Detection werden dadurch
+    # deutlich entschärft.
+    gen_proxies = _resolve_proxy_list(db, int(gen_proxy_id or 0))
+
     def worker():
         try:
             from mailer.redirect_manager import RedirectManager
@@ -348,7 +369,8 @@ async def generate_multi_targets(request: Request,
 
             def gen_one(job):
                 real, submit = job
-                url = RedirectManager._generate_one(submit)
+                proxy = random.choice(gen_proxies) if gen_proxies else ""
+                url = RedirectManager._generate_one(submit, proxy=proxy)
                 return (real, url)
 
             with ThreadPoolExecutor(max_workers=gen_threads) as executor:
@@ -394,7 +416,8 @@ async def generate_redirects(request: Request,
                               count: int = Form(100),
                               gen_threads: int = Form(3),
                               pool_id: int = Form(0),
-                              google_rewrite: str = Form("")):
+                              google_rewrite: str = Form(""),
+                              gen_proxy_id: int = Form(0)):
     target = target_url.strip()
     if not target:
         return HTMLResponse(
@@ -431,6 +454,8 @@ async def generate_redirects(request: Request,
 
     _gen_progress.update(running=True, total=count, done=0, ok=0, errors=0)
 
+    gen_proxies = _resolve_proxy_list(db, int(gen_proxy_id or 0))
+
     def worker():
         try:
             from mailer.redirect_manager import RedirectManager
@@ -440,7 +465,8 @@ async def generate_redirects(request: Request,
             done = 0
 
             def gen_one(_):
-                return RedirectManager._generate_one(submit_target)
+                proxy = random.choice(gen_proxies) if gen_proxies else ""
+                return RedirectManager._generate_one(submit_target, proxy=proxy)
 
             with ThreadPoolExecutor(max_workers=gen_threads) as executor:
                 futures = [executor.submit(gen_one, i) for i in range(count)]
