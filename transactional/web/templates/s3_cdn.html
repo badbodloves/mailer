@@ -88,10 +88,10 @@
                 Der Mailer legt den Bucket an, schaltet „Block Public Access" aus,
                 hängt eine Public-Read-Policy an und trägt ihn in die Bucket-Liste ein.
                 Braucht IAM-Permissions: <code>s3:CreateBucket</code>,
-                <code>s3:PutBucketPolicy</code>, <code>s3:PutBucketPublicAccessBlock</code>.
-                Wenn dein bestehender Key nur PutObject kann, leg den Bucket in der
-                AWS-Console selbst an und trag ihn unter <a href="/redirects" style="color:var(--accent)">/redirects</a>
-                im „Buckets"-Feld ein.
+                <code>s3:PutBucketPolicy</code>, <code>s3:PutBucketPublicAccessBlock</code>,
+                <code>s3:PutObject</code>.
+                Object-ACLs werden nicht mehr genutzt — Public-Read läuft über die
+                Bucket-Policy (AWS-Default „Bucket owner enforced" seit 2023).
             </div>
             <div style="margin-top:8px">
                 <button class="btn btn-primary btn-sm">Bucket anlegen + konfigurieren</button>

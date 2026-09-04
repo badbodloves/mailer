@@ -255,15 +255,21 @@ def s3_setup_bucket(iam_key: str, iam_secret: str, region: str,
 def s3_upload_object(iam_key: str, iam_secret: str, region: str,
                       bucket: str, key: str, body: bytes,
                       content_type: str = "image/png",
-                      public: bool = True,
+                      public: bool = True,      # kept for API-compat
                       proxy: str = "",
                       timeout: int = 30) -> str:
-    """PUT bytes → S3. Returns public URL."""
-    extra = {"x-amz-acl": "public-read"} if public else {}
+    """PUT bytes → S3. Returns public URL.
+
+    Hinweis: seit April 2023 haben neue AWS-Buckets standardmäßig
+    „Bucket owner enforced" gesetzt, was Object-ACLs abschaltet. Deshalb
+    schicken wir KEINEN x-amz-acl-Header — der Bucket ist über die
+    Bucket-Policy (aus s3_setup_bucket) bereits public-read. Der `public`
+    Parameter bleibt aus Kompatibilität erhalten, hat aber keinen Effekt
+    mehr auf den Request selbst."""
     key_path = "/" + quote(key.lstrip("/"))
     _s3_request("PUT", iam_key, iam_secret, region, bucket,
                  path=key_path, body=body, content_type=content_type,
-                 extra_headers=extra, proxy=proxy, timeout=timeout,
+                 proxy=proxy, timeout=timeout,
                  accept_status=(200,))
     return s3_bucket_url(bucket, region, key)
 
