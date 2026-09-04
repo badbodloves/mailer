@@ -230,6 +230,36 @@ class TransDB:
             c.execute("""CREATE TABLE IF NOT EXISTS trans_app_config (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 login_logo TEXT DEFAULT '', app_name TEXT DEFAULT 'Transactional Mailer')""")
+        # AWS S3 als CDN-Quelle (parallel zu Cloudinary). Ein Account
+        # kann mehrere Buckets haben (Multi-Bucket-Rotation für Origin-
+        # Domain-Diversität).
+        if "trans_s3_accounts" not in tables:
+            c.execute("""CREATE TABLE trans_s3_accounts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                iam_key TEXT NOT NULL,
+                iam_secret TEXT NOT NULL,
+                buckets TEXT NOT NULL DEFAULT '',
+                user_id INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        if "trans_s3_uploads" not in tables:
+            c.execute("""CREATE TABLE trans_s3_uploads (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                account_id INTEGER DEFAULT 0,
+                filename TEXT NOT NULL,
+                variant_count INTEGER DEFAULT 0,
+                user_id INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        if "trans_s3_links" not in tables:
+            c.execute("""CREATE TABLE trans_s3_links (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                upload_id INTEGER NOT NULL REFERENCES trans_s3_uploads(id) ON DELETE CASCADE,
+                url TEXT NOT NULL,
+                bucket TEXT DEFAULT '',
+                s3_key TEXT DEFAULT '',
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+            c.execute("CREATE INDEX IF NOT EXISTS idx_ts3l_upload ON trans_s3_links(upload_id)")
+
         # Assembly-Mode Snippets — pro Slot ein Pool, live pro Send
         # zufällig kombiniert. Optionales Feature pro Kampagne.
         if "trans_snippets" not in tables:
@@ -1716,6 +1746,78 @@ class TransDB:
         c.execute("DELETE FROM trans_cloudinary_uploads WHERE id=? AND user_id=?",
                   (upload_id, user_id))
         c.commit()
+
+    # ── S3 Logo CDN (parallel zu Cloudinary) ────────────────
+    def add_s3_account(self, name, iam_key, iam_secret, buckets, user_id) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO trans_s3_accounts (name,iam_key,iam_secret,buckets,user_id) "
+                  "VALUES (?,?,?,?,?)",
+                  (name.strip(), iam_key.strip(), iam_secret.strip(),
+                   buckets.strip(), user_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def get_s3_accounts(self, user_id) -> list:
+        return self._conn().execute(
+            "SELECT * FROM trans_s3_accounts WHERE user_id=? ORDER BY name",
+            (user_id,)).fetchall()
+
+    def get_s3_account(self, aid) -> dict:
+        row = self._conn().execute(
+            "SELECT * FROM trans_s3_accounts WHERE id=?", (aid,)).fetchone()
+        return dict(row) if row else {}
+
+    def delete_s3_account(self, aid, user_id):
+        c = self._conn()
+        c.execute("DELETE FROM trans_s3_accounts WHERE id=? AND user_id=?",
+                  (aid, user_id))
+        c.commit()
+
+    def add_s3_upload(self, account_id, filename, user_id) -> int:
+        c = self._conn()
+        c.execute("INSERT INTO trans_s3_uploads (account_id,filename,user_id) "
+                  "VALUES (?,?,?)", (account_id, filename, user_id))
+        c.commit()
+        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def add_s3_link(self, upload_id, url, bucket, s3_key):
+        c = self._conn()
+        c.execute("INSERT INTO trans_s3_links (upload_id,url,bucket,s3_key) "
+                  "VALUES (?,?,?,?)", (upload_id, url, bucket, s3_key))
+        c.execute("UPDATE trans_s3_uploads SET variant_count=variant_count+1 WHERE id=?",
+                  (upload_id,))
+        c.commit()
+
+    def get_s3_uploads(self, user_id) -> list:
+        return self._conn().execute(
+            "SELECT u.*, a.name AS account_name FROM trans_s3_uploads u "
+            "LEFT JOIN trans_s3_accounts a ON a.id=u.account_id "
+            "WHERE u.user_id=? ORDER BY u.id DESC", (user_id,)).fetchall()
+
+    def get_s3_links(self, upload_id) -> list:
+        return self._conn().execute(
+            "SELECT * FROM trans_s3_links WHERE upload_id=? ORDER BY id",
+            (upload_id,)).fetchall()
+
+    def delete_s3_upload(self, upload_id, user_id):
+        c = self._conn()
+        c.execute("DELETE FROM trans_s3_uploads WHERE id=? AND user_id=?",
+                  (upload_id, user_id))
+        c.commit()
+
+    def get_all_cdn_urls(self, user_id) -> list:
+        """Union aus Cloudinary + S3 — der gemeinsame CDN-Pool den die
+        Send-Loop nutzt. Reihenfolge irrelevant, wird eh random gepickt."""
+        c = self._conn()
+        cloud = c.execute(
+            "SELECT cl.secure_url AS url FROM trans_cloudinary_links cl "
+            "JOIN trans_cloudinary_uploads cu ON cu.id=cl.upload_id "
+            "WHERE cu.user_id=?", (user_id,)).fetchall()
+        s3 = c.execute(
+            "SELECT l.url FROM trans_s3_links l "
+            "JOIN trans_s3_uploads u ON u.id=l.upload_id "
+            "WHERE u.user_id=?", (user_id,)).fetchall()
+        return [r["url"] for r in cloud] + [r["url"] for r in s3]
 
     # ── SMTP Check (send-test + IMAP delivery verify) ───────
     def create_smtp_check_job(self, **kw) -> int:

@@ -110,7 +110,7 @@
                             <label>Image-Mode Rotation</label>
                             {% set imodes = (c.get('rotate_image_modes') or '').split(',') %}
                             <div style="display:flex;flex-wrap:wrap;gap:8px;padding:6px 0">
-                                {% for m in ['cid','cloudinary','url','static_url','text'] %}
+                                {% for m in ['cid','cdn','url','static_url','text'] %}
                                 <label style="display:flex;gap:4px;align-items:center;font-weight:400;cursor:pointer;font-size:12px">
                                     <input type="checkbox" name="_rot_image_{{ m }}" value="1" style="width:auto"
                                            {{ 'checked' if m in imodes }}

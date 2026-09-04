@@ -970,7 +970,7 @@ def _run_campaign(db, cid: int):
         _subject_pools = _parse_pools(camp.get("rotate_subject_pools") or "")
         _from_name_pools = _parse_pools(camp.get("rotate_from_name_pools") or "")
         _image_modes_rot = [m for m in _parse_csv_list(camp.get("rotate_image_modes") or "")
-                             if m in ("cid", "cloudinary", "url", "static_url", "text")]
+                             if m in ("cid", "cloudinary", "cdn", "url", "static_url", "text")]
         _link_ref_styles_rot = [s for s in _parse_csv_list(camp.get("rotate_link_ref_styles") or "")
                                  if s in ("none", "base64", "random", "email", "utm")]
         if _subject_pools:
@@ -1039,9 +1039,12 @@ def _run_campaign(db, cid: int):
                         logo_variants = source_files
                 logger.info("Campaign %d: %d logos (global fallback)", cid, len(logo_variants))
 
-            # Load Cloudinary CDN URLs if mode is cloudinary
-            if cfg.get("image_mode") == "cloudinary":
+            # Load CDN URLs — vereinheitlicht Cloudinary + S3 in einem
+            # Pool. image_mode="cloudinary" wird als "irgendein CDN"
+            # interpretiert. image_mode="cdn" ist der neue explizite Alias.
+            if cfg.get("image_mode") in ("cloudinary", "cdn"):
                 import json as _json
+                # Legacy: Logo-Group-eigene cloudinary URLs
                 if logo_group_id:
                     grp = db._conn().execute("SELECT cdn_urls_json FROM trans_logo_groups WHERE id=?",
                                               (logo_group_id,)).fetchone()
@@ -1052,7 +1055,15 @@ def _run_campaign(db, cid: int):
                         gd = dict(g)
                         if gd.get("cdn_urls_json"):
                             logo_cdn_urls.extend(_json.loads(gd["cdn_urls_json"]))
-                logger.info("Campaign %d: %d Cloudinary URLs loaded", cid, len(logo_cdn_urls))
+                # Neu: gemeinsamer Pool aus /cloudinary + /s3-logos Panels
+                try:
+                    pool_urls = db.get_all_cdn_urls(uid)
+                    if pool_urls:
+                        logo_cdn_urls.extend(pool_urls)
+                except Exception as e:
+                    logger.warning("Campaign %d: cdn-pool query failed: %s", cid, e)
+                logger.info("Campaign %d: %d CDN URLs loaded (Cloudinary+S3 combined)",
+                             cid, len(logo_cdn_urls))
 
         # Redirect setup
         redirect_links = []
@@ -1469,7 +1480,7 @@ def _run_campaign(db, cid: int):
                         logo_text = _process(cfg.get("logo_text", "{Logo}"), email, sticky_cache)
                         html = html.replace("{Logo}",
                             f'<span style="font-weight:bold;font-size:16px;color:{cfg.get("logo_text_color", "#333333")};">{logo_text}</span>')
-                    elif cur_image_mode == "cloudinary" and logo_cdn_urls:
+                    elif cur_image_mode in ("cloudinary", "cdn") and logo_cdn_urls:
                         html = html.replace("{Logo}",
                             f'<img src="{random.choice(logo_cdn_urls)}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
                     elif cur_image_mode == "url" and logo_variants:
