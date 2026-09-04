@@ -81,51 +81,67 @@
                     </div>
                 </div>
 
-                <details {{ 'open' if c.get('auto_mode_enabled') }} style="margin-top:12px">
+                <details {{ 'open' if (c.get('rotate_subject_pools') or c.get('rotate_image_modes') or c.get('rotate_link_ref_styles') or c.get('rotate_from_name_pools')) }} style="margin-top:12px">
                     <summary style="cursor:pointer;font-weight:600;font-size:13px">
-                        Auto-Mode (Watchdog + Bandit)
-                        {% if c.get('auto_mode_enabled') %}<span class="badge badge-running" style="margin-left:6px">ON</span>{% endif %}
+                        Meta-Rotation (Anti-Cluster)
+                        {% if c.get('rotate_subject_pools') or c.get('rotate_image_modes') or c.get('rotate_link_ref_styles') or c.get('rotate_from_name_pools') %}
+                        <span class="badge badge-running" style="margin-left:6px">ON</span>
+                        {% endif %}
                     </summary>
-                    <div style="padding:10px 0 4px 0;font-size:12px;color:var(--fg2);margin-bottom:6px">
-                        Watchdog pausiert die Kampagne wenn Fehlerraten die Schwellwerte überschreiten.
-                        Bandit wählt die Templates gewichtet nach Erfolgsrate statt zufällig.
-                        Scores werden zwischen Kampagnen persistiert.
+                    <div style="padding:10px 0 4px 0;font-size:12px;color:var(--fg2);margin-bottom:8px">
+                        Pro Send unabhängig gewürfelt aus mehreren Pools/Optionen — so kann kein
+                        Provider deine Mails über konstantes Muster (Subject-Set, Image-Format,
+                        Link-Ref-Style) clustern. Alle Felder sind optional; leer = Standard-Verhalten.
                     </div>
-                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-                        <input type="checkbox" name="auto_mode_enabled" value="1" style="width:auto"
-                               {{ 'checked' if c.get('auto_mode_enabled') }}>
-                        <span>Auto-Mode aktivieren</span>
-                    </label>
-                    <div class="grid-2" style="margin-top:8px">
+
+                    <label>Subject-Pools <span style="color:var(--fg2);font-weight:400;font-size:11px">(Pools durch Leerzeile getrennt, jede Zeile ein Betreff)</span></label>
+                    <textarea name="rotate_subject_pools" rows="8"
+                              style="font-family:monospace;font-size:12px"
+                              placeholder="Ihr Angebot wartet auf Sie&#10;Ihre Rückfrage — kurze Info&#10;Bezugnehmend auf unsere Nachricht&#10;&#10;Wichtige Aktualisierung — bitte lesen&#10;Aktueller Stand: Ihre Anfrage&#10;&#10;{Grüße}, kurzes Update&#10;{Grüße}, hier ist die Info">{{ c.get('rotate_subject_pools') or '' }}</textarea>
+                    <div class="form-help">Pool = Block ohne Leerzeile. Pro Mail: erst random Pool, dann random Zeile daraus. Macros/Spintax werden dann normal aufgelöst. Leer = klassisches Subject aus /config.</div>
+
+                    <label style="margin-top:12px">From-Name-Pools <span style="color:var(--fg2);font-weight:400;font-size:11px">(gleiches Format wie oben)</span></label>
+                    <textarea name="rotate_from_name_pools" rows="4"
+                              style="font-family:monospace;font-size:12px"
+                              placeholder="Alexander {Nachname}&#10;A. {Nachname}&#10;&#10;{Vorname} {Nachname}&#10;{Vorname} von {Company}">{{ c.get('rotate_from_name_pools') or '' }}</textarea>
+
+                    <div class="grid-2" style="margin-top:12px">
                         <div>
-                            <label>Hard-Bounce Pause-Schwelle (%)</label>
-                            <input name="auto_hard_bounce_pct" type="number" step="0.5" min="0.5" max="50"
-                                   value="{{ c.get('auto_hard_bounce_pct') or 5.0 }}">
-                            <div class="form-help">Sliding-Window 200 Sends. Nur mailbox_not_found + permanent_reject.</div>
+                            <label>Image-Mode Rotation</label>
+                            {% set imodes = (c.get('rotate_image_modes') or '').split(',') %}
+                            <div style="display:flex;flex-wrap:wrap;gap:8px;padding:6px 0">
+                                {% for m in ['cid','cloudinary','url','static_url','text'] %}
+                                <label style="display:flex;gap:4px;align-items:center;font-weight:400;cursor:pointer;font-size:12px">
+                                    <input type="checkbox" name="_rot_image_{{ m }}" value="1" style="width:auto"
+                                           {{ 'checked' if m in imodes }}
+                                           onchange="document.getElementById('rot-image-{{ c.id }}').value=Array.from(this.form.querySelectorAll('input[name^=_rot_image_]:checked')).map(x=>x.name.replace('_rot_image_','')).join(',')">
+                                    <span>{{ m }}</span>
+                                </label>
+                                {% endfor %}
+                            </div>
+                            <input type="hidden" name="rotate_image_modes" id="rot-image-{{ c.id }}" value="{{ c.get('rotate_image_modes') or '' }}">
+                            <div class="form-help">Mehrere gewählt = pro Mail random. Leer = /config-Standard.</div>
                         </div>
                         <div>
-                            <label>Spam-Reject Pause-Schwelle (%)</label>
-                            <input name="auto_spam_reject_pct" type="number" step="0.5" min="0.5" max="50"
-                                   value="{{ c.get('auto_spam_reject_pct') or 8.0 }}">
-                            <div class="form-help">Spam-Reject + SMTP-Blocked kombiniert.</div>
+                            <label>Link-Ref-Style Rotation</label>
+                            {% set rstyles = (c.get('rotate_link_ref_styles') or '').split(',') %}
+                            <div style="display:flex;flex-wrap:wrap;gap:8px;padding:6px 0">
+                                {% for s in ['none','base64','random','email','utm'] %}
+                                <label style="display:flex;gap:4px;align-items:center;font-weight:400;cursor:pointer;font-size:12px">
+                                    <input type="checkbox" name="_rot_ref_{{ s }}" value="1" style="width:auto"
+                                           {{ 'checked' if s in rstyles }}
+                                           onchange="document.getElementById('rot-ref-{{ c.id }}').value=Array.from(this.form.querySelectorAll('input[name^=_rot_ref_]:checked')).map(x=>x.name.replace('_rot_ref_','')).join(',')">
+                                    <span>{{ s }}</span>
+                                </label>
+                                {% endfor %}
+                            </div>
+                            <input type="hidden" name="rotate_link_ref_styles" id="rot-ref-{{ c.id }}" value="{{ c.get('rotate_link_ref_styles') or '' }}">
+                            <div class="form-help">
+                                <code>none</code>=kein Ref · <code>base64</code>=Email base64url ·
+                                <code>random</code>=8-char zufällig · <code>email</code>=Cleartext ·
+                                <code>utm</code>=utm_source+utm_id
+                            </div>
                         </div>
-                        <div>
-                            <label>Auth-Fail Pause-Schwelle (%)</label>
-                            <input name="auto_auth_fail_pct" type="number" step="1" min="1" max="90"
-                                   value="{{ c.get('auto_auth_fail_pct') or 20.0 }}">
-                            <div class="form-help">Alle Accounts tot? Panic-Stop.</div>
-                        </div>
-                        <div>
-                            <label>Bandit Exploration (ε)</label>
-                            <input name="auto_bandit_epsilon" type="number" step="0.05" min="0" max="1"
-                                   value="{{ c.get('auto_bandit_epsilon') or 0.15 }}">
-                            <div class="form-help">Anteil an random Picks statt greedy. 0.15 = 15% Exploration.</div>
-                        </div>
-                    </div>
-                    <div id="auto-status-{{ c.id }}" style="margin-top:12px;padding:8px;border:1px solid var(--border-light);border-radius:var(--radius)"
-                         hx-get="/campaigns/{{ c.id }}/auto-status" hx-trigger="load, every 10s"
-                         hx-swap="innerHTML">
-                        <span style="font-size:12px;color:var(--fg2)">lade…</span>
                     </div>
                 </details>
 

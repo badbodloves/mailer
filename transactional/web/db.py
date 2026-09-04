@@ -273,14 +273,8 @@ class TransDB:
             ("trans_campaigns", "schedule_time", "''"),
             ("trans_campaigns", "template_id", "0"),
             ("trans_campaigns", "redirect_pool_id", "0"),
-            # Auto-Mode (Watchdog + Bandit)
-            ("trans_campaigns", "auto_mode_enabled", "0"),
-            ("trans_campaigns", "auto_hard_bounce_pct", "5.0"),
-            ("trans_campaigns", "auto_spam_reject_pct", "8.0"),
-            ("trans_campaigns", "auto_auth_fail_pct", "20.0"),
-            ("trans_campaigns", "auto_bandit_epsilon", "0.15"),
-            ("trans_campaigns", "auto_stats_json", "''"),
-            ("trans_campaigns", "auto_pause_reason", "''"),
+            # (Auto-Mode/Watchdog/Bandit entfernt — Live-HTML-Gen macht
+            # das Fingerprint-Problem obsolet; siehe Meta-Rotation unten)
             # Assembly-Mode + Anti-FP-Rates pro Kampagne
             ("trans_campaigns", "assembly_mode_enabled", "0"),
             ("trans_campaigns", "antifp_passthrough_rate", "0.02"),
@@ -292,6 +286,11 @@ class TransDB:
             # Kampagne nutzen diese Brand-Farbe konsistent.
             ("trans_campaigns", "live_primary_color", "''"),
             ("trans_campaigns", "live_accent_color", "''"),
+            # V1 Meta-Rotation: pro Send unabhängig gewürfelt
+            ("trans_campaigns", "rotate_subject_pools", "''"),   # Textarea, Pools durch Leerzeile
+            ("trans_campaigns", "rotate_from_name_pools", "''"), # dito für From-Name
+            ("trans_campaigns", "rotate_image_modes", "''"),     # CSV: cid,cloudinary,url,static_url,text
+            ("trans_campaigns", "rotate_link_ref_styles", "''"), # CSV: none,base64,random,email,utm
             ("trans_templates", "logo_group_id", "0"),
             ("trans_logos", "group_id", "0"),
             ("trans_logos", "cdn_url", "''"),

@@ -15,16 +15,65 @@ logger = logging.getLogger("trans.campaigns")
 router = APIRouter()
 
 
-def _append_ref(url: str, email: str) -> str:
-    """Append ?ref=<base64url(email)> to a redirect link. Uses & if the
-    URL already has a query string. The email is base64url-encoded so it
-    never appears in cleartext in URLs, logs, or CDN access records."""
-    if not url or not email:
+def _append_ref(url: str, email: str, style: str = "base64") -> str:
+    """Hänge einen Ref-Parameter an einen Redirect-Link.
+    style:
+      * 'none'   → keine Änderung
+      * 'base64' → ?ref=<base64url(email)> (Default, wie bisher)
+      * 'random' → ?ref=<8-char random> — kein Email-Bezug
+      * 'email'  → ?u=<email> — cleartext (nur wenn Empfänger es OK ist)
+      * 'utm'    → ?utm_source=nl&utm_id=<random>
+    """
+    if not url or not email or style == "none":
         return url
     import base64
-    token = base64.urlsafe_b64encode(email.encode("utf-8")).rstrip(b"=").decode("ascii")
+    import secrets
     sep = "&" if "?" in url else "?"
-    return f"{url}{sep}ref={token}"
+    if style == "base64":
+        token = base64.urlsafe_b64encode(email.encode("utf-8")).rstrip(b"=").decode("ascii")
+        return f"{url}{sep}ref={token}"
+    if style == "random":
+        return f"{url}{sep}ref={secrets.token_urlsafe(6)}"
+    if style == "email":
+        from urllib.parse import quote
+        return f"{url}{sep}u={quote(email)}"
+    if style == "utm":
+        return f"{url}{sep}utm_source=nl&utm_id={secrets.token_urlsafe(6)}"
+    return url
+
+
+def _parse_pools(text: str) -> list:
+    """Textarea-Format: Pools durch Leerzeile getrennt, Zeilen innerhalb
+    eines Pools = die Werte.
+        Betreff A1
+        Betreff A2
+
+        Betreff B1
+        Betreff B2
+        Betreff B3
+    → [['Betreff A1','Betreff A2'], ['Betreff B1','Betreff B2','Betreff B3']]
+    """
+    if not text or not text.strip():
+        return []
+    pools = []
+    current = []
+    for raw_line in text.splitlines():
+        line = raw_line.rstrip()
+        if not line.strip():
+            if current:
+                pools.append(current)
+                current = []
+        else:
+            current.append(line)
+    if current:
+        pools.append(current)
+    return pools
+
+
+def _parse_csv_list(text: str) -> list:
+    if not text or not text.strip():
+        return []
+    return [x.strip() for x in text.replace("\n", ",").split(",") if x.strip()]
 
 
 _runners = {}
@@ -153,31 +202,29 @@ async def save_campaign(request: Request, cid: int,
                         template_id: int = Form(0),
                         redirect_pool_id: int = Form(0),
                         schedule_time: str = Form(""),
-                        auto_mode_enabled: int = Form(0),
-                        auto_hard_bounce_pct: float = Form(5.0),
-                        auto_spam_reject_pct: float = Form(8.0),
-                        auto_auth_fail_pct: float = Form(20.0),
-                        auto_bandit_epsilon: float = Form(0.15),
                         assembly_mode_enabled: int = Form(0),
                         antifp_passthrough_rate: float = Form(0.02),
                         antifp_light_rate: float = Form(0.10),
                         live_html_gen_enabled: int = Form(0),
                         live_primary_color: str = Form(""),
-                        live_accent_color: str = Form("")):
+                        live_accent_color: str = Form(""),
+                        rotate_subject_pools: str = Form(""),
+                        rotate_from_name_pools: str = Form(""),
+                        rotate_image_modes: str = Form(""),
+                        rotate_link_ref_styles: str = Form("")):
     db = request.app.state.db
     updates = {"name": name.strip(), "schedule_time": schedule_time.strip(),
                "template_id": template_id, "redirect_pool_id": redirect_pool_id,
-               "auto_mode_enabled": 1 if auto_mode_enabled else 0,
-               "auto_hard_bounce_pct": auto_hard_bounce_pct,
-               "auto_spam_reject_pct": auto_spam_reject_pct,
-               "auto_auth_fail_pct": auto_auth_fail_pct,
-               "auto_bandit_epsilon": auto_bandit_epsilon,
                "assembly_mode_enabled": 1 if assembly_mode_enabled else 0,
                "antifp_passthrough_rate": max(0.0, min(1.0, antifp_passthrough_rate)),
                "antifp_light_rate": max(0.0, min(1.0, antifp_light_rate)),
                "live_html_gen_enabled": 1 if live_html_gen_enabled else 0,
                "live_primary_color": live_primary_color.strip(),
-               "live_accent_color": live_accent_color.strip()}
+               "live_accent_color": live_accent_color.strip(),
+               "rotate_subject_pools": rotate_subject_pools,
+               "rotate_from_name_pools": rotate_from_name_pools,
+               "rotate_image_modes": rotate_image_modes.strip(),
+               "rotate_link_ref_styles": rotate_link_ref_styles.strip()}
     if smtp_list_id:
         updates["smtp_list_id"] = smtp_list_id
     if lead_list_id:
@@ -185,92 +232,6 @@ async def save_campaign(request: Request, cid: int,
         updates["total_leads"] = db.get_lead_count(lead_list_id)
     db.update_campaign(cid, **updates)
     return RedirectResponse("/campaigns", status_code=303)
-
-
-@router.get("/campaigns/{cid}/auto-status", response_class=HTMLResponse)
-async def auto_status(request: Request, cid: int):
-    """Live view: watchdog stats + top bandit templates. Für Polling."""
-    db = request.app.state.db
-    row = db._conn().execute("SELECT auto_mode_enabled, auto_stats_json, "
-                              "auto_pause_reason, status FROM trans_campaigns WHERE id=?",
-                              (cid,)).fetchone()
-    if not row:
-        return HTMLResponse('<span style="color:var(--red)">Kampagne weg</span>')
-    row = dict(row)
-    if not row.get("auto_mode_enabled"):
-        return HTMLResponse('<span style="font-size:12px;color:var(--fg2)">Auto-Mode aus.</span>')
-    snap_raw = row.get("auto_stats_json") or ""
-    if not snap_raw:
-        return HTMLResponse('<span style="font-size:12px;color:var(--fg2)">Noch keine Daten (Warmup).</span>')
-    try:
-        snap = json.loads(snap_raw)
-    except Exception:
-        return HTMLResponse('<span style="font-size:12px;color:var(--red)">Snapshot corrupt.</span>')
-
-    wd = snap.get("watchdog", {}).get("stats", {})
-    verdict = snap.get("watchdog", {}).get("last_verdict") or {}
-    arms = snap.get("bandit", {}).get("arms", {}) or {}
-
-    # Watchdog-Zeile
-    total = wd.get("total_sends", 0) or 0
-    fails = wd.get("total_fails", 0) or 0
-    win_hard = wd.get("window_hard_pct", 0)
-    win_spam = wd.get("window_spam_pct", 0)
-    win_auth = wd.get("window_auth_pct", 0)
-    by_type = wd.get("by_type", {}) or {}
-    action = (verdict.get("action") or "ok").upper()
-    reason = verdict.get("reason", "")
-    reason_html = ""
-    if row.get("auto_pause_reason"):
-        reason_html = (
-            f'<div style="color:var(--red);font-size:12px;margin-bottom:6px">'
-            f'⚠ Auto-Pause: {escape(row["auto_pause_reason"])}</div>'
-        )
-    color = "var(--green)" if action == "OK" else "var(--red)"
-
-    # Top-Templates
-    scored = []
-    for arm_key, s in arms.items():
-        total_arm = s.get("succ", 0) + s.get("fail", 0)
-        if total_arm == 0:
-            continue
-        score = (s.get("succ", 0) + 1) / (total_arm + 2)   # Beta(1,1)
-        scored.append((score, arm_key, total_arm, s.get("succ", 0), s.get("fail", 0)))
-    scored.sort(reverse=True)
-    top_html = ""
-    for score, arm, total_arm, succ, fail in scored[:10]:
-        top_html += (
-            f'<tr><td style="font-family:monospace">#{escape(str(arm))}</td>'
-            f'<td>{total_arm}</td>'
-            f'<td style="color:var(--green)">{succ}</td>'
-            f'<td style="color:var(--red)">{fail}</td>'
-            f'<td><strong>{score:.3f}</strong></td></tr>'
-        )
-    if top_html:
-        top_html = (
-            '<h5 style="margin-top:8px;font-size:12px">Template-Bandit-Scores '
-            '(Top 10)</h5>'
-            '<table style="font-size:11px"><thead><tr>'
-            '<th>Template-Idx</th><th>Sends</th><th>✓</th><th>✗</th>'
-            '<th>Score</th></tr></thead><tbody>' + top_html + '</tbody></table>'
-        )
-    by_type_html = ""
-    if by_type:
-        chunks = [f'{k}: {v}' for k, v in sorted(by_type.items(), key=lambda x: -x[1])]
-        by_type_html = (
-            f'<div style="font-size:11px;color:var(--fg2);margin-top:4px">'
-            f'{escape(" · ".join(chunks))}</div>'
-        )
-
-    return HTMLResponse(
-        reason_html +
-        f'<div style="font-size:12px">'
-        f'<span style="color:{color};font-weight:600">Watchdog: {action}</span> '
-        f'· sent={total} fails={fails}'
-        f' · window: hard={win_hard}% spam={win_spam}% auth={win_auth}%'
-        f'{f" — <em>{escape(reason)}</em>" if reason and reason != "healthy" else ""}'
-        f'</div>' + by_type_html + top_html
-    )
 
 
 @router.post("/campaigns/{cid}/reset")
@@ -281,10 +242,7 @@ async def reset_campaign(request: Request, cid: int):
     camp = db.get_campaign(cid)
     if camp:
         db.reset_leads(camp["lead_list_id"])
-        # Full reset: alte Auto-Mode-Historie ist ungültig weil sich die
-        # Templates/Leads oft geändert haben. Bandit + Watchdog neu starten.
-        db.update_campaign(cid, sent=0, failed=0, status="DRAFT",
-                            auto_stats_json="", auto_pause_reason="")
+        db.update_campaign(cid, sent=0, failed=0, status="DRAFT")
     return RedirectResponse("/campaigns", status_code=303)
 
 
@@ -402,12 +360,6 @@ async def start_campaign(request: Request, cid: int):
     if cid in _runners:
         return RedirectResponse("/campaigns", status_code=303)
     _speed[cid] = 0
-    # Alte Auto-Pause-Ursache clearen — sonst zeigt die UI die weiter an
-    # obwohl die Kampagne wieder läuft.
-    try:
-        db.update_campaign(cid, auto_pause_reason="")
-    except Exception:
-        pass
 
     def run():
         try:
@@ -1012,32 +964,24 @@ def _run_campaign(db, cid: int):
         # send (workers read via random.choice which sees the swap).
         html_bodies = list(db.get_all_template_htmls(uid, template_id=campaign_template_id))
 
-        # Auto-Mode: Watchdog + Multi-Armed Bandit für selbstoptimierendes
-        # Senden. Bandit wählt Templates gewichtet nach Bounce/Complaint-
-        # Rate. Watchdog pausiert Kampagne wenn Fehlerraten explodieren.
-        auto_ctrl = None
-        if camp.get("auto_mode_enabled"):
-            try:
-                from mailer.auto_mode import AutoModeController
-                bandit_state = None
-                snap_raw = camp.get("auto_stats_json") or ""
-                if snap_raw:
-                    try:
-                        snap = json.loads(snap_raw)
-                        bandit_state = snap.get("bandit")
-                    except Exception:
-                        bandit_state = None
-                auto_ctrl = AutoModeController(
-                    hard_bounce_pct=float(camp.get("auto_hard_bounce_pct", 5.0) or 5.0),
-                    spam_reject_pct=float(camp.get("auto_spam_reject_pct", 8.0) or 8.0),
-                    auth_fail_pct=float(camp.get("auto_auth_fail_pct", 20.0) or 20.0),
-                    bandit_epsilon=float(camp.get("auto_bandit_epsilon", 0.15) or 0.15),
-                    bandit_state=bandit_state,
-                )
-                logger.info("Campaign %d: auto-mode enabled (watchdog + bandit)", cid)
-            except Exception as e:
-                logger.warning("Campaign %d: auto-mode init failed: %s", cid, e)
-                auto_ctrl = None
+        # V1 Meta-Rotation — pro Send unabhängig gewürfelt aus mehreren
+        # Pools/Optionen. Filter-Clustering von Provider-Seite wird durch
+        # rotierende Dimensionen effektiv verhindert.
+        _subject_pools = _parse_pools(camp.get("rotate_subject_pools") or "")
+        _from_name_pools = _parse_pools(camp.get("rotate_from_name_pools") or "")
+        _image_modes_rot = [m for m in _parse_csv_list(camp.get("rotate_image_modes") or "")
+                             if m in ("cid", "cloudinary", "url", "static_url", "text")]
+        _link_ref_styles_rot = [s for s in _parse_csv_list(camp.get("rotate_link_ref_styles") or "")
+                                 if s in ("none", "base64", "random", "email", "utm")]
+        if _subject_pools:
+            logger.info("Campaign %d: subject-rotation ON — %d pools, %d total lines",
+                         cid, len(_subject_pools), sum(len(p) for p in _subject_pools))
+        if _from_name_pools:
+            logger.info("Campaign %d: from-name-rotation ON — %d pools", cid, len(_from_name_pools))
+        if _image_modes_rot:
+            logger.info("Campaign %d: image-mode-rotation ON — %s", cid, _image_modes_rot)
+        if _link_ref_styles_rot:
+            logger.info("Campaign %d: link-ref-style-rotation ON — %s", cid, _link_ref_styles_rot)
 
         macros = {}
         sticky_macros = set()   # Namen der Macros die pro Mail nur EINMAL gewürfelt werden
@@ -1351,12 +1295,6 @@ def _run_campaign(db, cid: int):
                             html_bodies.extend(new_bodies)
                             logger.info("Campaign %d: html pool refreshed (%d new bodies)",
                                          cid, len(new_bodies))
-                            # Bandit-Scores für die alten Arm-Indizes sind
-                            # jetzt sinnlos — Indexe zeigen auf neue Templates.
-                            if auto_ctrl:
-                                for i in range(200):
-                                    auto_ctrl.bandit.reset_arm(i)
-                                logger.info("Campaign %d: bandit arms reset after pool regen", cid)
 
                     if freshness_logos and logo_group_id and group_logos_for_freshness:
                         # Logo regen only meaningfully helps modes that
@@ -1411,48 +1349,6 @@ def _run_campaign(db, cid: int):
 
         threading.Thread(target=speed_tracker, daemon=True).start()
         threading.Thread(target=_freshness_monitor, daemon=True).start()
-
-        def _auto_mode_watchdog():
-            """Alle 15s: Watchdog auswerten. Bei pause-Verdict Campaign
-            stoppen und Grund in DB persistieren. Alle 60s: Bandit-Snapshot
-            in trans_campaigns.auto_stats_json schreiben."""
-            if not auto_ctrl:
-                return
-            check_interval = 15
-            snapshot_every = 4     # * check_interval = 60s
-            tick = 0
-            while campaign_id in _runners:
-                time.sleep(check_interval)
-                tick += 1
-                try:
-                    verdict = auto_ctrl.check_watchdog()
-                    if verdict.action == "pause":
-                        logger.warning("Campaign %d: AUTO-WATCHDOG pause: %s",
-                                        campaign_id, verdict.reason)
-                        with _lock:
-                            snap = json.dumps(auto_ctrl.snapshot())
-                            db.update_campaign(campaign_id,
-                                                status="PAUSED",
-                                                auto_pause_reason=verdict.reason,
-                                                auto_stats_json=snap)
-                        _runners.pop(campaign_id, None)
-                        break
-                    if tick % snapshot_every == 0:
-                        try:
-                            snap = json.dumps(auto_ctrl.snapshot())
-                            db.update_campaign(campaign_id,
-                                                auto_stats_json=snap)
-                        except Exception as e:
-                            logger.warning("Campaign %d: auto snapshot save failed: %s",
-                                            campaign_id, e)
-                except Exception as e:
-                    logger.error("Campaign %d: auto-watchdog crashed: %s",
-                                  campaign_id, e)
-                    # Nicht die Kampagne killen wegen watchdog-bug
-                    time.sleep(30)
-
-        if auto_ctrl:
-            threading.Thread(target=_auto_mode_watchdog, daemon=True).start()
 
         def _process(text, email, sticky_cache=None):
             """sticky_cache: dict pro Mail, wird über alle _process-Calls
@@ -1510,18 +1406,26 @@ def _run_campaign(db, cid: int):
                     suppressed += 1
                 return True
             cur_from_email = from_email_cfg or account.user
-            html_arm = None    # Bandit-Arm-ID für auto-mode reporting
             # Shared sticky-cache für alle _process-Calls dieser Mail — so
             # kriegen {Name} in From, Subject, HTML-Body und Signatur alle
             # denselben Wert (wenn das Macro als sticky markiert ist).
             sticky_cache = {}
             try:
-                cur_from_name = _process(from_name_cfg, email, sticky_cache)
-                cur_subject = _process(subject_cfg, email, sticky_cache)
+                # === Meta-Rotation: from-name-pool ===
+                if _from_name_pools:
+                    _pool = random.choice(_from_name_pools)
+                    cur_from_name = _process(random.choice(_pool), email, sticky_cache)
+                else:
+                    cur_from_name = _process(from_name_cfg, email, sticky_cache)
+                # === Meta-Rotation: subject-pool ===
+                if _subject_pools:
+                    _pool = random.choice(_subject_pools)
+                    cur_subject = _process(random.choice(_pool), email, sticky_cache)
+                else:
+                    cur_subject = _process(subject_cfg, email, sticky_cache)
+
                 if live_html_gen and htmlgen_generate_one is not None:
                     # Per-Send fresh HTML aus der htmlgen-Engine.
-                    # Enthält noch die Macros ({Satz1}, {Ende}, ...), die
-                    # gleich unten in _process() aufgelöst werden.
                     try:
                         html = htmlgen_generate_one(htmlgen_cfg, htmlgen_base,
                                                      _cache=htmlgen_cache)
@@ -1531,44 +1435,44 @@ def _run_campaign(db, cid: int):
                         html = (random.choice(html_bodies) if html_bodies
                                 else "<p>Hello {email_user}</p>")
                 elif assembly_enabled and assembly_snippets:
-                    # Live-Assembly: pro Slot random pick, concat, wrap
                     from mailer.assembly import assemble_html
                     html = assemble_html(assembly_snippets)
                 elif html_bodies:
-                    if auto_ctrl:
-                        arms = list(range(len(html_bodies)))
-                        html_arm = auto_ctrl.bandit.pick(arms)
-                        html = html_bodies[html_arm]
-                    else:
-                        html = random.choice(html_bodies)
+                    html = random.choice(html_bodies)
                 else:
                     html = "<p>Hello {email_user}</p>"
                 html = _process(html, email, sticky_cache)
 
+                # === Meta-Rotation: image-mode + link-ref-style ===
+                cur_image_mode = (random.choice(_image_modes_rot)
+                                   if _image_modes_rot else image_mode)
+                cur_ref_style = (random.choice(_link_ref_styles_rot)
+                                  if _link_ref_styles_rot
+                                  else ("base64" if cfg.get("redirect_append_ref") else "none"))
+
                 if redirect_links and "{RedirectLink}" in html:
                     link = random.choice(redirect_links)
-                    if cfg.get("redirect_append_ref"):
-                        link = _append_ref(link, email)
+                    link = _append_ref(link, email, style=cur_ref_style)
                     html = html.replace("{RedirectLink}", link)
                     cur_subject = cur_subject.replace("{RedirectLink}", link)
 
                 inline_images = None
                 if "{Logo}" in html:
-                    if image_mode == "static_url":
+                    if cur_image_mode == "static_url":
                         static_logo = cfg.get("logo_static_url", "").strip()
                         if static_logo:
                             html = html.replace("{Logo}",
                                 f'<img src="{static_logo}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
                         else:
                             html = html.replace("{Logo}", "")
-                    elif image_mode == "text":
+                    elif cur_image_mode == "text":
                         logo_text = _process(cfg.get("logo_text", "{Logo}"), email, sticky_cache)
                         html = html.replace("{Logo}",
                             f'<span style="font-weight:bold;font-size:16px;color:{cfg.get("logo_text_color", "#333333")};">{logo_text}</span>')
-                    elif image_mode == "cloudinary" and logo_cdn_urls:
+                    elif cur_image_mode == "cloudinary" and logo_cdn_urls:
                         html = html.replace("{Logo}",
                             f'<img src="{random.choice(logo_cdn_urls)}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
-                    elif image_mode == "url" and logo_variants:
+                    elif cur_image_mode == "url" and logo_variants:
                         base = cfg.get("logo_base_url", "").rstrip("/")
                         html = html.replace("{Logo}",
                             f'<img src="{base}/{os.path.basename(random.choice(logo_variants))}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">' if base else "")
@@ -1666,9 +1570,6 @@ def _run_campaign(db, cid: int):
                         db.mark_failed(lead_id, err_str[:500])
                         failed += 1
 
-                if auto_ctrl and html_arm is not None:
-                    auto_ctrl.report(html_arm, False, etype)
-
                 if etype in SMTP_FATAL:
                     # SMTP account is broken — kick it out of the pool
                     # immediately, do not pick it again this campaign.
@@ -1691,8 +1592,6 @@ def _run_campaign(db, cid: int):
                 if (sent + failed) % 5 == 0:
                     db.update_campaign(campaign_id, sent=sent, failed=failed)
             pool.record_success(account)
-            if auto_ctrl and html_arm is not None:
-                auto_ctrl.report(html_arm, True, "")
 
             delay = worker.get_delay(email)
             if delay > 0:
@@ -1871,15 +1770,8 @@ def _run_campaign(db, cid: int):
         from datetime import datetime
         logger.info("Campaign %d %s: sent=%d, failed=%d, suppressed=%d",
                      cid, status, sent, failed, suppressed)
-        finalize_fields = {"status": status, "sent": sent, "failed": failed,
-                            "finished_at": datetime.now().isoformat()}
-        # Bandit-Scores + Watchdog-Stats fürs nächste Mal aufheben
-        if auto_ctrl:
-            try:
-                finalize_fields["auto_stats_json"] = json.dumps(auto_ctrl.snapshot())
-            except Exception as e:
-                logger.warning("Campaign %d: final auto snapshot failed: %s", cid, e)
-        db.update_campaign(cid, **finalize_fields)
+        db.update_campaign(cid, status=status, sent=sent, failed=failed,
+                            finished_at=datetime.now().isoformat())
         db.reset_in_progress(lead_list_id)
 
         if status == "FINISHED":
