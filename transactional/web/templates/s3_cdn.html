@@ -9,34 +9,98 @@
 <div class="card" style="margin-bottom:12px">
     <h3>AWS-Accounts <span class="count">{{ accounts|length }}</span></h3>
     <p class="muted" style="font-size:12px">
-        Pro Account IAM-Key + Buckets-Liste. Format:
-        <code>bucket-name:region</code> (mehrere durch Komma oder Zeile).
-        Bucket muss „Block Public Access" aus haben und die Policy public-read erlauben.
-        IAM-User braucht Permissions: <code>s3:PutObject</code>, <code>s3:PutObjectAcl</code>.
+        IAM-User braucht diese Permissions (Copy&Paste in AWS-Console → IAM → Policies):
     </p>
+    <details style="margin-bottom:8px">
+        <summary style="cursor:pointer;font-size:12px">IAM-Policy JSON zeigen</summary>
+        <pre style="font-size:11px;background:var(--bg);padding:8px;border-radius:var(--radius);overflow:auto">{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "s3:CreateBucket",
+      "s3:PutBucketPolicy",
+      "s3:PutBucketPublicAccessBlock",
+      "s3:PutObject",
+      "s3:PutObjectAcl",
+      "s3:GetObject",
+      "s3:DeleteObject",
+      "s3:ListBucket"
+    ],
+    "Resource": [
+      "arn:aws:s3:::*",
+      "arn:aws:s3:::*/*"
+    ]
+  }]
+}</pre>
+        <p class="muted" style="font-size:11px">Damit kann der Mailer Buckets selbst anlegen + Public-Access konfigurieren.</p>
+    </details>
+
     {% if accounts %}
-    <table style="font-size:12px">
-        <thead><tr><th>Name</th><th>IAM-Key</th><th>Buckets</th><th></th></tr></thead>
-        <tbody>
-        {% for a in accounts %}
-        <tr>
-            <td>{{ a.name }}</td>
-            <td style="font-family:monospace;font-size:11px">{{ a.iam_key[:8] }}…{{ a.iam_key[-4:] }}</td>
-            <td style="font-family:monospace;font-size:11px">{{ a.buckets }}</td>
-            <td style="white-space:nowrap">
+    {% for a in accounts %}
+    <details style="margin-bottom:8px;border:1px solid var(--border-light);border-radius:var(--radius);padding:8px 12px">
+        <summary style="cursor:pointer;display:flex;align-items:center;gap:8px">
+            <strong>{{ a.name }}</strong>
+            <span style="font-family:monospace;font-size:11px;color:var(--fg2)">{{ a.iam_key[:8] }}…{{ a.iam_key[-4:] }}</span>
+            <span class="badge badge-info" style="font-size:10px">
+                {{ (a.buckets or '').split(',')|length if a.buckets else 0 }} Bucket(s)
+            </span>
+            {% if a.proxy_id %}<span class="badge badge-running" style="font-size:10px">Proxy</span>{% endif %}
+        </summary>
+        <div style="padding-top:10px">
+            <div style="font-family:monospace;font-size:11px;color:var(--fg2);margin-bottom:8px">
+                Buckets:<br>{{ a.buckets|replace(',','<br>')|replace('\n','<br>') or '(keine)' }}
+            </div>
+            <div class="btn-group" style="margin-bottom:12px">
                 <button class="btn btn-secondary btn-xs" hx-post="/s3-logos/accounts/{{ a.id }}/test"
-                        hx-target="#s3-test-{{ a.id }}" hx-swap="innerHTML">Test</button>
+                        hx-target="#s3-test-{{ a.id }}" hx-swap="innerHTML">Test alle Buckets</button>
                 <form method="post" action="/s3-logos/accounts/{{ a.id }}/delete"
-                      onsubmit="return confirm('Account löschen?')" style="display:inline">
-                    <button class="btn btn-danger btn-xs btn-icon">&#10005;</button>
+                      onsubmit="return confirm('Account löschen? Buckets bleiben in AWS.')" style="display:inline">
+                    <button class="btn btn-danger btn-xs">Löschen</button>
                 </form>
-                <div id="s3-test-{{ a.id }}" style="margin-top:4px"></div>
-            </td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table>
+            </div>
+            <div id="s3-test-{{ a.id }}" style="margin-bottom:12px"></div>
+
+            <h4 style="font-size:12px;margin:12px 0 6px">Bucket automatisch anlegen</h4>
+            <form hx-post="/s3-logos/accounts/{{ a.id }}/setup-bucket"
+                  hx-target="#s3-setup-{{ a.id }}" hx-swap="innerHTML">
+                <div class="grid-2">
+                    <div>
+                        <label>Bucket-Name (unique auf AWS!)</label>
+                        <input name="bucket" placeholder="mein-mailer-logos-eu"
+                               pattern="[a-z0-9.\-]+" required>
+                    </div>
+                    <div>
+                        <label>Region</label>
+                        <select name="region">
+                            <option value="eu-central-1">eu-central-1 (Frankfurt)</option>
+                            <option value="eu-west-1">eu-west-1 (Ireland)</option>
+                            <option value="eu-west-2">eu-west-2 (London)</option>
+                            <option value="eu-west-3">eu-west-3 (Paris)</option>
+                            <option value="eu-north-1">eu-north-1 (Stockholm)</option>
+                            <option value="us-east-1">us-east-1 (Virginia)</option>
+                            <option value="us-east-2">us-east-2 (Ohio)</option>
+                            <option value="us-west-1">us-west-1 (California)</option>
+                            <option value="us-west-2">us-west-2 (Oregon)</option>
+                            <option value="ap-southeast-1">ap-southeast-1 (Singapore)</option>
+                            <option value="ap-northeast-1">ap-northeast-1 (Tokyo)</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="form-help">
+                    Mailer erstellt Bucket, schaltet „Block Public Access" aus, hängt Public-Read-Policy an
+                    und trägt den Bucket in die Account-Liste ein. Idempotent — falls Bucket schon dir gehört, wird nur konfiguriert.
+                </div>
+                <div style="margin-top:8px">
+                    <button class="btn btn-primary btn-sm">Bucket anlegen + konfigurieren</button>
+                </div>
+            </form>
+            <div id="s3-setup-{{ a.id }}" style="margin-top:10px"></div>
+        </div>
+    </details>
+    {% endfor %}
     {% endif %}
+
     <details {{ 'open' if not accounts }} style="margin-top:12px">
         <summary style="cursor:pointer;font-size:12px">+ AWS-Account hinzufügen</summary>
         <form method="post" action="/s3-logos/accounts/add" style="margin-top:8px">
@@ -46,14 +110,22 @@
                     <input name="name" placeholder="AWS Main" required>
                     <label>IAM Access Key ID</label>
                     <input name="iam_key" type="password" placeholder="AKIA..." required>
-                </div>
-                <div>
                     <label>IAM Secret Access Key</label>
                     <input name="iam_secret" type="password" required>
-                    <label>Buckets (mehrere via Komma oder Zeile)</label>
-                    <textarea name="buckets" rows="3" required
-                              placeholder="mailer-logos-eu:eu-central-1&#10;mailer-logos-us:us-east-1&#10;mailer-logos-uk:eu-west-2"
+                </div>
+                <div>
+                    <label>Proxy (optional — für AWS-Requests)</label>
+                    <select name="proxy_id">
+                        <option value="0">— direkt (kein Proxy) —</option>
+                        {% for p in proxies %}
+                        <option value="{{ p.id }}">{{ p.name }}{% if p.get('proxy_type') == 'pool' %} (Pool){% endif %}</option>
+                        {% endfor %}
+                    </select>
+                    <label>Bereits vorhandene Buckets (optional)</label>
+                    <textarea name="buckets" rows="3"
+                              placeholder="bucket-a:eu-central-1&#10;bucket-b:us-east-1"
                               style="font-family:monospace;font-size:12px"></textarea>
+                    <div class="form-help">Kann leer sein — Buckets kannst du auch später auto-anlegen.</div>
                 </div>
             </div>
             <div style="margin-top:10px"><button class="btn btn-primary btn-sm">Add S3-Account</button></div>
@@ -67,6 +139,7 @@
         Ein Base-Logo hochladen, N Varianten (Pixel-Nudge pro Datei für unique Bytes),
         die werden round-robin auf alle Buckets des Accounts verteilt.
         Beispiel: 30 Varianten × 3 Buckets = 10 pro Bucket, drei verschiedene Origin-Domains.
+        Nutzt den Proxy des Accounts falls konfiguriert.
     </p>
     <form method="post" action="/s3-logos/upload" enctype="multipart/form-data"
           hx-post="/s3-logos/upload" hx-target="#s3-upload-result" hx-swap="innerHTML" hx-encoding="multipart/form-data">
@@ -75,7 +148,7 @@
                 <label>AWS-Account</label>
                 <select name="account_id" required>
                     {% for a in accounts %}
-                    <option value="{{ a.id }}">{{ a.name }} — {{ a.buckets[:60] }}…</option>
+                    <option value="{{ a.id }}">{{ a.name }}</option>
                     {% endfor %}
                     {% if not accounts %}
                     <option disabled selected>Erst Account oben anlegen</option>
@@ -120,7 +193,7 @@
                     </ul>
                 </details>
                 <form method="post" action="/s3-logos/uploads/{{ u.id }}/delete"
-                      onsubmit="return confirm('Upload + alle Varianten löschen? (Bilder in S3 bleiben liegen — bitte manuell im Bucket löschen falls gewünscht)')"
+                      onsubmit="return confirm('Lokale Referenz löschen? (Bilder in S3 bleiben liegen)')"
                       style="display:inline">
                     <button class="btn btn-danger btn-xs btn-icon">&#10005;</button>
                 </form>

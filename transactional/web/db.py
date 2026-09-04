@@ -240,8 +240,13 @@ class TransDB:
                 iam_key TEXT NOT NULL,
                 iam_secret TEXT NOT NULL,
                 buckets TEXT NOT NULL DEFAULT '',
+                proxy_id INTEGER DEFAULT 0,
                 user_id INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        else:
+            _cols = {r[1] for r in c.execute("PRAGMA table_info(trans_s3_accounts)").fetchall()}
+            if "proxy_id" not in _cols:
+                c.execute("ALTER TABLE trans_s3_accounts ADD COLUMN proxy_id INTEGER DEFAULT 0")
         if "trans_s3_uploads" not in tables:
             c.execute("""CREATE TABLE trans_s3_uploads (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1748,14 +1753,21 @@ class TransDB:
         c.commit()
 
     # ── S3 Logo CDN (parallel zu Cloudinary) ────────────────
-    def add_s3_account(self, name, iam_key, iam_secret, buckets, user_id) -> int:
+    def add_s3_account(self, name, iam_key, iam_secret, buckets, user_id,
+                        proxy_id: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_s3_accounts (name,iam_key,iam_secret,buckets,user_id) "
-                  "VALUES (?,?,?,?,?)",
+        c.execute("INSERT INTO trans_s3_accounts (name,iam_key,iam_secret,buckets,proxy_id,user_id) "
+                  "VALUES (?,?,?,?,?,?)",
                   (name.strip(), iam_key.strip(), iam_secret.strip(),
-                   buckets.strip(), user_id))
+                   buckets.strip(), int(proxy_id or 0), user_id))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
+
+    def update_s3_account_buckets(self, aid, buckets, user_id):
+        c = self._conn()
+        c.execute("UPDATE trans_s3_accounts SET buckets=? WHERE id=? AND user_id=?",
+                  (buckets, aid, user_id))
+        c.commit()
 
     def get_s3_accounts(self, user_id) -> list:
         return self._conn().execute(

@@ -70,11 +70,24 @@ def _tweaked_bytes(src_path: str, seed: int) -> bytes:
         return open(src_path, "rb").read()
 
 
+def _proxy_for_account(db, acc: dict) -> str:
+    """Resolve account.proxy_id → erste Zeile aus dem Proxy-Pool."""
+    pid = int(acc.get("proxy_id") or 0)
+    if not pid:
+        return ""
+    row = db.get_proxy(pid)
+    if not row:
+        return ""
+    val = (dict(row).get("value") or "").strip()
+    return val.splitlines()[0].strip() if val else ""
+
+
 @router.get("/s3-logos", response_class=HTMLResponse)
 async def s3_page(request: Request):
     db = request.app.state.db
     uid = request.state.user["id"]
     accounts = [dict(a) for a in db.get_s3_accounts(uid)]
+    proxies = [dict(p) for p in db.get_proxies(uid)]
     uploads = []
     for u in db.get_s3_uploads(uid):
         ud = dict(u)
@@ -83,6 +96,7 @@ async def s3_page(request: Request):
     return request.app.state.templates.TemplateResponse(request, "s3_cdn.html", {
         "active": "s3_logos",
         "accounts": accounts,
+        "proxies": proxies,
         "uploads": uploads,
         "pool_size": len(db.get_all_cdn_urls(uid)),
     })
@@ -93,13 +107,76 @@ async def add_account(request: Request,
                         name: str = Form(""),
                         iam_key: str = Form(""),
                         iam_secret: str = Form(""),
-                        buckets: str = Form("")):
+                        buckets: str = Form(""),
+                        proxy_id: int = Form(0)):
     db = request.app.state.db
     uid = request.state.user["id"]
-    if not (name.strip() and iam_key.strip() and iam_secret.strip() and buckets.strip()):
+    if not (name.strip() and iam_key.strip() and iam_secret.strip()):
         return RedirectResponse("/s3-logos", status_code=303)
-    db.add_s3_account(name, iam_key, iam_secret, buckets, uid)
+    db.add_s3_account(name, iam_key, iam_secret, buckets, uid, proxy_id)
     return RedirectResponse("/s3-logos", status_code=303)
+
+
+@router.post("/s3-logos/accounts/{aid}/setup-bucket", response_class=HTMLResponse)
+async def setup_bucket(request: Request, aid: int,
+                        bucket: str = Form(""),
+                        region: str = Form("eu-central-1"),
+                        add_to_pool: int = Form(1)):
+    """Full-Auto: Bucket erstellen (falls fehlt), Public-Access-Config
+    setzen, Public-Read Policy anhängen. Danach optional zur Bucket-Liste
+    des Accounts hinzufügen."""
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    row = db.get_s3_account(aid)
+    if not row or row.get("user_id") != uid:
+        return HTMLResponse('<div class="alert alert-danger">Account nicht gefunden.</div>')
+    bucket = "".join(c for c in bucket.strip().lower()
+                       if c.isalnum() or c in ".-")
+    region = region.strip() or "eu-central-1"
+    if not bucket or len(bucket) < 3:
+        return HTMLResponse('<div class="alert alert-warning">Bucket-Name '
+                             'zu kurz (min. 3 Zeichen, nur a-z 0-9 . -).</div>')
+    from mailer.s3_uploader import s3_setup_bucket, s3_ping
+    proxy = _proxy_for_account(db, row)
+    r = s3_setup_bucket(row["iam_key"], row["iam_secret"], region,
+                         bucket, proxy=proxy)
+    if not r.get("ok"):
+        return HTMLResponse(
+            f'<div class="alert alert-danger">Setup fehlgeschlagen: '
+            f'{escape(r.get("error", ""))}</div>'
+        )
+    # Sanity-check: ping
+    p = s3_ping(row["iam_key"], row["iam_secret"], region, bucket, proxy=proxy)
+    if not p.get("ok"):
+        return HTMLResponse(
+            f'<div class="alert alert-warning">Setup lief, aber Test-PUT '
+            f'schlug fehl: {escape(p.get("error", ""))}</div>'
+        )
+    # Zur Bucket-Liste hinzufügen (idempotent — Duplikate rausfiltern)
+    if add_to_pool:
+        current = (row.get("buckets") or "").strip()
+        new_entry = f"{bucket}:{region}"
+        entries = set()
+        for e in current.replace("\n", ",").split(","):
+            e = e.strip()
+            if e:
+                entries.add(e)
+        if new_entry not in entries:
+            entries.add(new_entry)
+            new_buckets = "\n".join(sorted(entries))
+            db.update_s3_account_buckets(aid, new_buckets, uid)
+    steps_html = "".join(
+        f'<li>{s["step"]}: {escape(str(s["result"]))}</li>'
+        for s in r.get("steps", [])
+    )
+    return HTMLResponse(
+        f'<div class="alert alert-success">✓ Bucket <code>{escape(bucket)}</code> '
+        f'in <code>{escape(region)}</code> ist ready. Public-URL: '
+        f'<code>{escape(p.get("url", "").rsplit("/",1)[0])}</code></div>'
+        f'<ul style="font-size:11px">{steps_html}</ul>'
+        + ('<div class="form-help">Zur Bucket-Liste hinzugefügt. Reload für neue Übersicht.</div>'
+           if add_to_pool else "")
+    )
 
 
 @router.post("/s3-logos/accounts/{aid}/delete")
@@ -119,10 +196,11 @@ async def test_account(request: Request, aid: int):
     from mailer.s3_uploader import parse_buckets_field, s3_ping
     buckets = parse_buckets_field(row.get("buckets", ""))
     if not buckets:
-        return HTMLResponse('<span style="color:var(--red)">Keine Buckets konfiguriert</span>')
+        return HTMLResponse('<span style="color:var(--fg2);font-size:12px">Keine Buckets — nutze „Bucket auto-anlegen"</span>')
+    proxy = _proxy_for_account(db, row)
     results = []
     for b, r in buckets:
-        p = s3_ping(row["iam_key"], row["iam_secret"], r, b)
+        p = s3_ping(row["iam_key"], row["iam_secret"], r, b, proxy=proxy)
         if p.get("ok"):
             results.append(f'<div style="color:var(--green);font-size:12px">✓ <code>{escape(b)}</code> ({escape(r)})</div>')
         else:
@@ -147,7 +225,7 @@ async def upload_logo(request: Request,
     acc = db.get_s3_account(account_id)
     if not acc:
         return HTMLResponse('<div class="alert alert-danger">S3-Account nicht gefunden.</div>')
-    from mailer.s3_uploader import parse_buckets_field, s3_upload_object, S3UploadError
+    from mailer.s3_uploader import parse_buckets_field, s3_upload_object, S3Error
     buckets = parse_buckets_field(acc.get("buckets", ""))
     if not buckets:
         return HTMLResponse('<div class="alert alert-danger">Account hat keine Buckets konfiguriert.</div>')
@@ -170,6 +248,8 @@ async def upload_logo(request: Request,
     prog.update(running=True, done=0, total=count, ok=0, errors=0,
                 log=[], upload_id=upload_id)
 
+    proxy = _proxy_for_account(db, acc)
+
     def worker():
         try:
             for i in range(count):
@@ -180,12 +260,9 @@ async def upload_logo(request: Request,
                     url = s3_upload_object(
                         acc["iam_key"], acc["iam_secret"], region,
                         bucket, key, body, content_type=content_type,
-                        public=True, timeout=45)
+                        public=True, proxy=proxy, timeout=45)
                     db.add_s3_link(upload_id, url, bucket, key)
                     prog["ok"] += 1
-                except S3UploadError as e:
-                    prog["errors"] += 1
-                    prog["log"].append(f"#{i + 1}: {str(e)[:200]}")
                 except Exception as e:
                     prog["errors"] += 1
                     prog["log"].append(f"#{i + 1}: {str(e)[:200]}")
