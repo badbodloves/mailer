@@ -28,23 +28,30 @@ HEADERS = {
 
 
 def _normalize_proxy(raw: str) -> Optional[str]:
-    """Nimmt ein Proxy-String und liefert eine URL für requests.proxies.
-    Akzeptiert:
-      * bereits URL-Form: `socks5://user:pass@host:port`, `http://host:port`
+    """Nimmt einen Proxy-String und liefert eine URL für requests.proxies.
+    Akzeptiert alle üblichen Formate:
       * host:port
-      * host:port:user:pass  (klassisches Mailer-Format)
+      * host:port:user:pass
+      * scheme://host:port
+      * scheme://user:pass@host:port
+      * scheme://host:port:user:pass   ← häufiges Colon-Auth-Format
     Default-Schema: socks5h (DNS auch durch Proxy)."""
-    s = raw.strip()
+    s = (raw or "").strip()
     if not s:
         return None
+    scheme = "socks5h"
+    rest = s
     if "://" in s:
-        return s
-    parts = s.split(":")
+        scheme, rest = s.split("://", 1)
+    # user:pass@host:port bereits sauber
+    if "@" in rest:
+        return f"{scheme}://{rest}"
+    parts = rest.split(":")
     if len(parts) == 2:
-        return f"socks5h://{parts[0]}:{parts[1]}"
+        return f"{scheme}://{parts[0]}:{parts[1]}"
     if len(parts) == 4:
         host, port, user, pw = parts
-        return f"socks5h://{user}:{pw}@{host}:{port}"
+        return f"{scheme}://{user}:{pw}@{host}:{port}"
     return None
 
 
