@@ -136,8 +136,14 @@
                 </div>
                 <input type="hidden" name="regions_csv" value="eu-central-1,us-east-1,eu-west-1">
 
-                <label>Bucket-Prefix (nur intern zum Wiedererkennen)</label>
-                <input name="bucket_prefix" value="mailer-cdn" pattern="[a-z0-9\-]+">
+                <label>Bucket-Prefix (leer = random Pool)</label>
+                <input name="bucket_prefix" value="" pattern="[a-z0-9\-]*"
+                       placeholder="leer lassen für zufällige Prefixes (media, cdn, web-assets, ...)">
+                <div class="form-help">
+                    Leer = jeder Bucket bekommt einen anderen Prefix aus einem Pool
+                    unauffälliger Wörter (assets, static, media, cdn, web-store, …).
+                    Gesetzt = alle Buckets bekommen deinen festen Prefix.
+                </div>
             </div>
             <div>
                 <label>Source-Logo(s) — aus <a href="/logos" style="color:var(--accent)">/logos</a></label>

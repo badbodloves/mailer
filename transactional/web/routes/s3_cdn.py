@@ -89,16 +89,41 @@ DEFAULT_REGIONS = [
     "ap-southeast-1", "ap-northeast-1",
 ]
 
+# Pool an unauffälligen Bucket-Prefix-Wörtern. Aus einem Wort oder aus
+# zwei kombiniert (z.B. "web-assets", "static-media") — sieht aus wie
+# generische Company-CDN-Buckets. Kein "mailer" mehr im Namen.
+_PREFIX_ADJ = [
+    "web", "static", "public", "cdn", "img", "media", "assets",
+    "content", "files", "storage", "uploads", "cache", "shared",
+    "cloud", "prod", "app", "core", "edge", "digital", "resource",
+    "site", "brand", "portal", "hub", "vault", "delivery", "pub",
+]
+_PREFIX_NOUN = [
+    "assets", "media", "cdn", "store", "cache", "content", "img",
+    "files", "static", "hub", "pool", "hosting", "data", "cloud",
+    "vault", "share", "delivery", "pack",
+]
 
-def _random_bucket_name(prefix: str = "mailer-cdn") -> str:
+
+def _random_bucket_name(prefix: str = "") -> str:
     """AWS-konformer Bucket-Name — nur a-z 0-9 -, 3-63 chars,
-    startet/endet mit alphanum. Random-Token gibt Uniqueness."""
+    startet/endet mit alphanum. Random-Token gibt Uniqueness.
+
+    Wenn `prefix` leer ist, wird ein zufälliges 1- oder 2-Wort-Prefix
+    aus einem Pool unauffälliger Begriffe gebildet."""
     import secrets as _sec
-    prefix = "".join(c for c in prefix.lower()
+    if prefix and prefix.strip():
+        pfx = "".join(c for c in prefix.lower()
                        if c.isalnum() or c == "-").strip("-")[:20] or "cdn"
-    token = _sec.token_hex(6)  # 12 chars
+    else:
+        # 50/50: ein Wort oder zwei kombiniert
+        if _sec.randbelow(2) == 0:
+            pfx = _sec.choice(_PREFIX_NOUN)
+        else:
+            pfx = f"{_sec.choice(_PREFIX_ADJ)}-{_sec.choice(_PREFIX_NOUN)}"
+    token = _sec.token_hex(6)
     stamp = str(int(time.time()))[-6:]
-    return f"{prefix}-{token}-{stamp}"
+    return f"{pfx}-{token}-{stamp}"
 
 
 @router.get("/s3-logos", response_class=HTMLResponse)
