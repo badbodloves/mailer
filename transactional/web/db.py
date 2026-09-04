@@ -237,33 +237,63 @@ class TransDB:
             c.execute("""CREATE TABLE trans_s3_accounts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
-                iam_key TEXT NOT NULL,
-                iam_secret TEXT NOT NULL,
+                iam_key TEXT NOT NULL DEFAULT '',
+                iam_secret TEXT NOT NULL DEFAULT '',
                 buckets TEXT NOT NULL DEFAULT '',
                 proxy_id INTEGER DEFAULT 0,
                 user_id INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
         else:
+            # Nachziehen falls die Tabelle in einer früheren Version anders
+            # angelegt war (fehlende Spalten). ALTER ... ADD COLUMN mit DEFAULT
+            # ist idempotent + kein Data-Loss.
             _cols = {r[1] for r in c.execute("PRAGMA table_info(trans_s3_accounts)").fetchall()}
-            if "proxy_id" not in _cols:
-                c.execute("ALTER TABLE trans_s3_accounts ADD COLUMN proxy_id INTEGER DEFAULT 0")
+            for col_name, col_def in [
+                ("iam_key",    "TEXT NOT NULL DEFAULT ''"),
+                ("iam_secret", "TEXT NOT NULL DEFAULT ''"),
+                ("buckets",    "TEXT NOT NULL DEFAULT ''"),
+                ("proxy_id",   "INTEGER DEFAULT 0"),
+                ("user_id",    "INTEGER DEFAULT 0"),
+            ]:
+                if col_name not in _cols:
+                    c.execute(f"ALTER TABLE trans_s3_accounts ADD COLUMN {col_name} {col_def}")
         if "trans_s3_uploads" not in tables:
             c.execute("""CREATE TABLE trans_s3_uploads (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 account_id INTEGER DEFAULT 0,
-                filename TEXT NOT NULL,
+                filename TEXT NOT NULL DEFAULT '',
                 variant_count INTEGER DEFAULT 0,
                 user_id INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
+        else:
+            _cols = {r[1] for r in c.execute("PRAGMA table_info(trans_s3_uploads)").fetchall()}
+            for col_name, col_def in [
+                ("account_id",    "INTEGER DEFAULT 0"),
+                ("filename",      "TEXT NOT NULL DEFAULT ''"),
+                ("variant_count", "INTEGER DEFAULT 0"),
+                ("user_id",       "INTEGER DEFAULT 0"),
+            ]:
+                if col_name not in _cols:
+                    c.execute(f"ALTER TABLE trans_s3_uploads ADD COLUMN {col_name} {col_def}")
         if "trans_s3_links" not in tables:
             c.execute("""CREATE TABLE trans_s3_links (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                upload_id INTEGER NOT NULL REFERENCES trans_s3_uploads(id) ON DELETE CASCADE,
-                url TEXT NOT NULL,
+                upload_id INTEGER NOT NULL,
+                url TEXT NOT NULL DEFAULT '',
                 bucket TEXT DEFAULT '',
                 s3_key TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
             c.execute("CREATE INDEX IF NOT EXISTS idx_ts3l_upload ON trans_s3_links(upload_id)")
+        else:
+            _cols = {r[1] for r in c.execute("PRAGMA table_info(trans_s3_links)").fetchall()}
+            for col_name, col_def in [
+                ("upload_id", "INTEGER NOT NULL DEFAULT 0"),
+                ("url",       "TEXT NOT NULL DEFAULT ''"),
+                ("bucket",    "TEXT DEFAULT ''"),
+                ("s3_key",    "TEXT DEFAULT ''"),
+            ]:
+                if col_name not in _cols:
+                    c.execute(f"ALTER TABLE trans_s3_links ADD COLUMN {col_name} {col_def}")
 
         # Assembly-Mode Snippets — pro Slot ein Pool, live pro Send
         # zufällig kombiniert. Optionales Feature pro Kampagne.
