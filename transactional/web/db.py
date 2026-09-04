@@ -230,33 +230,14 @@ class TransDB:
             c.execute("""CREATE TABLE IF NOT EXISTS trans_app_config (
                 id INTEGER PRIMARY KEY CHECK(id=1),
                 login_logo TEXT DEFAULT '', app_name TEXT DEFAULT 'Transactional Mailer')""")
-        # AWS S3 als CDN-Quelle (parallel zu Cloudinary). Ein Account
-        # kann mehrere Buckets haben (Multi-Bucket-Rotation für Origin-
-        # Domain-Diversität).
-        if "trans_s3_accounts" not in tables:
-            c.execute("""CREATE TABLE trans_s3_accounts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT NOT NULL,
-                iam_key TEXT NOT NULL DEFAULT '',
-                iam_secret TEXT NOT NULL DEFAULT '',
-                buckets TEXT NOT NULL DEFAULT '',
-                proxy_id INTEGER DEFAULT 0,
-                user_id INTEGER DEFAULT 0,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
-        else:
-            # Nachziehen falls die Tabelle in einer früheren Version anders
-            # angelegt war (fehlende Spalten). ALTER ... ADD COLUMN mit DEFAULT
-            # ist idempotent + kein Data-Loss.
+        # trans_s3_accounts existiert bereits für Redirects (Zeile 474)
+        # mit access_key/secret_key. Wir hängen nur `buckets` an falls
+        # nicht vorhanden — damit ein bestehender Account gleichzeitig für
+        # Redirects UND CDN-Logos nutzbar ist (ein IAM-Key für alles).
+        if "trans_s3_accounts" in tables:
             _cols = {r[1] for r in c.execute("PRAGMA table_info(trans_s3_accounts)").fetchall()}
-            for col_name, col_def in [
-                ("iam_key",    "TEXT NOT NULL DEFAULT ''"),
-                ("iam_secret", "TEXT NOT NULL DEFAULT ''"),
-                ("buckets",    "TEXT NOT NULL DEFAULT ''"),
-                ("proxy_id",   "INTEGER DEFAULT 0"),
-                ("user_id",    "INTEGER DEFAULT 0"),
-            ]:
-                if col_name not in _cols:
-                    c.execute(f"ALTER TABLE trans_s3_accounts ADD COLUMN {col_name} {col_def}")
+            if "buckets" not in _cols:
+                c.execute("ALTER TABLE trans_s3_accounts ADD COLUMN buckets TEXT NOT NULL DEFAULT ''")
         if "trans_s3_uploads" not in tables:
             c.execute("""CREATE TABLE trans_s3_uploads (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -480,6 +461,7 @@ class TransDB:
                 bucket_prefix TEXT DEFAULT 'lk',
                 proxy_id INTEGER DEFAULT 0,
                 is_primary INTEGER DEFAULT 0,
+                buckets TEXT NOT NULL DEFAULT '',
                 user_id INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
             ("trans_cloudinary_uploads", """CREATE TABLE IF NOT EXISTS trans_cloudinary_uploads (
@@ -1782,37 +1764,12 @@ class TransDB:
                   (upload_id, user_id))
         c.commit()
 
-    # ── S3 Logo CDN (parallel zu Cloudinary) ────────────────
-    def add_s3_account(self, name, iam_key, iam_secret, buckets, user_id,
-                        proxy_id: int = 0) -> int:
-        c = self._conn()
-        c.execute("INSERT INTO trans_s3_accounts (name,iam_key,iam_secret,buckets,proxy_id,user_id) "
-                  "VALUES (?,?,?,?,?,?)",
-                  (name.strip(), iam_key.strip(), iam_secret.strip(),
-                   buckets.strip(), int(proxy_id or 0), user_id))
-        c.commit()
-        return c.execute("SELECT last_insert_rowid()").fetchone()[0]
-
+    # ── S3 Logo CDN — nutzt die bestehende trans_s3_accounts-Tabelle
+    # (auch von Redirects verwendet). Ein IAM-Key für alles.
     def update_s3_account_buckets(self, aid, buckets, user_id):
         c = self._conn()
         c.execute("UPDATE trans_s3_accounts SET buckets=? WHERE id=? AND user_id=?",
                   (buckets, aid, user_id))
-        c.commit()
-
-    def get_s3_accounts(self, user_id) -> list:
-        return self._conn().execute(
-            "SELECT * FROM trans_s3_accounts WHERE user_id=? ORDER BY name",
-            (user_id,)).fetchall()
-
-    def get_s3_account(self, aid) -> dict:
-        row = self._conn().execute(
-            "SELECT * FROM trans_s3_accounts WHERE id=?", (aid,)).fetchone()
-        return dict(row) if row else {}
-
-    def delete_s3_account(self, aid, user_id):
-        c = self._conn()
-        c.execute("DELETE FROM trans_s3_accounts WHERE id=? AND user_id=?",
-                  (aid, user_id))
         c.commit()
 
     def add_s3_upload(self, account_id, filename, user_id) -> int:

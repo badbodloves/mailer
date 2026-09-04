@@ -1,4 +1,7 @@
-"""S3 als CDN-Quelle für Logo-URLs. Analog zum Cloudinary-Panel.
+"""S3 als CDN-Quelle für Logo-URLs. Nutzt die bestehenden
+trans_s3_accounts (die auch für Redirects verwendet werden) — dein
+existierender IAM-Key funktioniert direkt hier weiter. Wir hängen nur
+das buckets-Feld pro Account dran und bieten Auto-Bucket-Setup.
 
 Multi-Bucket-Rotation: pro Upload wird ein Bucket round-robin gewählt →
 Origin-Domain der URLs variiert (bucket-a.s3.eu-central-1... vs
@@ -37,7 +40,6 @@ def _prog(uid: int) -> dict:
 
 
 def _tweaked_bytes(src_path: str, seed: int) -> bytes:
-    """Wie in cloudinary.py — kleiner Pixel-Nudge damit Hash unique."""
     try:
         from PIL import Image
     except ImportError:
@@ -71,7 +73,6 @@ def _tweaked_bytes(src_path: str, seed: int) -> bytes:
 
 
 def _proxy_for_account(db, acc: dict) -> str:
-    """Resolve account.proxy_id → erste Zeile aus dem Proxy-Pool."""
     pid = int(acc.get("proxy_id") or 0)
     if not pid:
         return ""
@@ -87,7 +88,6 @@ async def s3_page(request: Request):
     db = request.app.state.db
     uid = request.state.user["id"]
     accounts = [dict(a) for a in db.get_s3_accounts(uid)]
-    proxies = [dict(p) for p in db.get_proxies(uid)]
     uploads = []
     for u in db.get_s3_uploads(uid):
         ud = dict(u)
@@ -96,25 +96,9 @@ async def s3_page(request: Request):
     return request.app.state.templates.TemplateResponse(request, "s3_cdn.html", {
         "active": "s3_logos",
         "accounts": accounts,
-        "proxies": proxies,
         "uploads": uploads,
         "pool_size": len(db.get_all_cdn_urls(uid)),
     })
-
-
-@router.post("/s3-logos/accounts/add")
-async def add_account(request: Request,
-                        name: str = Form(""),
-                        iam_key: str = Form(""),
-                        iam_secret: str = Form(""),
-                        buckets: str = Form(""),
-                        proxy_id: int = Form(0)):
-    db = request.app.state.db
-    uid = request.state.user["id"]
-    if not (name.strip() and iam_key.strip() and iam_secret.strip()):
-        return RedirectResponse("/s3-logos", status_code=303)
-    db.add_s3_account(name, iam_key, iam_secret, buckets, uid, proxy_id)
-    return RedirectResponse("/s3-logos", status_code=303)
 
 
 @router.post("/s3-logos/accounts/{aid}/setup-bucket", response_class=HTMLResponse)
@@ -123,13 +107,16 @@ async def setup_bucket(request: Request, aid: int,
                         region: str = Form("eu-central-1"),
                         add_to_pool: int = Form(1)):
     """Full-Auto: Bucket erstellen (falls fehlt), Public-Access-Config
-    setzen, Public-Read Policy anhängen. Danach optional zur Bucket-Liste
+    setzen, Public-Read Policy anhängen. Danach zur Bucket-Liste
     des Accounts hinzufügen."""
     db = request.app.state.db
     uid = request.state.user["id"]
     row = db.get_s3_account(aid)
-    if not row or row.get("user_id") != uid:
+    if not row:
         return HTMLResponse('<div class="alert alert-danger">Account nicht gefunden.</div>')
+    row = dict(row)
+    if row.get("user_id", 0) not in (uid, 0):
+        return HTMLResponse('<div class="alert alert-danger">Kein Zugriff auf diesen Account.</div>')
     bucket = "".join(c for c in bucket.strip().lower()
                        if c.isalnum() or c in ".-")
     region = region.strip() or "eu-central-1"
@@ -138,21 +125,19 @@ async def setup_bucket(request: Request, aid: int,
                              'zu kurz (min. 3 Zeichen, nur a-z 0-9 . -).</div>')
     from mailer.s3_uploader import s3_setup_bucket, s3_ping
     proxy = _proxy_for_account(db, row)
-    r = s3_setup_bucket(row["iam_key"], row["iam_secret"], region,
+    r = s3_setup_bucket(row["access_key"], row["secret_key"], region,
                          bucket, proxy=proxy)
     if not r.get("ok"):
         return HTMLResponse(
             f'<div class="alert alert-danger">Setup fehlgeschlagen: '
             f'{escape(r.get("error", ""))}</div>'
         )
-    # Sanity-check: ping
-    p = s3_ping(row["iam_key"], row["iam_secret"], region, bucket, proxy=proxy)
+    p = s3_ping(row["access_key"], row["secret_key"], region, bucket, proxy=proxy)
     if not p.get("ok"):
         return HTMLResponse(
             f'<div class="alert alert-warning">Setup lief, aber Test-PUT '
             f'schlug fehl: {escape(p.get("error", ""))}</div>'
         )
-    # Zur Bucket-Liste hinzufügen (idempotent — Duplikate rausfiltern)
     if add_to_pool:
         current = (row.get("buckets") or "").strip()
         new_entry = f"{bucket}:{region}"
@@ -171,36 +156,28 @@ async def setup_bucket(request: Request, aid: int,
     )
     return HTMLResponse(
         f'<div class="alert alert-success">✓ Bucket <code>{escape(bucket)}</code> '
-        f'in <code>{escape(region)}</code> ist ready. Public-URL: '
-        f'<code>{escape(p.get("url", "").rsplit("/",1)[0])}</code></div>'
+        f'in <code>{escape(region)}</code> ist ready.</div>'
         f'<ul style="font-size:11px">{steps_html}</ul>'
-        + ('<div class="form-help">Zur Bucket-Liste hinzugefügt. Reload für neue Übersicht.</div>'
+        + ('<div class="form-help">Zur Bucket-Liste hinzugefügt — Reload für neue Übersicht.</div>'
            if add_to_pool else "")
     )
 
 
-@router.post("/s3-logos/accounts/{aid}/delete")
-async def delete_account(request: Request, aid: int):
-    db = request.app.state.db
-    uid = request.state.user["id"]
-    db.delete_s3_account(aid, uid)
-    return RedirectResponse("/s3-logos", status_code=303)
-
-
-@router.post("/s3-logos/accounts/{aid}/test", response_class=HTMLResponse)
-async def test_account(request: Request, aid: int):
+@router.post("/s3-logos/accounts/{aid}/test-buckets", response_class=HTMLResponse)
+async def test_buckets(request: Request, aid: int):
     db = request.app.state.db
     row = db.get_s3_account(aid)
     if not row:
         return HTMLResponse('<span style="color:var(--red)">Account nicht gefunden</span>')
+    row = dict(row)
     from mailer.s3_uploader import parse_buckets_field, s3_ping
     buckets = parse_buckets_field(row.get("buckets", ""))
     if not buckets:
-        return HTMLResponse('<span style="color:var(--fg2);font-size:12px">Keine Buckets — nutze „Bucket auto-anlegen"</span>')
+        return HTMLResponse('<span style="color:var(--fg2);font-size:12px">Keine Buckets konfiguriert — nutze „Bucket auto-anlegen" oben.</span>')
     proxy = _proxy_for_account(db, row)
     results = []
     for b, r in buckets:
-        p = s3_ping(row["iam_key"], row["iam_secret"], r, b, proxy=proxy)
+        p = s3_ping(row["access_key"], row["secret_key"], r, b, proxy=proxy)
         if p.get("ok"):
             results.append(f'<div style="color:var(--green);font-size:12px">✓ <code>{escape(b)}</code> ({escape(r)})</div>')
         else:
@@ -225,10 +202,11 @@ async def upload_logo(request: Request,
     acc = db.get_s3_account(account_id)
     if not acc:
         return HTMLResponse('<div class="alert alert-danger">S3-Account nicht gefunden.</div>')
+    acc = dict(acc)
     from mailer.s3_uploader import parse_buckets_field, s3_upload_object, S3Error
     buckets = parse_buckets_field(acc.get("buckets", ""))
     if not buckets:
-        return HTMLResponse('<div class="alert alert-danger">Account hat keine Buckets konfiguriert.</div>')
+        return HTMLResponse('<div class="alert alert-danger">Account hat keine Buckets konfiguriert. Nutze „Bucket auto-anlegen" oder trag welche unter /redirects manuell ein.</div>')
 
     count = max(1, min(int(count or 1), 500))
     base_name = "".join(c for c in (base_name or "").strip()
@@ -258,7 +236,7 @@ async def upload_logo(request: Request,
                 try:
                     body = _tweaked_bytes(src_path, seed=i) if tweak else raw
                     url = s3_upload_object(
-                        acc["iam_key"], acc["iam_secret"], region,
+                        acc["access_key"], acc["secret_key"], region,
                         bucket, key, body, content_type=content_type,
                         public=True, proxy=proxy, timeout=45)
                     db.add_s3_link(upload_id, url, bucket, key)
