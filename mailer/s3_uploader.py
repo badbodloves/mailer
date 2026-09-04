@@ -78,17 +78,31 @@ def _sigv4_headers(method: str, host: str, path: str, query_string: str,
 
 
 def _proxy_dict(proxy: str) -> Optional[dict]:
-    """Normalisiere host:port oder host:port:user:pass zu requests-Proxies-Format."""
+    """Normalisiere alle möglichen Proxy-Formate zu requests-Format.
+    Akzeptiert:
+      host:port
+      host:port:user:pass
+      scheme://host:port
+      scheme://user:pass@host:port
+      scheme://host:port:user:pass          ← häufiges Colon-Auth-Format
+    """
     if not proxy or not proxy.strip():
         return None
     s = proxy.strip()
+    scheme = "socks5h"
+    rest = s
     if "://" in s:
-        return {"http": s, "https": s}
-    parts = s.split(":")
+        scheme, rest = s.split("://", 1)
+    # Wenn bereits user:pass@host:port drin, unverändert
+    if "@" in rest:
+        url = f"{scheme}://{rest}"
+        return {"http": url, "https": url}
+    parts = rest.split(":")
     if len(parts) == 2:
-        url = f"socks5h://{parts[0]}:{parts[1]}"
+        url = f"{scheme}://{parts[0]}:{parts[1]}"
     elif len(parts) == 4:
-        url = f"socks5h://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
+        # host:port:user:pass — Colon-Auth-Format umschreiben
+        url = f"{scheme}://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
     else:
         return None
     return {"http": url, "https": url}
