@@ -274,6 +274,103 @@ def s3_upload_object(iam_key: str, iam_secret: str, region: str,
     return s3_bucket_url(bucket, region, key)
 
 
+def s3_list_objects(iam_key: str, iam_secret: str, region: str,
+                     bucket: str, continuation_token: str = "",
+                     proxy: str = "", timeout: int = 30) -> tuple:
+    """GET /?list-type=2 → (keys[], next_continuation_token or "").
+    Max 1000 keys pro Request — paginiere via continuation_token."""
+    import re
+    qs_parts = ["list-type=2"]
+    if continuation_token:
+        qs_parts.append("continuation-token=" + quote(continuation_token, safe=""))
+    query_string = "&".join(sorted(qs_parts))
+    status, text = _s3_request("GET", iam_key, iam_secret, region, bucket,
+                                 query_string=query_string,
+                                 proxy=proxy, timeout=timeout,
+                                 accept_status=(200,))
+    keys = re.findall(r"<Key>([^<]+)</Key>", text)
+    next_tok = ""
+    m = re.search(r"<NextContinuationToken>([^<]+)</NextContinuationToken>", text)
+    if m:
+        next_tok = m.group(1)
+    return keys, next_tok
+
+
+def s3_delete_objects(iam_key: str, iam_secret: str, region: str,
+                       bucket: str, keys: list, proxy: str = "",
+                       timeout: int = 60) -> int:
+    """POST /?delete — löscht bis zu 1000 Objekte in einem Request.
+    Returns count deleted (best-effort, counted from response)."""
+    if not keys:
+        return 0
+    import base64 as _b64
+    import re as _re
+    from xml.sax.saxutils import escape as _xesc
+    objs = "".join(f"<Object><Key>{_xesc(k)}</Key></Object>" for k in keys[:1000])
+    body = (
+        f'<?xml version="1.0" encoding="UTF-8"?>'
+        f'<Delete><Quiet>true</Quiet>{objs}</Delete>'
+    ).encode("utf-8")
+    md5 = _b64.b64encode(hashlib.md5(body).digest()).decode("ascii")
+    hdrs = {"content-md5": md5}
+    status, text = _s3_request("POST", iam_key, iam_secret, region, bucket,
+                                 query_string="delete=",
+                                 body=body, content_type="application/xml",
+                                 extra_headers=hdrs, proxy=proxy,
+                                 timeout=timeout, accept_status=(200,))
+    errors = _re.findall(r"<Error>", text)
+    return len(keys[:1000]) - len(errors)
+
+
+def s3_delete_bucket(iam_key: str, iam_secret: str, region: str,
+                      bucket: str, proxy: str = "", timeout: int = 60) -> dict:
+    """DELETE / — Bucket muss leer sein."""
+    status, _ = _s3_request("DELETE", iam_key, iam_secret, region, bucket,
+                             proxy=proxy, timeout=timeout,
+                             accept_status=(204, 200))
+    return {"ok": True, "status": status}
+
+
+def s3_empty_and_delete_bucket(iam_key: str, iam_secret: str, region: str,
+                                 bucket: str, proxy: str = "",
+                                 timeout: int = 60) -> dict:
+    """Full-Auto: alle Objekte löschen (paginiert + batched), danach Bucket
+    droppen. Idempotent: 404 NoSuchBucket = OK."""
+    deleted = 0
+    try:
+        cont = ""
+        while True:
+            keys, cont = s3_list_objects(iam_key, iam_secret, region, bucket,
+                                          continuation_token=cont, proxy=proxy,
+                                          timeout=timeout)
+            if not keys:
+                break
+            # Batches à 1000
+            for i in range(0, len(keys), 1000):
+                batch = keys[i:i + 1000]
+                deleted += s3_delete_objects(iam_key, iam_secret, region,
+                                              bucket, batch, proxy=proxy,
+                                              timeout=timeout)
+            if not cont:
+                break
+    except S3Error as e:
+        if e.status == 404 or "NoSuchBucket" in str(e):
+            return {"ok": True, "deleted": deleted,
+                     "note": "bucket existierte nicht (OK)"}
+        return {"ok": False, "deleted": deleted,
+                 "error": f"list/delete-objects: {e}"}
+    try:
+        s3_delete_bucket(iam_key, iam_secret, region, bucket, proxy=proxy,
+                          timeout=timeout)
+    except S3Error as e:
+        if e.status == 404 or "NoSuchBucket" in str(e):
+            return {"ok": True, "deleted": deleted,
+                     "note": "bucket bereits weg (OK)"}
+        return {"ok": False, "deleted": deleted,
+                 "error": f"delete_bucket: {e}"}
+    return {"ok": True, "deleted": deleted}
+
+
 def s3_ping(iam_key: str, iam_secret: str, region: str, bucket: str,
              proxy: str = "") -> dict:
     """Auth+Bucket-Test — schreibt+löscht 1-Byte Objekt."""

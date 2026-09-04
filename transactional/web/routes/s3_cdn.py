@@ -499,3 +499,102 @@ async def delete_upload(request: Request, upload_id: int):
     uid = request.state.user["id"]
     db.delete_s3_upload(upload_id, uid)
     return RedirectResponse("/s3-logos", status_code=303)
+
+
+@router.post("/s3-logos/accounts/{aid}/delete-bucket", response_class=HTMLResponse)
+async def delete_bucket(request: Request, aid: int,
+                          bucket: str = Form(""),
+                          region: str = Form("us-east-1")):
+    """Leert Bucket (alle Objekte weg) und löscht ihn dann bei AWS.
+    Danach aus Account.buckets rauswerfen und alle trans_s3_links, die auf
+    diesen Bucket zeigen, verwaisen lassen (bleiben als Historie im
+    upload-Datensatz, sind aber tote URLs — der User wirft die eh via
+    Upload-Delete raus)."""
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    row = db.get_s3_account(aid)
+    if not row:
+        return HTMLResponse('<span style="color:var(--red)">Account nicht gefunden</span>')
+    row = dict(row)
+    if row.get("user_id", 0) not in (uid, 0):
+        return HTMLResponse('<span style="color:var(--red)">Kein Zugriff auf diesen Account.</span>')
+    bucket = "".join(c for c in bucket.strip().lower()
+                       if c.isalnum() or c in ".-")
+    region = region.strip() or "us-east-1"
+    if not bucket:
+        return HTMLResponse('<span style="color:var(--red)">Bucket-Name fehlt.</span>')
+    from mailer.s3_uploader import s3_empty_and_delete_bucket
+    proxy = _proxy_for_account(db, row)
+    r = s3_empty_and_delete_bucket(row["access_key"], row["secret_key"],
+                                     region, bucket, proxy=proxy, timeout=90)
+    if not r.get("ok"):
+        return HTMLResponse(
+            f'<div class="alert alert-danger" style="margin:6px 0">'
+            f'Löschen fehlgeschlagen: {escape(r.get("error", ""))} '
+            f'(vorher {r.get("deleted", 0)} Objekte gelöscht)</div>'
+        )
+    # Aus Bucket-Liste des Accounts entfernen
+    current = (row.get("buckets") or "").strip()
+    target = f"{bucket}:{region}"
+    kept = []
+    for e in current.replace("\n", ",").split(","):
+        e = e.strip()
+        if e and e != target and e != bucket:
+            kept.append(e)
+    db.update_s3_account_buckets(aid, "\n".join(sorted(set(kept))), uid)
+    note = r.get("note", "")
+    detail = f" (Objekte {r.get('deleted', 0)})"
+    if note:
+        detail += f" · {note}"
+    return HTMLResponse(
+        f'<div class="alert alert-success" style="margin:6px 0">'
+        f'✓ Bucket <code>{escape(bucket)}</code> ({escape(region)}) '
+        f'gelöscht{escape(detail)}. '
+        f'<a href="/s3-logos" style="color:var(--accent)">Reload</a></div>'
+    )
+
+
+@router.post("/s3-logos/accounts/{aid}/delete-empty-buckets", response_class=HTMLResponse)
+async def delete_empty_buckets(request: Request, aid: int):
+    """Bulk-Cleanup: alle Buckets des Accounts durchgehen, wenn leer →
+    droppen. Rechnet auch mit Buckets die schon manuell gelöscht wurden."""
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    row = db.get_s3_account(aid)
+    if not row:
+        return HTMLResponse('<span style="color:var(--red)">Account nicht gefunden</span>')
+    row = dict(row)
+    if row.get("user_id", 0) not in (uid, 0):
+        return HTMLResponse('<span style="color:var(--red)">Kein Zugriff auf diesen Account.</span>')
+    from mailer.s3_uploader import (parse_buckets_field, s3_list_objects,
+                                      s3_delete_bucket, S3Error)
+    buckets = parse_buckets_field(row.get("buckets", ""))
+    if not buckets:
+        return HTMLResponse('<span style="color:var(--fg2);font-size:12px">Keine Buckets konfiguriert.</span>')
+    proxy = _proxy_for_account(db, row)
+    kept = []
+    lines = []
+    for b, r in buckets:
+        try:
+            keys, _ = s3_list_objects(row["access_key"], row["secret_key"],
+                                        r, b, proxy=proxy, timeout=30)
+        except S3Error as e:
+            if e.status == 404 or "NoSuchBucket" in str(e):
+                lines.append(f'<div style="color:var(--fg2);font-size:12px">– <code>{escape(b)}</code>: existiert nicht mehr, aus Liste entfernt.</div>')
+                continue
+            kept.append(f"{b}:{r}")
+            lines.append(f'<div style="color:var(--red);font-size:12px">✗ <code>{escape(b)}</code>: {escape(str(e)[:120])}</div>')
+            continue
+        if keys:
+            kept.append(f"{b}:{r}")
+            lines.append(f'<div style="color:var(--fg2);font-size:12px">– <code>{escape(b)}</code>: {len(keys)}+ Objekte — behalten.</div>')
+            continue
+        try:
+            s3_delete_bucket(row["access_key"], row["secret_key"], r, b,
+                              proxy=proxy, timeout=30)
+            lines.append(f'<div style="color:var(--green);font-size:12px">✓ <code>{escape(b)}</code> gelöscht.</div>')
+        except S3Error as e:
+            kept.append(f"{b}:{r}")
+            lines.append(f'<div style="color:var(--red);font-size:12px">✗ <code>{escape(b)}</code> delete: {escape(str(e)[:120])}</div>')
+    db.update_s3_account_buckets(aid, "\n".join(sorted(set(kept))), uid)
+    return HTMLResponse("".join(lines) or '<span style="color:var(--fg2);font-size:12px">Nichts zu tun.</span>')

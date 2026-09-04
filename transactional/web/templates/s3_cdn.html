@@ -40,15 +40,39 @@
 
     <h4 style="font-size:13px;margin:0 0 6px">Buckets für Logo-Uploads</h4>
     {% if a.buckets %}
-    <div style="font-family:monospace;font-size:11px;color:var(--fg2);margin-bottom:8px">
+    <table style="font-size:11px;font-family:monospace;margin-bottom:8px;width:auto">
+        <tbody>
         {% for b in (a.buckets or '').replace(',','\n').split('\n') if b.strip() %}
-        {{ b.strip() }}<br>
+        {% set parts = b.strip().split(':') %}
+        {% set bname = parts[0] %}
+        {% set breg = parts[1] if parts|length > 1 else 'us-east-1' %}
+        <tr>
+            <td style="padding:2px 8px 2px 0;color:var(--fg2)">{{ bname }}<span style="color:var(--fg3)">:{{ breg }}</span></td>
+            <td style="padding:2px 0">
+                <form hx-post="/s3-logos/accounts/{{ a.id }}/delete-bucket"
+                      hx-target="#s3-del-{{ a.id }}" hx-swap="innerHTML"
+                      hx-confirm="Bucket {{ bname }} ({{ breg }}) LEEREN + LÖSCHEN? Alle Logo-Varianten darin sind danach weg."
+                      style="display:inline;margin:0">
+                    <input type="hidden" name="bucket" value="{{ bname }}">
+                    <input type="hidden" name="region" value="{{ breg }}">
+                    <button class="btn btn-danger btn-xs" title="Bucket leeren + löschen">&#10005;</button>
+                </form>
+            </td>
+        </tr>
         {% endfor %}
-    </div>
+        </tbody>
+    </table>
     <div style="margin-bottom:12px">
         <button class="btn btn-secondary btn-xs" hx-post="/s3-logos/accounts/{{ a.id }}/test-buckets"
                 hx-target="#s3-test-{{ a.id }}" hx-swap="innerHTML">Test alle Buckets</button>
+        <button class="btn btn-secondary btn-xs"
+                hx-post="/s3-logos/accounts/{{ a.id }}/delete-empty-buckets"
+                hx-target="#s3-test-{{ a.id }}" hx-swap="innerHTML"
+                hx-confirm="Alle leeren Buckets dieses Accounts löschen? (Buckets mit Objekten werden behalten.)">
+            Leere Buckets aufräumen
+        </button>
         <div id="s3-test-{{ a.id }}" style="margin-top:4px"></div>
+        <div id="s3-del-{{ a.id }}"></div>
     </div>
     {% else %}
     <div class="alert alert-warning" style="font-size:12px;padding:6px 10px;margin-bottom:8px">
@@ -89,7 +113,9 @@
                 hängt eine Public-Read-Policy an und trägt ihn in die Bucket-Liste ein.
                 Braucht IAM-Permissions: <code>s3:CreateBucket</code>,
                 <code>s3:PutBucketPolicy</code>, <code>s3:PutBucketPublicAccessBlock</code>,
-                <code>s3:PutObject</code>.
+                <code>s3:PutObject</code>, <code>s3:ListBucket</code>,
+                <code>s3:DeleteObject</code>, <code>s3:DeleteBucket</code>
+                (letzte drei nur für die Löschen-Buttons).
                 Object-ACLs werden nicht mehr genutzt — Public-Read läuft über die
                 Bucket-Policy (AWS-Default „Bucket owner enforced" seit 2023).
             </div>
