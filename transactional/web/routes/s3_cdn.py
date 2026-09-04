@@ -554,6 +554,62 @@ async def delete_bucket(request: Request, aid: int,
     )
 
 
+@router.post("/s3-logos/accounts/{aid}/delete-all-buckets", response_class=HTMLResponse)
+async def delete_all_buckets(request: Request, aid: int):
+    """Nuke: alle konfigurierten Buckets dieses Accounts leeren + droppen.
+    Läuft im Background-Thread (kann bei 30 Buckets × hunderten Objekten
+    ein paar Minuten dauern). Status via /s3-logos/progress."""
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    prog = _prog(uid)
+    if prog["running"]:
+        return HTMLResponse('<div class="alert alert-warning">Anderer Batch läuft noch — abwarten.</div>')
+    row = db.get_s3_account(aid)
+    if not row:
+        return HTMLResponse('<div class="alert alert-danger">Account nicht gefunden.</div>')
+    row = dict(row)
+    if row.get("user_id", 0) not in (uid, 0):
+        return HTMLResponse('<div class="alert alert-danger">Kein Zugriff auf diesen Account.</div>')
+    from mailer.s3_uploader import parse_buckets_field, s3_empty_and_delete_bucket
+    buckets = parse_buckets_field(row.get("buckets", ""))
+    if not buckets:
+        return HTMLResponse('<div class="alert alert-info">Keine Buckets — nichts zu tun.</div>')
+    proxy = _proxy_for_account(db, row)
+    prog.update(running=True, done=0, total=len(buckets), ok=0, errors=0,
+                log=[], upload_id=0)
+
+    def worker():
+        try:
+            kept = []
+            for b, r in buckets:
+                try:
+                    res = s3_empty_and_delete_bucket(
+                        row["access_key"], row["secret_key"], r, b,
+                        proxy=proxy, timeout=120)
+                    if res.get("ok"):
+                        prog["ok"] += 1
+                        note = f" ({res.get('note')})" if res.get("note") else ""
+                        prog["log"].append(f"✓ {b} ({r}) — {res.get('deleted', 0)} Objekte{note}")
+                    else:
+                        kept.append(f"{b}:{r}")
+                        prog["errors"] += 1
+                        prog["log"].append(f"✗ {b} ({r}): {res.get('error', '')[:150]}")
+                except Exception as e:
+                    kept.append(f"{b}:{r}")
+                    prog["errors"] += 1
+                    prog["log"].append(f"✗ {b} ({r}): {str(e)[:150]}")
+                prog["done"] += 1
+            db.update_s3_account_buckets(aid, "\n".join(sorted(set(kept))), uid)
+        finally:
+            prog["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    return HTMLResponse(
+        f'<div class="alert alert-warning">Lösche {len(buckets)} Bucket(s) — kann ein paar Minuten dauern…</div>'
+        f'<div hx-get="/s3-logos/progress" hx-trigger="every 1s" hx-swap="outerHTML"></div>'
+    )
+
+
 @router.post("/s3-logos/accounts/{aid}/delete-empty-buckets", response_class=HTMLResponse)
 async def delete_empty_buckets(request: Request, aid: int):
     """Bulk-Cleanup: alle Buckets des Accounts durchgehen, wenn leer →

@@ -38,31 +38,41 @@
         </span>
     </div>
 
-    <h4 style="font-size:13px;margin:0 0 6px">Buckets für Logo-Uploads</h4>
     {% if a.buckets %}
-    <table style="font-size:11px;font-family:monospace;margin-bottom:8px;width:auto">
-        <tbody>
-        {% for b in (a.buckets or '').replace(',','\n').split('\n') if b.strip() %}
-        {% set parts = b.strip().split(':') %}
-        {% set bname = parts[0] %}
-        {% set breg = parts[1] if parts|length > 1 else 'us-east-1' %}
-        <tr>
-            <td style="padding:2px 8px 2px 0;color:var(--fg2)">{{ bname }}<span style="color:var(--fg3)">:{{ breg }}</span></td>
-            <td style="padding:2px 0">
-                <form hx-post="/s3-logos/accounts/{{ a.id }}/delete-bucket"
-                      hx-target="#s3-del-{{ a.id }}" hx-swap="innerHTML"
-                      hx-confirm="Bucket {{ bname }} ({{ breg }}) LEEREN + LÖSCHEN? Alle Logo-Varianten darin sind danach weg."
-                      style="display:inline;margin:0">
-                    <input type="hidden" name="bucket" value="{{ bname }}">
-                    <input type="hidden" name="region" value="{{ breg }}">
-                    <button class="btn btn-danger btn-xs" title="Bucket leeren + löschen">&#10005;</button>
-                </form>
-            </td>
-        </tr>
-        {% endfor %}
-        </tbody>
-    </table>
-    <div style="margin-bottom:12px">
+    {% set bucket_lines = [] %}
+    {% for b in (a.buckets or '').replace(',','\n').split('\n') if b.strip() %}
+        {% set _ = bucket_lines.append(b.strip()) %}
+    {% endfor %}
+    <details style="margin-bottom:8px">
+        <summary style="cursor:pointer;font-weight:600;font-size:13px">
+            Buckets für Logo-Uploads
+            <span class="badge badge-info" style="margin-left:6px">{{ bucket_lines|length }}</span>
+            <span style="color:var(--fg3);font-size:11px;font-weight:400;margin-left:4px">— aufklappen</span>
+        </summary>
+        <table style="font-size:11px;font-family:monospace;margin:8px 0;width:auto">
+            <tbody>
+            {% for line in bucket_lines %}
+            {% set parts = line.split(':') %}
+            {% set bname = parts[0] %}
+            {% set breg = parts[1] if parts|length > 1 else 'us-east-1' %}
+            <tr>
+                <td style="padding:2px 8px 2px 0;color:var(--fg2)">{{ bname }}<span style="color:var(--fg3)">:{{ breg }}</span></td>
+                <td style="padding:2px 0">
+                    <form hx-post="/s3-logos/accounts/{{ a.id }}/delete-bucket"
+                          hx-target="#s3-del-{{ a.id }}" hx-swap="innerHTML"
+                          hx-confirm="Bucket {{ bname }} ({{ breg }}) LEEREN + LÖSCHEN? Alle Logo-Varianten darin sind danach weg."
+                          style="display:inline;margin:0">
+                        <input type="hidden" name="bucket" value="{{ bname }}">
+                        <input type="hidden" name="region" value="{{ breg }}">
+                        <button class="btn btn-danger btn-xs" title="Bucket leeren + löschen">&#10005;</button>
+                    </form>
+                </td>
+            </tr>
+            {% endfor %}
+            </tbody>
+        </table>
+    </details>
+    <div style="margin-bottom:12px;display:flex;flex-wrap:wrap;gap:4px">
         <button class="btn btn-secondary btn-xs" hx-post="/s3-logos/accounts/{{ a.id }}/test-buckets"
                 hx-target="#s3-test-{{ a.id }}" hx-swap="innerHTML">Test alle Buckets</button>
         <button class="btn btn-secondary btn-xs"
@@ -71,10 +81,17 @@
                 hx-confirm="Alle leeren Buckets dieses Accounts löschen? (Buckets mit Objekten werden behalten.)">
             Leere Buckets aufräumen
         </button>
-        <div id="s3-test-{{ a.id }}" style="margin-top:4px"></div>
-        <div id="s3-del-{{ a.id }}"></div>
+        <button class="btn btn-danger btn-xs"
+                hx-post="/s3-logos/accounts/{{ a.id }}/delete-all-buckets"
+                hx-target="#s3-del-{{ a.id }}" hx-swap="innerHTML"
+                hx-confirm="ALLE {{ bucket_lines|length }} Buckets dieses Accounts leeren + löschen? Alle Logo-Varianten sind danach weg.">
+            &#10005; Alle Buckets löschen
+        </button>
+        <div id="s3-test-{{ a.id }}" style="margin-top:4px;width:100%"></div>
+        <div id="s3-del-{{ a.id }}" style="width:100%"></div>
     </div>
     {% else %}
+    <h4 style="font-size:13px;margin:0 0 6px">Buckets für Logo-Uploads</h4>
     <div class="alert alert-warning" style="font-size:12px;padding:6px 10px;margin-bottom:8px">
         Noch keine Buckets für Logo-Uploads. Leg einen an ↓
     </div>
