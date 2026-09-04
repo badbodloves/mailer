@@ -83,11 +83,34 @@ def _proxy_for_account(db, acc: dict) -> str:
     return val.splitlines()[0].strip() if val else ""
 
 
+DEFAULT_REGIONS = [
+    "eu-central-1", "eu-west-1", "eu-west-2", "eu-west-3", "eu-north-1",
+    "us-east-1", "us-east-2", "us-west-1", "us-west-2",
+    "ap-southeast-1", "ap-northeast-1",
+]
+
+
+def _random_bucket_name(prefix: str = "mailer-cdn") -> str:
+    """AWS-konformer Bucket-Name — nur a-z 0-9 -, 3-63 chars,
+    startet/endet mit alphanum. Random-Token gibt Uniqueness."""
+    import secrets as _sec
+    prefix = "".join(c for c in prefix.lower()
+                       if c.isalnum() or c == "-").strip("-")[:20] or "cdn"
+    token = _sec.token_hex(6)  # 12 chars
+    stamp = str(int(time.time()))[-6:]
+    return f"{prefix}-{token}-{stamp}"
+
+
 @router.get("/s3-logos", response_class=HTMLResponse)
 async def s3_page(request: Request):
     db = request.app.state.db
     uid = request.state.user["id"]
     accounts = [dict(a) for a in db.get_s3_accounts(uid)]
+    source_logos = [dict(l) for l in db.get_logos(uid)]
+    logo_groups = [dict(g) for g in db.get_logo_groups(uid)]
+    # Für jede Gruppe die enthaltenen Logos zählen
+    for g in logo_groups:
+        g["logo_count"] = len([l for l in source_logos if l.get("group_id") == g["id"]])
     uploads = []
     for u in db.get_s3_uploads(uid):
         ud = dict(u)
@@ -96,6 +119,9 @@ async def s3_page(request: Request):
     return request.app.state.templates.TemplateResponse(request, "s3_cdn.html", {
         "active": "s3_logos",
         "accounts": accounts,
+        "source_logos": source_logos,
+        "logo_groups": logo_groups,
+        "regions": DEFAULT_REGIONS,
         "uploads": uploads,
         "pool_size": len(db.get_all_cdn_urls(uid)),
     })
@@ -294,6 +320,152 @@ async def progress(request: Request):
         p["log"] = []
         return result
     return HTMLResponse('')
+
+
+@router.post("/s3-logos/auto-batch", response_class=HTMLResponse)
+async def auto_batch(request: Request,
+                       account_id: int = Form(0),
+                       bucket_count: int = Form(3),
+                       regions_csv: str = Form(""),
+                       source_mode: str = Form("group"),
+                       group_id: int = Form(0),
+                       logo_ids: str = Form(""),
+                       variants_per_logo: int = Form(50),
+                       bucket_prefix: str = Form("mailer-cdn"),
+                       pixel_tweak: str = Form("1")):
+    """Full-Auto-Batch:
+      1) N random Buckets in ausgewählten Regionen anlegen + konfigurieren
+      2) Buckets an Account.buckets anhängen
+      3) Für jedes Source-Logo Y Varianten hochladen, verteilt auf alle
+         neuen Buckets
+    Ein Klick, alles fertig. Progress-Anzeige."""
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    prog = _prog(uid)
+    if prog["running"]:
+        return HTMLResponse('<div class="alert alert-warning">Anderer Batch läuft noch — abwarten.</div>')
+    acc = db.get_s3_account(account_id)
+    if not acc:
+        return HTMLResponse('<div class="alert alert-danger">S3-Account nicht gefunden.</div>')
+    acc = dict(acc)
+
+    # Regionen parsen
+    picked_regions = [r.strip() for r in regions_csv.split(",") if r.strip()]
+    if not picked_regions:
+        picked_regions = DEFAULT_REGIONS[:5]
+    bucket_count = max(1, min(int(bucket_count or 1), 30))
+    variants_per_logo = max(1, min(int(variants_per_logo or 1), 500))
+    tweak = bool(int(pixel_tweak or 0))
+
+    # Source-Logos einsammeln
+    source_paths = []
+    if source_mode == "group" and group_id:
+        for l in db.get_logos_by_group(group_id):
+            ld = dict(l)
+            p = _resolve_logo_path(ld.get("file_path", ""))
+            if p and os.path.isfile(p):
+                source_paths.append((ld.get("filename") or os.path.basename(p), p))
+    elif source_mode == "logos" and logo_ids.strip():
+        wanted = {int(x) for x in logo_ids.split(",") if x.strip().isdigit()}
+        for l in db.get_logos(uid):
+            ld = dict(l)
+            if ld["id"] in wanted:
+                p = _resolve_logo_path(ld.get("file_path", ""))
+                if p and os.path.isfile(p):
+                    source_paths.append((ld.get("filename") or os.path.basename(p), p))
+    elif source_mode == "all":
+        for l in db.get_logos(uid):
+            ld = dict(l)
+            p = _resolve_logo_path(ld.get("file_path", ""))
+            if p and os.path.isfile(p):
+                source_paths.append((ld.get("filename") or os.path.basename(p), p))
+    if not source_paths:
+        return HTMLResponse('<div class="alert alert-warning">Keine Source-Logos gefunden — lade welche in <a href="/logos" style="color:var(--accent)">/logos</a> hoch.</div>')
+
+    total_uploads = bucket_count + len(source_paths) * variants_per_logo
+    prog.update(running=True, done=0, total=total_uploads, ok=0, errors=0,
+                log=[], upload_id=0)
+
+    from mailer.s3_uploader import (s3_setup_bucket, s3_upload_object,
+                                      parse_buckets_field)
+    proxy = _proxy_for_account(db, acc)
+
+    def worker():
+        try:
+            # 1) Buckets erzeugen — random name + round-robin region
+            new_buckets = []   # [(bucket, region)]
+            for i in range(bucket_count):
+                region = picked_regions[i % len(picked_regions)]
+                name = _random_bucket_name(bucket_prefix)
+                r = s3_setup_bucket(acc["access_key"], acc["secret_key"],
+                                     region, name, proxy=proxy)
+                prog["done"] += 1
+                if r.get("ok"):
+                    new_buckets.append((name, region))
+                    prog["ok"] += 1
+                    prog["log"].append(f"✓ bucket {name} ({region})")
+                else:
+                    prog["errors"] += 1
+                    prog["log"].append(f"✗ bucket {name}: {r.get('error', '')[:120]}")
+
+            if not new_buckets:
+                prog["log"].append("Keine Buckets konnten angelegt werden — abbruch.")
+                return
+
+            # Buckets in Account-Config eintragen
+            existing = (acc.get("buckets") or "").strip()
+            existing_set = set()
+            for e in existing.replace("\n", ",").split(","):
+                e = e.strip()
+                if e:
+                    existing_set.add(e)
+            for b, r in new_buckets:
+                existing_set.add(f"{b}:{r}")
+            db.update_s3_account_buckets(account_id, "\n".join(sorted(existing_set)), uid)
+
+            # 2) Für jedes Source-Logo Varianten hochladen
+            for src_name, src_path in source_paths:
+                safe_base = "".join(c for c in os.path.splitext(src_name)[0]
+                                      if c.isalnum() or c in "-_") or "logo"
+                ext = os.path.splitext(src_name)[1].lower() or ".png"
+                ctype = mimetypes.guess_type(src_name)[0] or "image/png"
+                upload_id = db.add_s3_upload(account_id, src_name, uid)
+                for i in range(variants_per_logo):
+                    bucket, region = new_buckets[i % len(new_buckets)]
+                    key = f"{safe_base}/{secrets.token_hex(6)}{ext}"
+                    try:
+                        body = _tweaked_bytes(src_path, seed=i) if tweak else open(src_path, "rb").read()
+                        url = s3_upload_object(
+                            acc["access_key"], acc["secret_key"], region,
+                            bucket, key, body, content_type=ctype,
+                            public=True, proxy=proxy, timeout=45)
+                        db.add_s3_link(upload_id, url, bucket, key)
+                        prog["ok"] += 1
+                    except Exception as e:
+                        prog["errors"] += 1
+                        prog["log"].append(f"✗ {src_name}#{i+1}: {str(e)[:150]}")
+                    prog["done"] += 1
+        finally:
+            prog["running"] = False
+
+    threading.Thread(target=worker, daemon=True).start()
+    return HTMLResponse(
+        f'<div class="alert alert-info">'
+        f'Auto-Batch: {bucket_count} Buckets in {len(picked_regions)} Region(s), '
+        f'{len(source_paths)} Source-Logo(s) × {variants_per_logo} Varianten = '
+        f'{total_uploads} Operations…</div>'
+        f'<div hx-get="/s3-logos/progress" hx-trigger="every 1s" hx-swap="outerHTML"></div>'
+    )
+
+
+def _resolve_logo_path(file_path: str) -> str:
+    """Wandelt /static/... in absoluten Filesystem-Pfad."""
+    if not file_path:
+        return ""
+    if file_path.startswith("/static/"):
+        return os.path.abspath(os.path.join(
+            os.path.dirname(__file__), "..", file_path.lstrip("/")))
+    return file_path
 
 
 @router.post("/s3-logos/uploads/{upload_id}/delete")

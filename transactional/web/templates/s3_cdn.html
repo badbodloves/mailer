@@ -102,16 +102,14 @@
 </div>
 {% endfor %}
 
-<div class="card" style="margin-bottom:12px">
-    <h3>Base-Logo hochladen → Varianten verteilen</h3>
+<div class="card" style="margin-bottom:12px;border:2px solid var(--accent)">
+    <h3>&#128640; Auto-Batch (empfohlen)</h3>
     <p class="muted" style="font-size:12px">
-        Ein Base-Logo hochladen, N Varianten (Pixel-Nudge pro Datei für unique Bytes),
-        die werden round-robin auf alle Buckets des Accounts verteilt.
-        Beispiel: 30 Varianten × 3 Buckets = 10 pro Bucket, drei verschiedene Origin-Domains.
-        Nutzt den Proxy des Accounts falls konfiguriert.
+        Ein Klick: X Buckets in random Regionen anlegen → Source-Logos aus <a href="/logos" style="color:var(--accent)">/logos</a>
+        wählen → Y Varianten pro Logo werden verteilt auf alle neuen Buckets hochgeladen.
+        Kein manueller Bucket-Name, keine Kollisions-Probleme, kein Nachdenken.
     </p>
-    <form method="post" action="/s3-logos/upload" enctype="multipart/form-data"
-          hx-post="/s3-logos/upload" hx-target="#s3-upload-result" hx-swap="innerHTML" hx-encoding="multipart/form-data">
+    <form hx-post="/s3-logos/auto-batch" hx-target="#s3-batch-result" hx-swap="innerHTML">
         <div class="grid-2">
             <div>
                 <label>AWS-Account</label>
@@ -120,24 +118,123 @@
                     <option value="{{ a.id }}">{{ a.name }}</option>
                     {% endfor %}
                 </select>
-                <label>Base-Name (nur alphanum + -_)</label>
-                <input name="base_name" placeholder="logo" value="logo">
+
+                <label>Anzahl neuer Buckets</label>
+                <input name="bucket_count" type="number" value="3" min="1" max="30">
+                <div class="form-help">Buckets bekommen random Namen (<code>mailer-cdn-{hex}-{stamp}</code>).</div>
+
+                <label>Regionen (Multi-Select — pro Bucket round-robin)</label>
+                <div style="display:flex;flex-wrap:wrap;gap:6px;padding:6px 0" id="s3-regions-{{ accounts[0].id if accounts else 0 }}">
+                    {% for r in regions %}
+                    <label style="display:flex;gap:4px;align-items:center;font-weight:400;cursor:pointer;font-size:12px">
+                        <input type="checkbox" name="_region_{{ r }}" value="1" style="width:auto"
+                               {{ 'checked' if r in ['eu-central-1','us-east-1','eu-west-1'] }}
+                               onchange="var f=this.form;f.regions_csv.value=Array.from(f.querySelectorAll('input[name^=_region_]:checked')).map(x=>x.name.replace('_region_','')).join(',')">
+                        <span>{{ r }}</span>
+                    </label>
+                    {% endfor %}
+                </div>
+                <input type="hidden" name="regions_csv" value="eu-central-1,us-east-1,eu-west-1">
+
+                <label>Bucket-Prefix (nur intern zum Wiedererkennen)</label>
+                <input name="bucket_prefix" value="mailer-cdn" pattern="[a-z0-9\-]+">
             </div>
             <div>
-                <label>Base-Logo (PNG/JPG/WebP)</label>
-                <input type="file" name="file" accept="image/*" required>
-                <label>Anzahl Varianten (1-500)</label>
-                <input type="number" name="count" value="30" min="1" max="500">
-                <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;margin-top:6px">
+                <label>Source-Logo(s) — aus <a href="/logos" style="color:var(--accent)">/logos</a></label>
+                <div style="display:flex;gap:12px;margin:4px 0 8px;font-size:12px">
+                    <label style="display:flex;gap:4px;align-items:center;font-weight:400;cursor:pointer">
+                        <input type="radio" name="source_mode" value="group" checked style="width:auto"
+                               onchange="document.getElementById('src-group').style.display='block';document.getElementById('src-logos').style.display='none'">
+                        <span>Logo-Gruppe</span>
+                    </label>
+                    <label style="display:flex;gap:4px;align-items:center;font-weight:400;cursor:pointer">
+                        <input type="radio" name="source_mode" value="logos" style="width:auto"
+                               onchange="document.getElementById('src-group').style.display='none';document.getElementById('src-logos').style.display='block'">
+                        <span>Einzelne Logos</span>
+                    </label>
+                    <label style="display:flex;gap:4px;align-items:center;font-weight:400;cursor:pointer">
+                        <input type="radio" name="source_mode" value="all" style="width:auto"
+                               onchange="document.getElementById('src-group').style.display='none';document.getElementById('src-logos').style.display='none'">
+                        <span>Alle ({{ source_logos|length }})</span>
+                    </label>
+                </div>
+
+                <div id="src-group">
+                    <select name="group_id">
+                        <option value="0">— keine Gruppe —</option>
+                        {% for g in logo_groups %}
+                        <option value="{{ g.id }}">{{ g.name }} ({{ g.logo_count }} Logo(s))</option>
+                        {% endfor %}
+                    </select>
+                    {% if not logo_groups %}
+                    <div class="form-help">Keine Gruppen — leg eine in <a href="/logos" style="color:var(--accent)">/logos</a> an oder nutze „Einzelne Logos".</div>
+                    {% endif %}
+                </div>
+
+                <div id="src-logos" style="display:none">
+                    <select multiple name="_logo_multi" size="6"
+                            onchange="this.form.logo_ids.value=Array.from(this.selectedOptions).map(o=>o.value).join(',')">
+                        {% for l in source_logos %}
+                        <option value="{{ l.id }}">{{ l.filename }}</option>
+                        {% endfor %}
+                    </select>
+                    <input type="hidden" name="logo_ids" value="">
+                    <div class="form-help">Ctrl/Cmd+Click für Multi-Select.</div>
+                </div>
+
+                <label>Varianten pro Source-Logo</label>
+                <input name="variants_per_logo" type="number" value="50" min="1" max="500">
+                <div class="form-help">3 Logos × 50 Varianten = 150 Uploads, verteilt auf alle neuen Buckets.</div>
+
+                <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;margin-top:8px">
                     <input type="checkbox" name="pixel_tweak" value="1" checked style="width:auto">
-                    <span>Pixel-Nudge (Bytes unique)</span>
+                    <span>Pixel-Nudge (Bytes-unique pro Variante)</span>
                 </label>
             </div>
         </div>
-        <div style="margin-top:12px"><button class="btn btn-primary btn-sm">Upload + Generate</button></div>
+        <div style="margin-top:14px">
+            <button class="btn btn-primary btn-sm">Auto-Batch starten</button>
+        </div>
     </form>
-    <div id="s3-upload-result" style="margin-top:12px"></div>
+    <div id="s3-batch-result" style="margin-top:12px"></div>
 </div>
+
+<details style="margin-bottom:12px">
+    <summary style="cursor:pointer;font-weight:600">Manueller Upload (fine-grained)</summary>
+    <div class="card" style="margin-top:8px">
+        <h3>Ein Base-Logo → Varianten auf existierende Buckets</h3>
+        <p class="muted" style="font-size:12px">
+            Wenn du schon Buckets im Account hast und nur ein Logo hochladen willst.
+        </p>
+        <form method="post" action="/s3-logos/upload" enctype="multipart/form-data"
+              hx-post="/s3-logos/upload" hx-target="#s3-upload-result" hx-swap="innerHTML" hx-encoding="multipart/form-data">
+            <div class="grid-2">
+                <div>
+                    <label>AWS-Account</label>
+                    <select name="account_id" required>
+                        {% for a in accounts %}
+                        <option value="{{ a.id }}">{{ a.name }}</option>
+                        {% endfor %}
+                    </select>
+                    <label>Base-Name</label>
+                    <input name="base_name" placeholder="logo" value="logo">
+                </div>
+                <div>
+                    <label>Base-Logo (PNG/JPG/WebP)</label>
+                    <input type="file" name="file" accept="image/*" required>
+                    <label>Anzahl Varianten (1-500)</label>
+                    <input type="number" name="count" value="30" min="1" max="500">
+                    <label style="display:flex;align-items:center;gap:6px;font-weight:400;cursor:pointer;margin-top:6px">
+                        <input type="checkbox" name="pixel_tweak" value="1" checked style="width:auto">
+                        <span>Pixel-Nudge</span>
+                    </label>
+                </div>
+            </div>
+            <div style="margin-top:12px"><button class="btn btn-primary btn-sm">Upload + Generate</button></div>
+        </form>
+        <div id="s3-upload-result" style="margin-top:12px"></div>
+    </div>
+</details>
 
 {% if uploads %}
 <div class="card">
