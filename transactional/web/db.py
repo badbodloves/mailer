@@ -337,6 +337,13 @@ class TransDB:
             ("trans_campaigns", "rotate_from_name_pools", "''"), # dito für From-Name
             ("trans_campaigns", "rotate_image_modes", "''"),     # CSV: cid,cloudinary,url,static_url,text
             ("trans_campaigns", "rotate_link_ref_styles", "''"), # CSV: none,base64,random,email,utm
+            # Auto-Refresh: alle N Sends neue Logo-Varianten parallel
+            # zu CID + Cloudinary + S3 hochladen. Health-Tracker adjustiert
+            # dann automatisch die Weights der Meta-Rotation.
+            ("trans_campaigns", "auto_refresh_enabled", "0"),
+            ("trans_campaigns", "auto_refresh_every", "100000"),
+            ("trans_campaigns", "auto_refresh_variants", "1000"),
+            ("trans_campaigns", "auto_refresh_cid_weight", "3.0"),
             ("trans_templates", "logo_group_id", "0"),
             ("trans_logos", "group_id", "0"),
             ("trans_logos", "cdn_url", "''"),

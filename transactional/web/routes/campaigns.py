@@ -211,7 +211,11 @@ async def save_campaign(request: Request, cid: int,
                         rotate_subject_pools: str = Form(""),
                         rotate_from_name_pools: str = Form(""),
                         rotate_image_modes: str = Form(""),
-                        rotate_link_ref_styles: str = Form("")):
+                        rotate_link_ref_styles: str = Form(""),
+                        auto_refresh_enabled: int = Form(0),
+                        auto_refresh_every: int = Form(100000),
+                        auto_refresh_variants: int = Form(1000),
+                        auto_refresh_cid_weight: float = Form(3.0)):
     db = request.app.state.db
     updates = {"name": name.strip(), "schedule_time": schedule_time.strip(),
                "template_id": template_id, "redirect_pool_id": redirect_pool_id,
@@ -224,7 +228,11 @@ async def save_campaign(request: Request, cid: int,
                "rotate_subject_pools": rotate_subject_pools,
                "rotate_from_name_pools": rotate_from_name_pools,
                "rotate_image_modes": rotate_image_modes.strip(),
-               "rotate_link_ref_styles": rotate_link_ref_styles.strip()}
+               "rotate_link_ref_styles": rotate_link_ref_styles.strip(),
+               "auto_refresh_enabled": 1 if auto_refresh_enabled else 0,
+               "auto_refresh_every": max(0, int(auto_refresh_every or 0)),
+               "auto_refresh_variants": max(1, int(auto_refresh_variants or 1)),
+               "auto_refresh_cid_weight": max(0.0, float(auto_refresh_cid_weight or 0))}
     if smtp_list_id:
         updates["smtp_list_id"] = smtp_list_id
     if lead_list_id:
@@ -983,6 +991,26 @@ def _run_campaign(db, cid: int):
         if _link_ref_styles_rot:
             logger.info("Campaign %d: link-ref-style-rotation ON — %s", cid, _link_ref_styles_rot)
 
+        # Auto-Refresh Controller — regeneriert Assets parallel während
+        # der Send-Loop läuft. Health-Tracker bestimmt weighted Mode-Choice.
+        auto_refresh_ctrl = None
+        if camp.get("auto_refresh_enabled"):
+            try:
+                from mailer.auto_refresh import AutoRefreshController
+                auto_refresh_ctrl = AutoRefreshController(
+                    refresh_every=int(camp.get("auto_refresh_every", 100000) or 100000),
+                    variants_per_refresh=int(camp.get("auto_refresh_variants", 1000) or 1000),
+                    cid_base_weight=float(camp.get("auto_refresh_cid_weight", 3.0) or 3.0),
+                )
+                logger.info(
+                    "Campaign %d: auto-refresh ON — every %d sends, "
+                    "%d variants, cid_weight=%.1f",
+                    cid, auto_refresh_ctrl.refresh_every,
+                    auto_refresh_ctrl.variants_per_refresh,
+                    auto_refresh_ctrl.cid_base_weight)
+            except Exception as e:
+                logger.warning("Campaign %d: auto-refresh init failed: %s", cid, e)
+
         macros = {}
         sticky_macros = set()   # Namen der Macros die pro Mail nur EINMAL gewürfelt werden
         for m in db.get_active_macros(uid):
@@ -1414,6 +1442,123 @@ def _run_campaign(db, cid: int):
         mail_queue = queue.Queue()
         image_mode = cfg.get("image_mode", "cid")
 
+        def _trigger_auto_refresh():
+            """Feuert einen Refresh in einem Background-Thread ab.
+            Ergebnis wird in auto_refresh_ctrl.last_refresh_report gespeichert
+            und logo_cdn_urls / logo_variants werden erweitert."""
+            if not auto_refresh_ctrl:
+                return
+
+            def _run():
+                try:
+                    # Source-Logos: aus /logos aller Groups
+                    sources = []
+                    try:
+                        for l in db.get_logos(uid):
+                            ld = dict(l)
+                            p = ld.get("file_path", "")
+                            if p.startswith("/static/"):
+                                p = os.path.abspath(os.path.join(
+                                    os.path.dirname(__file__), "..", p.lstrip("/")))
+                            if p and os.path.isfile(p):
+                                sources.append((ld.get("filename") or "logo.png", p))
+                    except Exception as e:
+                        logger.warning("auto-refresh: source-logo load: %s", e)
+                    if not sources:
+                        logger.warning("Campaign %d: auto-refresh skipped — no sources", campaign_id)
+                        auto_refresh_ctrl.refresh_running = False
+                        return
+
+                    # Cloudinary-Config aus /config
+                    cloud_cfg = None
+                    if cfg.get("cloudinary_cloud_name") and cfg.get("cloudinary_api_key"):
+                        cloud_cfg = {
+                            "cloud_name":  cfg.get("cloudinary_cloud_name", ""),
+                            "api_key":     cfg.get("cloudinary_api_key", ""),
+                            "api_secret":  cfg.get("cloudinary_api_secret", ""),
+                            "folder":      cfg.get("cloudinary_folder", ""),
+                        }
+
+                    # S3-Accounts + Proxy (nimmt Proxy vom ersten Account)
+                    s3_accs = []
+                    s3_proxy = ""
+                    try:
+                        for a in db.get_s3_accounts(uid):
+                            ad = dict(a)
+                            if ad.get("buckets"):
+                                s3_accs.append(ad)
+                        if s3_accs and s3_accs[0].get("proxy_id"):
+                            _pr = db.get_proxy(s3_accs[0]["proxy_id"])
+                            if _pr:
+                                s3_proxy = (dict(_pr).get("value") or "").splitlines()[0].strip()
+                    except Exception:
+                        pass
+
+                    # Callback für neue URLs → in DB persistieren damit sie
+                    # sofort im logo_cdn_urls-Pool landen (bei nächster Iteration)
+                    def _on_cdn_url(url, bucket=None, key=None, account_id=None):
+                        try:
+                            if bucket is not None:
+                                # S3
+                                upload_id = db.add_s3_upload(account_id or 0,
+                                                              "auto-refresh", uid)
+                                db.add_s3_link(upload_id, url, bucket, key or "")
+                            # Live in den Pool zu adden ist dank Live-Query in
+                            # db.get_all_cdn_urls automatisch. logo_cdn_urls
+                            # in campaigns.py ist ein snapshot — wir extenden
+                            # ihn direkt damit's ohne kompletten reload wirkt.
+                            logo_cdn_urls.append(url)
+                        except Exception as e:
+                            logger.debug("auto-refresh persist fail: %s", e)
+
+                    # Bytes-Tweak reused
+                    def _tweak(src, seed):
+                        try:
+                            from mailer.image_jitter import jitter_image_bytes
+                            with open(src, "rb") as fh:
+                                data = fh.read()
+                            out, _ = jitter_image_bytes(data, "image/png")
+                            return out or data
+                        except Exception:
+                            with open(src, "rb") as fh:
+                                return fh.read()
+
+                    variant_dir = ""
+                    if logo_group_id:
+                        try:
+                            from .logos import _group_variant_dir as _gv
+                            variant_dir = _gv(logo_group_id)
+                        except Exception:
+                            pass
+
+                    logger.info("Campaign %d: auto-refresh starting — %d sources, "
+                                 "cid=%s cloudinary=%s s3=%d accounts",
+                                 campaign_id, len(sources),
+                                 bool(variant_dir), bool(cloud_cfg), len(s3_accs))
+                    auto_refresh_ctrl.run_refresh(
+                        source_logo_paths=sources,
+                        variant_dir=variant_dir,
+                        cloudinary_config=cloud_cfg,
+                        s3_accounts=s3_accs,
+                        s3_proxy=s3_proxy,
+                        on_cdn_url_added=_on_cdn_url,
+                        tweak_bytes_fn=_tweak,
+                    )
+                    # Nach dem Refresh: logo_variants aus dem variant_dir
+                    # neu einlesen damit CID die neuen files nutzt
+                    if variant_dir:
+                        import glob as _glob
+                        new_vars = sorted(_glob.glob(os.path.join(variant_dir, "*")))
+                        if new_vars:
+                            logo_variants.clear()
+                            logo_variants.extend(new_vars)
+                except Exception as e:
+                    logger.error("Campaign %d: auto-refresh crashed: %s",
+                                  campaign_id, e, exc_info=True)
+                    auto_refresh_ctrl.refresh_running = False
+
+            threading.Thread(target=_run, daemon=True).start()
+
         def _build_and_send(server_obj, account, lead_id, email):
             """Build email and send over existing connection. Returns True on success."""
             nonlocal sent, failed, suppressed
@@ -1464,8 +1609,13 @@ def _run_campaign(db, cid: int):
                 html = _process(html, email, sticky_cache)
 
                 # === Meta-Rotation: image-mode + link-ref-style ===
-                cur_image_mode = (random.choice(_image_modes_rot)
-                                   if _image_modes_rot else image_mode)
+                if _image_modes_rot:
+                    if auto_refresh_ctrl:
+                        cur_image_mode = auto_refresh_ctrl.choose_mode(_image_modes_rot)
+                    else:
+                        cur_image_mode = random.choice(_image_modes_rot)
+                else:
+                    cur_image_mode = image_mode
                 cur_ref_style = (random.choice(_link_ref_styles_rot)
                                   if _link_ref_styles_rot
                                   else ("base64" if cfg.get("redirect_append_ref") else "none"))
@@ -1619,6 +1769,22 @@ def _run_campaign(db, cid: int):
                 if (sent + failed) % 5 == 0:
                     db.update_campaign(campaign_id, sent=sent, failed=failed)
             pool.record_success(account)
+
+            # Track success für image-mode-health (nach dem eigentlichen
+            # Send — heißt der ganze Build inkl. Logo-Fetch/Attach hat
+            # geklappt).
+            if auto_refresh_ctrl:
+                try:
+                    if cur_image_mode in ("cloudinary", "cdn"):
+                        auto_refresh_ctrl.health_cloudinary.record(True)
+                        auto_refresh_ctrl.health_s3.record(True)
+                    elif cur_image_mode == "cid":
+                        auto_refresh_ctrl.health_cid.record(True)
+                    # Refresh triggern falls Zähler voll
+                    if auto_refresh_ctrl.report_send():
+                        _trigger_auto_refresh()
+                except Exception as _rerr:
+                    logger.debug("auto-refresh hook glitch: %s", _rerr)
 
             delay = worker.get_delay(email)
             if delay > 0:

@@ -105,6 +105,60 @@
                               style="font-family:monospace;font-size:12px"
                               placeholder="Alexander {Nachname}&#10;A. {Nachname}&#10;&#10;{Vorname} {Nachname}&#10;{Vorname} von {Company}">{{ c.get('rotate_from_name_pools') or '' }}</textarea>
 
+                    <details {{ 'open' if c.get('auto_refresh_enabled') }} style="margin-top:14px;padding:10px 12px;border:1px solid var(--accent);border-radius:var(--radius)">
+                        <summary style="cursor:pointer;font-weight:600;font-size:13px">
+                            &#128260; Auto-Refresh + Health-Adaptive Weights
+                            {% if c.get('auto_refresh_enabled') %}<span class="badge badge-running" style="margin-left:6px">ON</span>{% endif %}
+                        </summary>
+                        <div style="padding:10px 0 4px 0;font-size:12px;color:var(--fg2);margin-bottom:8px">
+                            Alle N Sends werden im Hintergrund neue Varianten
+                            generiert und parallel zu Cloudinary + AWS-Buckets
+                            hochgeladen + neue CID-Files geschrieben. Failt eine Quelle
+                            (z.B. Cloudinary down), wird deren Anteil in der
+                            Meta-Rotation automatisch runtergedreht. Wenn alle Cloud-
+                            Uploads scheitern → CID-only. Wenn CID auch dead →
+                            alte Variants (letzter Fallback).
+                        </div>
+                        <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-bottom:8px">
+                            <input type="checkbox" name="auto_refresh_enabled" value="1" style="width:auto"
+                                   {{ 'checked' if c.get('auto_refresh_enabled') }}>
+                            <span>Auto-Refresh aktivieren</span>
+                        </label>
+                        <div class="grid-2">
+                            <div>
+                                <label>Refresh alle N Sends</label>
+                                <input name="auto_refresh_every" type="number" min="1000" step="1000"
+                                       value="{{ c.get('auto_refresh_every') or 100000 }}">
+                                <div class="form-help">Standard: 100.000. Zu niedrig = zu viel AWS/Cloudinary Upload-Traffic.</div>
+                            </div>
+                            <div>
+                                <label>Neue Varianten pro Refresh</label>
+                                <input name="auto_refresh_variants" type="number" min="10" step="10"
+                                       value="{{ c.get('auto_refresh_variants') or 1000 }}">
+                                <div class="form-help">Standard: 1000. Wird gleichmäßig auf CID + Cloudinary + alle S3-Buckets verteilt.</div>
+                            </div>
+                            <div>
+                                <label>CID-Bevorzugung (Base-Weight)</label>
+                                <input name="auto_refresh_cid_weight" type="number" step="0.5" min="0.5" max="10"
+                                       value="{{ c.get('auto_refresh_cid_weight') or 3.0 }}">
+                                <div class="form-help">
+                                    Weight-Multiplikator. 1.0 = CID/CDN gleich wahrscheinlich.
+                                    3.0 = CID 3× so oft wie CDN (Default, weil CID am robustesten).
+                                    5.0+ = CDN nur selten.
+                                </div>
+                            </div>
+                            <div>
+                                <label>&nbsp;</label>
+                                <div class="alert" style="font-size:11px;padding:8px;background:var(--bg);border:1px solid var(--border-light);border-radius:var(--radius);color:var(--fg2)">
+                                    <strong>Wie's zusammenspielt:</strong><br>
+                                    Meta-Rotation → welche Modi überhaupt gewürfelt werden.<br>
+                                    Auto-Refresh → hält Assets frisch + baut Weights.<br>
+                                    Kaskaden-Fallback → wenn Modus stumm, silent zu CID.
+                                </div>
+                            </div>
+                        </div>
+                    </details>
+
                     <div class="grid-2" style="margin-top:12px">
                         <div>
                             <label>Image-Mode Rotation</label>
