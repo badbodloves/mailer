@@ -1039,31 +1039,40 @@ def _run_campaign(db, cid: int):
                         logo_variants = source_files
                 logger.info("Campaign %d: %d logos (global fallback)", cid, len(logo_variants))
 
-            # Load CDN URLs — vereinheitlicht Cloudinary + S3 in einem
-            # Pool. image_mode="cloudinary" wird als "irgendein CDN"
-            # interpretiert. image_mode="cdn" ist der neue explizite Alias.
-            if cfg.get("image_mode") in ("cloudinary", "cdn"):
-                import json as _json
-                # Legacy: Logo-Group-eigene cloudinary URLs
-                if logo_group_id:
-                    grp = db._conn().execute("SELECT cdn_urls_json FROM trans_logo_groups WHERE id=?",
-                                              (logo_group_id,)).fetchone()
-                    if grp and grp["cdn_urls_json"]:
-                        logo_cdn_urls = _json.loads(grp["cdn_urls_json"])
-                if not logo_cdn_urls:
-                    for g in db.get_logo_groups(uid):
-                        gd = dict(g)
-                        if gd.get("cdn_urls_json"):
-                            logo_cdn_urls.extend(_json.loads(gd["cdn_urls_json"]))
-                # Neu: gemeinsamer Pool aus /cloudinary + /s3-logos Panels
-                try:
-                    pool_urls = db.get_all_cdn_urls(uid)
-                    if pool_urls:
-                        logo_cdn_urls.extend(pool_urls)
-                except Exception as e:
-                    logger.warning("Campaign %d: cdn-pool query failed: %s", cid, e)
-                logger.info("Campaign %d: %d CDN URLs loaded (Cloudinary+S3 combined)",
-                             cid, len(logo_cdn_urls))
+        # CDN-URL-Pool laden — auch wenn image_enabled aus ist und/oder
+        # cfg.image_mode nicht cdn/cloudinary ist. Wichtig: sobald in
+        # Meta-Rotation "cdn" oder "cloudinary" aktiviert ist, muss der
+        # Pool bereit stehen, sonst rollt der Mode ins Leere und {Logo}
+        # wird nicht ersetzt.
+        _cdn_needed = (
+            cfg.get("image_mode") in ("cloudinary", "cdn")
+            or any(m in ("cdn", "cloudinary")
+                    for m in _parse_csv_list(camp.get("rotate_image_modes") or ""))
+        )
+        if _cdn_needed:
+            import json as _json
+            if logo_group_id:
+                grp = db._conn().execute("SELECT cdn_urls_json FROM trans_logo_groups WHERE id=?",
+                                          (logo_group_id,)).fetchone()
+                if grp and grp["cdn_urls_json"]:
+                    logo_cdn_urls = _json.loads(grp["cdn_urls_json"])
+            if not logo_cdn_urls:
+                for g in db.get_logo_groups(uid):
+                    gd = dict(g)
+                    if gd.get("cdn_urls_json"):
+                        logo_cdn_urls.extend(_json.loads(gd["cdn_urls_json"]))
+            try:
+                pool_urls = db.get_all_cdn_urls(uid)
+                if pool_urls:
+                    logo_cdn_urls.extend(pool_urls)
+            except Exception as e:
+                logger.warning("Campaign %d: cdn-pool query failed: %s", cid, e)
+            logger.info("Campaign %d: %d CDN URLs loaded "
+                         "(Cloudinary+S3 combined) — cfg.image_mode=%s, "
+                         "rotate_image_modes=%s",
+                         cid, len(logo_cdn_urls),
+                         cfg.get("image_mode"),
+                         camp.get("rotate_image_modes"))
 
         # Redirect setup
         redirect_links = []
@@ -1469,21 +1478,28 @@ def _run_campaign(db, cid: int):
 
                 inline_images = None
                 if "{Logo}" in html:
-                    if cur_image_mode == "static_url":
+                    # CDN → wenn Pool leer, fällt hart auf CID zurück damit
+                    # {Logo} nie leer bleibt. Gleiches für andere Modi.
+                    _mode = cur_image_mode
+                    if _mode in ("cloudinary", "cdn") and not logo_cdn_urls:
+                        _mode = "cid"
+                    if _mode == "static_url" and not cfg.get("logo_static_url", "").strip():
+                        _mode = "cid"
+                    if _mode == "url" and not (logo_variants and cfg.get("logo_base_url", "").strip()):
+                        _mode = "cid"
+
+                    if _mode == "static_url":
                         static_logo = cfg.get("logo_static_url", "").strip()
-                        if static_logo:
-                            html = html.replace("{Logo}",
-                                f'<img src="{static_logo}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
-                        else:
-                            html = html.replace("{Logo}", "")
-                    elif cur_image_mode == "text":
+                        html = html.replace("{Logo}",
+                            f'<img src="{static_logo}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
+                    elif _mode == "text":
                         logo_text = _process(cfg.get("logo_text", "{Logo}"), email, sticky_cache)
                         html = html.replace("{Logo}",
                             f'<span style="font-weight:bold;font-size:16px;color:{cfg.get("logo_text_color", "#333333")};">{logo_text}</span>')
-                    elif cur_image_mode in ("cloudinary", "cdn") and logo_cdn_urls:
+                    elif _mode in ("cloudinary", "cdn"):
                         html = html.replace("{Logo}",
                             f'<img src="{random.choice(logo_cdn_urls)}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">')
-                    elif cur_image_mode == "url" and logo_variants:
+                    elif _mode == "url" and logo_variants:
                         base = cfg.get("logo_base_url", "").rstrip("/")
                         html = html.replace("{Logo}",
                             f'<img src="{base}/{os.path.basename(random.choice(logo_variants))}" alt="Logo" style="display:block;border:0;max-height:50px;width:auto;">' if base else "")
