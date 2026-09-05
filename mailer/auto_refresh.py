@@ -25,7 +25,9 @@ logger = logging.getLogger("mailer.auto_refresh")
 
 
 class ProviderHealth:
-    """Sliding-Window-Health pro Provider. In-Memory pro Kampagne."""
+    """Sliding-Window-Health pro Provider. In-Memory pro Kampagne.
+    _lock ist RLock damit to_dict() intern self.health lesen darf ohne
+    sich selbst zu deadlocken (non-reentrant Lock hätte hier reingesegnet)."""
     def __init__(self, name: str):
         self.name = name
         self.success = 0
@@ -33,7 +35,7 @@ class ProviderHealth:
         self.consecutive_fails = 0
         self.last_success = 0.0
         self.last_fail = 0.0
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
 
     def record(self, ok: bool):
         with self._lock:

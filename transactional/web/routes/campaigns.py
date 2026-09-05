@@ -27,6 +27,15 @@ _image_mode_stats_lock = threading.Lock()
 def _track_image_mode(campaign_id: int, chosen: str, actual: str,
                        ctrl=None, cdn_pool_size: int = 0,
                        variant_count: int = 0):
+    # Snapshot AUSSERHALB des globalen locks holen — er nimmt selber
+    # mehrere ProviderHealth-Locks und war beim ersten Rollout die
+    # Contention-Quelle die 70+ Worker blockiert hat.
+    snap = None
+    if ctrl is not None:
+        try:
+            snap = ctrl.snapshot()
+        except Exception:
+            snap = None
     with _image_mode_stats_lock:
         d = _image_mode_stats.setdefault(campaign_id, {
             "chosen": {}, "actual": {}, "fallback": 0, "total": 0,
@@ -40,11 +49,8 @@ def _track_image_mode(campaign_id: int, chosen: str, actual: str,
         d["total"] += 1
         d["cdn_pool_size"] = cdn_pool_size
         d["variant_count"] = variant_count
-        if ctrl is not None:
-            try:
-                d["last_ctrl"] = ctrl.snapshot()
-            except Exception:
-                pass
+        if snap is not None:
+            d["last_ctrl"] = snap
 
 
 def _reset_image_stats(campaign_id: int):
