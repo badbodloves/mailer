@@ -175,6 +175,20 @@
                             </div>
                             <input type="hidden" name="rotate_image_modes" id="rot-image-{{ c.id }}" value="{{ c.get('rotate_image_modes') or '' }}">
                             <div class="form-help">Mehrere gewählt = pro Mail random. Leer = /config-Standard.</div>
+                            <details style="margin-top:8px;padding:6px 8px;background:var(--bg2);border-radius:4px">
+                                <summary style="cursor:pointer;font-size:11px;color:var(--fg2);font-weight:600">
+                                    &#128200; Live-Diagnose (welcher Mode wird wie oft gewählt?)
+                                </summary>
+                                <div hx-get="/campaigns/{{ c.id }}/image-stats"
+                                     hx-trigger="load, every 3s" hx-swap="innerHTML"
+                                     style="margin-top:6px;font-size:11px">
+                                    <em style="color:var(--fg3)">Lade Stats…</em>
+                                </div>
+                                <form hx-post="/campaigns/{{ c.id }}/reset-image-stats"
+                                      hx-target="this" hx-swap="afterend" style="display:inline;margin-top:4px">
+                                    <button class="btn btn-secondary btn-xs" style="font-size:10px">Stats reset</button>
+                                </form>
+                            </details>
                         </div>
                         <div>
                             <label>Link-Ref-Style Rotation</label>

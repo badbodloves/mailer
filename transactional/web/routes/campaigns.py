@@ -15,6 +15,43 @@ logger = logging.getLogger("trans.campaigns")
 router = APIRouter()
 
 
+# ── Image-Mode Diagnostics ─────────────────────────────
+# Pro Kampagne wird gezählt welcher Image-Mode wie oft gewählt wurde und
+# wie oft ein gewählter Mode auf CID zurückfallen musste (leerer Pool).
+# Read via /campaigns/{cid}/image-stats — hilft bei Debugging warum
+# "alle mails per URL" oder "kein CDN" trotz Meta-Rotation.
+_image_mode_stats: dict = {}
+_image_mode_stats_lock = threading.Lock()
+
+
+def _track_image_mode(campaign_id: int, chosen: str, actual: str,
+                       ctrl=None, cdn_pool_size: int = 0,
+                       variant_count: int = 0):
+    with _image_mode_stats_lock:
+        d = _image_mode_stats.setdefault(campaign_id, {
+            "chosen": {}, "actual": {}, "fallback": 0, "total": 0,
+            "last_ctrl": None, "cdn_pool_size": 0, "variant_count": 0,
+            "started_at": time.time(),
+        })
+        d["chosen"][chosen] = d["chosen"].get(chosen, 0) + 1
+        d["actual"][actual] = d["actual"].get(actual, 0) + 1
+        if chosen != actual:
+            d["fallback"] += 1
+        d["total"] += 1
+        d["cdn_pool_size"] = cdn_pool_size
+        d["variant_count"] = variant_count
+        if ctrl is not None:
+            try:
+                d["last_ctrl"] = ctrl.snapshot()
+            except Exception:
+                pass
+
+
+def _reset_image_stats(campaign_id: int):
+    with _image_mode_stats_lock:
+        _image_mode_stats.pop(campaign_id, None)
+
+
 def _append_ref(url: str, email: str, style: str = "base64") -> str:
     """Hänge einen Ref-Parameter an einen Redirect-Link.
     style:
@@ -715,6 +752,104 @@ async def campaign_stats(request: Request, cid: int):
         Status: <span class="badge badge-{'running' if running else status.lower()}">{status}</span>
         &nbsp; Elapsed: {elapsed_str} &nbsp; ETA: {eta_str}
     </p>""")
+
+
+@router.get("/campaigns/{cid}/image-stats", response_class=HTMLResponse)
+async def campaign_image_stats(request: Request, cid: int):
+    """Live-Diagnose: welchen Image-Mode wählt diese Kampagne aktuell?
+    Zeigt Counter (chosen vs actual — actual weicht ab wenn Fallback auf
+    CID greift wegen leerem Pool), Health-Scores der Provider, Weights,
+    letzten Refresh-Report, CDN-Pool-Größe, Variant-Count. Poll-Ziel für
+    ein Details-Panel auf der Campaign-Seite."""
+    db = request.app.state.db
+    camp = db.get_campaign(cid)
+    if not camp:
+        return HTMLResponse('<div class="alert alert-warning">Kampagne nicht gefunden.</div>')
+    cd = dict(camp)
+    cfg = db.get_config()
+
+    with _image_mode_stats_lock:
+        stats = _image_mode_stats.get(cid)
+        stats = dict(stats) if stats else None
+        if stats:
+            stats["chosen"] = dict(stats["chosen"])
+            stats["actual"] = dict(stats["actual"])
+
+    rotate_modes = [m for m in _parse_csv_list(cd.get("rotate_image_modes") or "")
+                     if m in ("cid", "cloudinary", "cdn", "url", "static_url", "text")]
+    fallback_mode = cfg.get("image_mode", "cid")
+
+    lines = ['<div style="font-size:12px">']
+    lines.append(f'<div><strong>Config-Fallback</strong> (wenn Meta-Rotation aus): '
+                  f'<code>{escape(fallback_mode)}</code></div>')
+    if rotate_modes:
+        lines.append(f'<div><strong>Meta-Rotation aktiv</strong>: <code>{escape(", ".join(rotate_modes))}</code></div>')
+    else:
+        lines.append('<div style="color:var(--fg2)"><strong>Meta-Rotation:</strong> aus — es wird immer der Config-Fallback benutzt.</div>')
+
+    if not stats or stats["total"] == 0:
+        lines.append('<div style="margin-top:8px;color:var(--fg2)">'
+                      'Noch keine Mails in dieser Kampagne verschickt seit dem letzten Serverstart — '
+                      'sobald Sends passieren, siehst du hier live welcher Mode wie oft gewählt wurde.</div>')
+        lines.append('</div>')
+        return HTMLResponse("".join(lines))
+
+    total = stats["total"]
+    lines.append(f'<div style="margin-top:8px"><strong>Gesamt getrackt</strong>: {total:,} Sends '
+                  f'· <strong>Fallbacks</strong>: {stats["fallback"]:,} '
+                  f'({stats["fallback"] * 100 // max(total,1)}%)</div>')
+
+    def _bar(counts):
+        rows = []
+        for mode in sorted(counts, key=lambda k: -counts[k]):
+            n = counts[mode]
+            pct = n * 100 // max(total, 1)
+            rows.append(
+                f'<tr><td style="padding:2px 8px 2px 0"><code>{escape(mode)}</code></td>'
+                f'<td style="padding:2px 8px 2px 0">{n:,}</td>'
+                f'<td style="padding:2px 8px 2px 0;color:var(--fg2)">{pct}%</td>'
+                f'<td style="padding:2px 0;width:120px">'
+                f'<div style="background:var(--bg2);border-radius:3px;height:6px;overflow:hidden">'
+                f'<div style="width:{pct}%;height:100%;background:var(--accent)"></div></div></td></tr>'
+            )
+        return f'<table style="border-collapse:collapse;font-size:11px">{"".join(rows)}</table>'
+
+    lines.append('<div style="display:flex;gap:20px;flex-wrap:wrap;margin-top:8px">')
+    lines.append(f'<div><div style="font-weight:600">Chosen (vor Fallback)</div>{_bar(stats["chosen"])}</div>')
+    lines.append(f'<div><div style="font-weight:600">Actual (nach Fallback)</div>{_bar(stats["actual"])}</div>')
+    lines.append('</div>')
+
+    lines.append(f'<div style="margin-top:8px;color:var(--fg2)">'
+                  f'CID-Pool aktuell: <strong>{stats["variant_count"]}</strong> Varianten · '
+                  f'CDN-Pool aktuell: <strong>{stats["cdn_pool_size"]}</strong> URLs</div>')
+
+    ctrl = stats.get("last_ctrl")
+    if ctrl:
+        weights = ctrl.get("weights", {})
+        health = ctrl.get("health", {})
+        lines.append(
+            f'<div style="margin-top:8px;padding:6px 8px;background:var(--bg2);'
+            f'border-radius:4px;font-family:monospace;font-size:11px">'
+            f'<div><strong>Auto-Refresh:</strong> alle {ctrl.get("refresh_every", 0):,} sends · '
+            f'{ctrl.get("variants_per_refresh", 0)} Varianten pro Refresh · '
+            f'seit letztem Refresh: {ctrl.get("sent_since_refresh", 0):,} · '
+            f'Refreshes total: {ctrl.get("refresh_count", 0)}</div>'
+            f'<div style="margin-top:4px">Health: '
+            f'cid={health.get("cid", {}).get("health", 1):.2f} · '
+            f'cloudinary={health.get("cloudinary", {}).get("health", 1):.2f} · '
+            f's3={health.get("s3", {}).get("health", 1):.2f}</div>'
+            f'<div>Weights: cid={weights.get("cid", 0):.2f} · '
+            f'cdn={weights.get("cdn", 0):.2f}</div>'
+            f'</div>'
+        )
+    lines.append('</div>')
+    return HTMLResponse("".join(lines))
+
+
+@router.post("/campaigns/{cid}/reset-image-stats", response_class=HTMLResponse)
+async def reset_image_stats(request: Request, cid: int):
+    _reset_image_stats(cid)
+    return HTMLResponse('<div class="alert alert-info">Stats zurückgesetzt.</div>')
 
 
 @router.get("/campaigns/table", response_class=HTMLResponse)
@@ -1637,6 +1772,10 @@ def _run_campaign(db, cid: int):
                         _mode = "cid"
                     if _mode == "url" and not (logo_variants and cfg.get("logo_base_url", "").strip()):
                         _mode = "cid"
+                    _track_image_mode(cid, cur_image_mode, _mode,
+                                       ctrl=auto_refresh_ctrl,
+                                       cdn_pool_size=len(logo_cdn_urls or []),
+                                       variant_count=len(logo_variants or []))
 
                     if _mode == "static_url":
                         static_logo = cfg.get("logo_static_url", "").strip()

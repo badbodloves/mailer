@@ -58,9 +58,17 @@ def get_group_variant_count(group_id: int) -> int:
 
 
 def clear_variants():
+    """Löscht NUR Files direkt im globalen VARIANT_DIR — group_X/ subdirs
+    bleiben unangetastet, damit Kampagnen mit logo_group_id nicht ihre
+    Varianten verlieren."""
     try:
-        shutil.rmtree(VARIANT_DIR)
-        os.makedirs(VARIANT_DIR, exist_ok=True)
+        for name in os.listdir(VARIANT_DIR):
+            p = os.path.join(VARIANT_DIR, name)
+            if os.path.isfile(p):
+                try:
+                    os.unlink(p)
+                except OSError:
+                    pass
     except OSError:
         pass
 
@@ -155,8 +163,22 @@ async def generate_variants(request: Request, variant_count: int = Form(25),
 
     variant_dir = _group_variant_dir(group_id)
     if os.path.isdir(variant_dir):
-        shutil.rmtree(variant_dir)
-    os.makedirs(variant_dir, exist_ok=True)
+        if group_id == 0:
+            # NUR direkte Files löschen — sonst würden alle
+            # group_X/ Subdirs mitgerissen (deren Varianten von anderen
+            # Kampagnen aktiv genutzt werden).
+            for name in os.listdir(variant_dir):
+                p = os.path.join(variant_dir, name)
+                if os.path.isfile(p):
+                    try:
+                        os.unlink(p)
+                    except OSError:
+                        pass
+        else:
+            shutil.rmtree(variant_dir)
+            os.makedirs(variant_dir, exist_ok=True)
+    else:
+        os.makedirs(variant_dir, exist_ok=True)
 
     per_logo = max(1, variant_count // len(logos))
     _variant_progress.update(running=True, done=0, total=len(logos) * per_logo, count=0, error="")
