@@ -23,6 +23,21 @@ router = APIRouter()
 _image_mode_stats: dict = {}
 _image_mode_stats_lock = threading.Lock()
 
+# Ring-Buffer der letzten 20 Subjects pro Kampagne (raw aus dem Pool +
+# final nach Macro/Spintax). Sofort erkennbar ob was gecuttet wird.
+from collections import deque as _deque
+_subject_samples: dict = {}
+_subject_samples_lock = threading.Lock()
+
+
+def _track_subject(campaign_id: int, raw: str, final: str):
+    with _subject_samples_lock:
+        dq = _subject_samples.get(campaign_id)
+        if dq is None:
+            dq = _deque(maxlen=20)
+            _subject_samples[campaign_id] = dq
+        dq.append((raw, final))
+
 
 def _track_image_mode(campaign_id: int, chosen: str, actual: str,
                        ctrl=None, cdn_pool_size: int = 0,
@@ -56,6 +71,8 @@ def _track_image_mode(campaign_id: int, chosen: str, actual: str,
 def _reset_image_stats(campaign_id: int):
     with _image_mode_stats_lock:
         _image_mode_stats.pop(campaign_id, None)
+    with _subject_samples_lock:
+        _subject_samples.pop(campaign_id, None)
 
 
 def _append_ref(url: str, email: str, style: str = "base64") -> str:
@@ -848,6 +865,33 @@ async def campaign_image_stats(request: Request, cid: int):
             f'cdn={weights.get("cdn", 0):.2f}</div>'
             f'</div>'
         )
+    # Subject-Samples: die letzten Subjects im Klartext, so sieht man
+    # sofort ob etwas gecuttet wird oder Macros nicht auflösen.
+    with _subject_samples_lock:
+        samples = list(_subject_samples.get(cid, []))
+    if samples:
+        rows = []
+        for raw, final in reversed(samples[-15:]):
+            cutted = "cut" if len(final) < len(raw) - 5 else ""
+            cls = ' style="color:var(--red)"' if cutted else ""
+            rows.append(
+                f'<tr><td style="padding:2px 8px 2px 0;color:var(--fg2);'
+                f'max-width:280px;overflow:hidden;text-overflow:ellipsis;'
+                f'white-space:nowrap"{cls}>{escape(raw)}</td>'
+                f'<td style="padding:2px 8px 2px 0;max-width:280px;overflow:hidden;'
+                f'text-overflow:ellipsis;white-space:nowrap"{cls}>{escape(final)}</td>'
+                f'<td style="padding:2px 0;font-size:10px;color:var(--fg3)">'
+                f'{len(raw)}→{len(final)}</td></tr>'
+            )
+        lines.append(
+            '<details style="margin-top:8px" open><summary style="cursor:pointer;'
+            'font-weight:600;font-size:11px">Letzte Subjects (raw → final)</summary>'
+            '<table style="border-collapse:collapse;font-size:10px;margin-top:4px;width:100%">'
+            '<thead><tr><th style="text-align:left;color:var(--fg3)">Aus dem Pool</th>'
+            '<th style="text-align:left;color:var(--fg3)">Nach Macros/Spintax</th>'
+            '<th style="text-align:left;color:var(--fg3)">Len</th></tr></thead>'
+            f'<tbody>{"".join(rows)}</tbody></table></details>'
+        )
     lines.append('</div>')
     return HTMLResponse("".join(lines))
 
@@ -1128,7 +1172,12 @@ def _run_campaign(db, cid: int):
         if _from_name_pools:
             logger.info("Campaign %d: from-name-rotation ON — %d pools", cid, len(_from_name_pools))
         if _image_modes_rot:
-            logger.info("Campaign %d: image-mode-rotation ON — %s", cid, _image_modes_rot)
+            logger.info("Campaign %d: image-mode-rotation ON — %s (weighted via auto-refresh-ctrl if enabled)",
+                         cid, _image_modes_rot)
+        else:
+            logger.info("Campaign %d: image-mode-rotation OFF — jeder Send nutzt cfg.image_mode=%r "
+                         "(hak in der Kampagne die gewünschten Modi an um zu rotieren)",
+                         cid, cfg.get("image_mode"))
         if _link_ref_styles_rot:
             logger.info("Campaign %d: link-ref-style-rotation ON — %s", cid, _link_ref_styles_rot)
 
@@ -1726,9 +1775,13 @@ def _run_campaign(db, cid: int):
                 # === Meta-Rotation: subject-pool ===
                 if _subject_pools:
                     _pool = random.choice(_subject_pools)
-                    cur_subject = _process(random.choice(_pool), email, sticky_cache)
+                    raw_subject = random.choice(_pool)
+                    cur_subject = _process(raw_subject, email, sticky_cache)
+                    _track_subject(cid, raw_subject, cur_subject)
                 else:
+                    raw_subject = subject_cfg
                     cur_subject = _process(subject_cfg, email, sticky_cache)
+                    _track_subject(cid, raw_subject, cur_subject)
 
                 if live_html_gen and htmlgen_generate_one is not None:
                     # Per-Send fresh HTML aus der htmlgen-Engine.
