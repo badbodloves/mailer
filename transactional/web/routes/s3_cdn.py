@@ -20,23 +20,14 @@ from html import escape
 from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from ..jobs import job_manager
+
 router = APIRouter()
 logger = logging.getLogger("trans.s3")
 
 UPLOAD_TMP = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "static", "uploads", "s3_src"))
 os.makedirs(UPLOAD_TMP, exist_ok=True)
-
-_progress = {}
-
-
-def _prog(uid: int) -> dict:
-    p = _progress.get(uid)
-    if not p:
-        p = {"running": False, "done": 0, "total": 0, "ok": 0, "errors": 0,
-             "log": [], "upload_id": 0}
-        _progress[uid] = p
-    return p
 
 
 def _tweaked_bytes(src_path: str, seed: int) -> bytes:
@@ -245,16 +236,13 @@ async def upload_logo(request: Request,
                         pixel_tweak: str = Form("1")):
     db = request.app.state.db
     uid = request.state.user["id"]
-    prog = _prog(uid)
-    if prog["running"]:
-        return HTMLResponse('<div class="alert alert-warning">Anderer Upload läuft noch.</div>')
     if not file or not file.filename:
         return HTMLResponse('<div class="alert alert-warning">Keine Datei gewählt.</div>')
     acc = db.get_s3_account(account_id)
     if not acc:
         return HTMLResponse('<div class="alert alert-danger">S3-Account nicht gefunden.</div>')
     acc = dict(acc)
-    from mailer.s3_uploader import parse_buckets_field, s3_upload_object, S3Error
+    from mailer.s3_uploader import parse_buckets_field, s3_upload_object
     buckets = parse_buckets_field(acc.get("buckets", ""))
     if not buckets:
         return HTMLResponse('<div class="alert alert-danger">Account hat keine Buckets konfiguriert. Nutze „Bucket auto-anlegen" oder trag welche unter /redirects manuell ein.</div>')
@@ -274,14 +262,18 @@ async def upload_logo(request: Request,
     content_type = mimetypes.guess_type(safe)[0] or "image/png"
     upload_id = db.add_s3_upload(account_id, file.filename, uid)
 
-    prog.update(running=True, done=0, total=count, ok=0, errors=0,
-                log=[], upload_id=upload_id)
-
     proxy = _proxy_for_account(db, acc)
+    job = job_manager.create(
+        "s3_upload", uid,
+        f"S3 Upload: {file.filename} × {count} → {len(buckets)} bucket(s)",
+        total=count, page_url="/s3-logos")
 
     def worker():
         try:
             for i in range(count):
+                if job.cancelled():
+                    job.log_line(f"abgebrochen nach {i}/{count}")
+                    break
                 bucket, region = buckets[i % len(buckets)]
                 key = f"{base_name}/{secrets.token_hex(6)}{ext}"
                 try:
@@ -291,13 +283,14 @@ async def upload_logo(request: Request,
                         bucket, key, body, content_type=content_type,
                         public=True, proxy=proxy, timeout=45)
                     db.add_s3_link(upload_id, url, bucket, key)
-                    prog["ok"] += 1
+                    job.tick(ok=1)
                 except Exception as e:
-                    prog["errors"] += 1
-                    prog["log"].append(f"#{i + 1}: {str(e)[:200]}")
-                prog["done"] = i + 1
+                    job.tick(err=1)
+                    job.log_line(f"#{i + 1}: {str(e)[:200]}")
+            job.finish("done")
+        except Exception as e:
+            job.finish("error", str(e))
         finally:
-            prog["running"] = False
             try:
                 os.unlink(src_path)
             except Exception:
@@ -305,46 +298,10 @@ async def upload_logo(request: Request,
 
     threading.Thread(target=worker, daemon=True).start()
     return HTMLResponse(
-        f'<div class="alert alert-info">Lade {count} Varianten hoch, verteilt '
-        f'über {len(buckets)} Bucket(s)…</div>'
-        f'<div hx-get="/s3-logos/progress" hx-trigger="every 1s" hx-swap="outerHTML"></div>'
+        f'<div class="alert alert-info">Job #{job.id} gestartet: {count} Varianten '
+        f'verteilt über {len(buckets)} Bucket(s). Progress + Abbrechen im Job-Widget '
+        f'unten rechts (folgt dir überall hin).</div>'
     )
-
-
-@router.get("/s3-logos/progress", response_class=HTMLResponse)
-async def progress(request: Request):
-    uid = request.state.user["id"]
-    p = _prog(uid)
-    if p["running"]:
-        pct = int(p["done"] / p["total"] * 100) if p["total"] else 0
-        return HTMLResponse(
-            f'<div hx-get="/s3-logos/progress" hx-trigger="every 1s" hx-swap="outerHTML">'
-            f'<div class="progress" style="margin-bottom:6px">'
-            f'<div class="progress-bar" style="width:{pct}%">{p["done"]}/{p["total"]}</div></div>'
-            f'<p style="font-size:12px;color:var(--fg2)">'
-            f'{p["ok"]} hochgeladen, {p["errors"]} Fehler</p></div>'
-        )
-    if p["ok"] > 0 or p["errors"] > 0:
-        err = ""
-        if p["log"]:
-            err = ('<details style="margin-top:8px"><summary>Fehler-Log</summary>'
-                    '<pre style="font-size:11px;max-height:200px;overflow:auto">'
-                    + escape("\n".join(p["log"])) + '</pre></details>')
-        color = "success" if p["errors"] == 0 else "warning"
-        err_frag = f', {p["errors"]} Fehler' if p["errors"] else ""
-        result = HTMLResponse(
-            f'<div class="alert alert-{color}">Fertig: {p["ok"]}/{p["total"]} hochgeladen'
-            f'{err_frag}. '
-            f'<a href="/s3-logos" style="color:var(--accent)">Reload</a></div>'
-            + err
-        )
-        p["ok"] = 0
-        p["errors"] = 0
-        p["done"] = 0
-        p["total"] = 0
-        p["log"] = []
-        return result
-    return HTMLResponse('')
 
 
 @router.post("/s3-logos/auto-batch", response_class=HTMLResponse)
@@ -366,9 +323,6 @@ async def auto_batch(request: Request,
     Ein Klick, alles fertig. Progress-Anzeige."""
     db = request.app.state.db
     uid = request.state.user["id"]
-    prog = _prog(uid)
-    if prog["running"]:
-        return HTMLResponse('<div class="alert alert-warning">Anderer Batch läuft noch — abwarten.</div>')
     acc = db.get_s3_account(account_id)
     if not acc:
         return HTMLResponse('<div class="alert alert-danger">S3-Account nicht gefunden.</div>')
@@ -408,33 +362,38 @@ async def auto_batch(request: Request,
         return HTMLResponse('<div class="alert alert-warning">Keine Source-Logos gefunden — lade welche in <a href="/logos" style="color:var(--accent)">/logos</a> hoch.</div>')
 
     total_uploads = bucket_count + len(source_paths) * variants_per_logo
-    prog.update(running=True, done=0, total=total_uploads, ok=0, errors=0,
-                log=[], upload_id=0)
 
     from mailer.s3_uploader import (s3_setup_bucket, s3_upload_object,
                                       parse_buckets_field)
     proxy = _proxy_for_account(db, acc)
+    job = job_manager.create(
+        "s3_auto_batch", uid,
+        f"S3 Auto-Batch: {bucket_count} buckets × {len(source_paths)} logos × {variants_per_logo}",
+        total=total_uploads, page_url="/s3-logos")
 
     def worker():
         try:
             # 1) Buckets erzeugen — random name + round-robin region
             new_buckets = []   # [(bucket, region)]
             for i in range(bucket_count):
+                if job.cancelled():
+                    job.log_line("abgebrochen vor bucket-setup")
+                    break
                 region = picked_regions[i % len(picked_regions)]
                 name = _random_bucket_name(bucket_prefix)
                 r = s3_setup_bucket(acc["access_key"], acc["secret_key"],
                                      region, name, proxy=proxy)
-                prog["done"] += 1
                 if r.get("ok"):
                     new_buckets.append((name, region))
-                    prog["ok"] += 1
-                    prog["log"].append(f"✓ bucket {name} ({region})")
+                    job.tick(ok=1)
+                    job.log_line(f"✓ bucket {name} ({region})")
                 else:
-                    prog["errors"] += 1
-                    prog["log"].append(f"✗ bucket {name}: {r.get('error', '')[:120]}")
+                    job.tick(err=1)
+                    job.log_line(f"✗ bucket {name}: {r.get('error', '')[:120]}")
 
             if not new_buckets:
-                prog["log"].append("Keine Buckets konnten angelegt werden — abbruch.")
+                job.log_line("Keine Buckets konnten angelegt werden — abbruch.")
+                job.finish("error", "Keine Buckets angelegt")
                 return
 
             # Buckets in Account-Config eintragen
@@ -450,12 +409,17 @@ async def auto_batch(request: Request,
 
             # 2) Für jedes Source-Logo Varianten hochladen
             for src_name, src_path in source_paths:
+                if job.cancelled():
+                    break
                 safe_base = "".join(c for c in os.path.splitext(src_name)[0]
                                       if c.isalnum() or c in "-_") or "logo"
                 ext = os.path.splitext(src_name)[1].lower() or ".png"
                 ctype = mimetypes.guess_type(src_name)[0] or "image/png"
                 upload_id = db.add_s3_upload(account_id, src_name, uid)
                 for i in range(variants_per_logo):
+                    if job.cancelled():
+                        job.log_line(f"abgebrochen bei {src_name}#{i}")
+                        break
                     bucket, region = new_buckets[i % len(new_buckets)]
                     key = f"{safe_base}/{secrets.token_hex(6)}{ext}"
                     try:
@@ -465,21 +429,20 @@ async def auto_batch(request: Request,
                             bucket, key, body, content_type=ctype,
                             public=True, proxy=proxy, timeout=45)
                         db.add_s3_link(upload_id, url, bucket, key)
-                        prog["ok"] += 1
+                        job.tick(ok=1)
                     except Exception as e:
-                        prog["errors"] += 1
-                        prog["log"].append(f"✗ {src_name}#{i+1}: {str(e)[:150]}")
-                    prog["done"] += 1
-        finally:
-            prog["running"] = False
+                        job.tick(err=1)
+                        job.log_line(f"✗ {src_name}#{i+1}: {str(e)[:150]}")
+            job.finish("done")
+        except Exception as e:
+            job.finish("error", str(e))
 
     threading.Thread(target=worker, daemon=True).start()
     return HTMLResponse(
         f'<div class="alert alert-info">'
-        f'Auto-Batch: {bucket_count} Buckets in {len(picked_regions)} Region(s), '
-        f'{len(source_paths)} Source-Logo(s) × {variants_per_logo} Varianten = '
-        f'{total_uploads} Operations…</div>'
-        f'<div hx-get="/s3-logos/progress" hx-trigger="every 1s" hx-swap="outerHTML"></div>'
+        f'Job #{job.id} gestartet: Auto-Batch mit {bucket_count} Buckets '
+        f'× {len(source_paths)} Logo(s) × {variants_per_logo} Varianten = '
+        f'{total_uploads} Ops. Live-Progress + Abbrechen im Job-Widget (unten rechts).</div>'
     )
 
 
@@ -561,9 +524,6 @@ async def delete_all_buckets(request: Request, aid: int):
     ein paar Minuten dauern). Status via /s3-logos/progress."""
     db = request.app.state.db
     uid = request.state.user["id"]
-    prog = _prog(uid)
-    if prog["running"]:
-        return HTMLResponse('<div class="alert alert-warning">Anderer Batch läuft noch — abwarten.</div>')
     row = db.get_s3_account(aid)
     if not row:
         return HTMLResponse('<div class="alert alert-danger">Account nicht gefunden.</div>')
@@ -575,38 +535,44 @@ async def delete_all_buckets(request: Request, aid: int):
     if not buckets:
         return HTMLResponse('<div class="alert alert-info">Keine Buckets — nichts zu tun.</div>')
     proxy = _proxy_for_account(db, row)
-    prog.update(running=True, done=0, total=len(buckets), ok=0, errors=0,
-                log=[], upload_id=0)
+    job = job_manager.create(
+        "s3_delete_all", uid,
+        f"S3 Delete-All: {len(buckets)} bucket(s) (Account #{aid})",
+        total=len(buckets), page_url="/s3-logos")
 
     def worker():
         try:
             kept = []
             for b, r in buckets:
+                if job.cancelled():
+                    job.log_line(f"abgebrochen — {len(kept)} Buckets nicht bearbeitet")
+                    kept.extend(f"{bb}:{rr}" for bb, rr in buckets[len(kept):])
+                    break
                 try:
                     res = s3_empty_and_delete_bucket(
                         row["access_key"], row["secret_key"], r, b,
                         proxy=proxy, timeout=120)
                     if res.get("ok"):
-                        prog["ok"] += 1
+                        job.tick(ok=1)
                         note = f" ({res.get('note')})" if res.get("note") else ""
-                        prog["log"].append(f"✓ {b} ({r}) — {res.get('deleted', 0)} Objekte{note}")
+                        job.log_line(f"✓ {b} ({r}) — {res.get('deleted', 0)} Objekte{note}")
                     else:
                         kept.append(f"{b}:{r}")
-                        prog["errors"] += 1
-                        prog["log"].append(f"✗ {b} ({r}): {res.get('error', '')[:150]}")
+                        job.tick(err=1)
+                        job.log_line(f"✗ {b} ({r}): {res.get('error', '')[:150]}")
                 except Exception as e:
                     kept.append(f"{b}:{r}")
-                    prog["errors"] += 1
-                    prog["log"].append(f"✗ {b} ({r}): {str(e)[:150]}")
-                prog["done"] += 1
+                    job.tick(err=1)
+                    job.log_line(f"✗ {b} ({r}): {str(e)[:150]}")
             db.update_s3_account_buckets(aid, "\n".join(sorted(set(kept))), uid)
-        finally:
-            prog["running"] = False
+            job.finish("done")
+        except Exception as e:
+            job.finish("error", str(e))
 
     threading.Thread(target=worker, daemon=True).start()
     return HTMLResponse(
-        f'<div class="alert alert-warning">Lösche {len(buckets)} Bucket(s) — kann ein paar Minuten dauern…</div>'
-        f'<div hx-get="/s3-logos/progress" hx-trigger="every 1s" hx-swap="outerHTML"></div>'
+        f'<div class="alert alert-warning">Job #{job.id} gestartet: lösche {len(buckets)} Bucket(s). '
+        f'Live-Status + Abbrechen im Job-Widget (unten rechts).</div>'
     )
 
 

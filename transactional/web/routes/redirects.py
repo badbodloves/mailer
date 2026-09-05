@@ -7,6 +7,8 @@ from html import escape
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
 
+from ..jobs import job_manager
+
 logger = logging.getLogger("trans.redirects")
 router = APIRouter()
 
@@ -324,8 +326,6 @@ async def generate_multi_targets(request: Request,
     # kein Target-Cap mehr — Textarea kann so viele Zeilen haben wie du willst
     count_per_target = max(1, int(count_per_target or 1))
     gen_threads = max(1, min(int(gen_threads or 3), 50))
-    if _gen_progress["running"]:
-        return HTMLResponse('<div class="alert alert-warning">Generation already running.</div>')
 
     db = request.app.state.db
     gen_uid = request.state.user["id"]
@@ -337,20 +337,18 @@ async def generate_multi_targets(request: Request,
                       and cfg_snapshot.get("antibot_hmac_secret"))
 
     total = len(valid_targets) * count_per_target
-    _gen_progress.update(running=True, total=total, done=0, ok=0, errors=0)
-
-    # Proxies für die Generierung: aus dem Pool holen (kann mehrere Zeilen
-    # sein), pro Job rotieren. Rate-Limits/Google-Detection werden dadurch
-    # deutlich entschärft.
     gen_proxies = _resolve_proxy_list(db, int(gen_proxy_id or 0))
+    job = job_manager.create(
+        "google_share_multi", gen_uid,
+        f"google.share Multi: {len(valid_targets)} Targets × {count_per_target}",
+        total=total, page_url="/redirects")
 
     def worker():
         try:
             from mailer.redirect_manager import RedirectManager
             from concurrent.futures import ThreadPoolExecutor, as_completed
 
-            # Für jedes Target: berechne den submit_target (mit oder ohne antibot)
-            jobs = []   # list of (real_target, submit_target)
+            work_items = []
             for real_target in valid_targets:
                 submit_target = real_target
                 if antibot_active:
@@ -362,51 +360,46 @@ async def generate_multi_targets(request: Request,
                         ttl_seconds=int(cfg_snapshot.get("antibot_token_ttl_hours", 168)) * 3600,
                     )
                 for _ in range(count_per_target):
-                    jobs.append((real_target, submit_target))
+                    work_items.append((real_target, submit_target))
 
-            done = 0
-            generated = 0
-
-            def gen_one(job):
-                real, submit = job
+            def gen_one(item):
+                real, submit = item
                 proxy = random.choice(gen_proxies) if gen_proxies else ""
                 url = RedirectManager._generate_one(submit, proxy=proxy)
                 return (real, url)
 
             with ThreadPoolExecutor(max_workers=gen_threads) as executor:
-                futures = [executor.submit(gen_one, j) for j in jobs]
+                futures = [executor.submit(gen_one, w) for w in work_items]
                 for f in as_completed(futures):
-                    done += 1
-                    _gen_progress["done"] = done
+                    if job.cancelled():
+                        for pending in futures:
+                            pending.cancel()
+                        job.log_line("cancel — pending futures gecancelled")
+                        break
                     try:
                         real, url = f.result(timeout=15)
                         if url:
                             if do_rewrite:
                                 url = _rewrite_share_google(url)
                             db.add_redirect(url, real, gen_uid, pool_id)
-                            generated += 1
-                            _gen_progress["ok"] = generated
+                            job.tick(ok=1)
                         else:
-                            _gen_progress["errors"] += 1
-                    except Exception:
-                        _gen_progress["errors"] += 1
-
-            _gen_progress["done"] = total
-            _gen_progress["ok"] = generated
+                            job.tick(err=1)
+                    except Exception as e:
+                        job.tick(err=1)
+                        job.log_line(str(e)[:150])
+            job.finish("done")
         except Exception as e:
             logger.error("Multi-target gen error: %s", e, exc_info=True)
-            _gen_progress["errors"] += 1
-        finally:
-            _gen_progress["running"] = False
+            job.finish("error", str(e))
 
     threading.Thread(target=worker, daemon=True).start()
-    label = f" (google.xx format)" if do_rewrite else ""
+    label = " (google.xx format)" if do_rewrite else ""
     ab_label = " · via antibot" if antibot_active else ""
     return HTMLResponse(
-        f'<div class="alert alert-info">Generiere {total} Links '
-        f'({len(valid_targets)} Targets × {count_per_target} pro Target){label}{ab_label}…</div>'
-        f'<div id="gen-progress" hx-get="/redirects/status" '
-        f'hx-trigger="every 2s" hx-swap="innerHTML"></div>'
+        f'<div class="alert alert-info">Job #{job.id} gestartet: {total} Links '
+        f'({len(valid_targets)} Targets × {count_per_target} pro Target){label}{ab_label}. '
+        f'Live-Progress + Abbrechen im Job-Widget (unten rechts).</div>'
     )
 
 
@@ -423,21 +416,12 @@ async def generate_redirects(request: Request,
         return HTMLResponse(
             '<div class="alert alert-warning">Enter a target URL.</div>'
         )
-    if _gen_progress["running"]:
-        return HTMLResponse(
-            '<div class="alert alert-warning">Generation already running.</div>'
-        )
-
-    count = max(1, int(count or 1))            # kein Cap mehr
-    gen_threads = max(1, min(gen_threads, 50))  # bis 50 parallel
+    count = max(1, int(count or 1))
+    gen_threads = max(1, min(gen_threads, 50))
     db = request.app.state.db
     gen_uid = request.state.user["id"]
     do_rewrite = bool(google_rewrite)
 
-    # Antibot-Wrapping: wenn aktiv, submitten wir die antibot-URL an
-    # share.google statt der echten Ziel-URL. Google speichert dann
-    # intern die antibot-URL, der Empfänger landet über share.google
-    # auf antibot und antibot leitet auf's echte Ziel weiter.
     cfg_snapshot = db.get_config()
     antibot_active = (cfg_snapshot.get("antibot_enabled")
                       and cfg_snapshot.get("antibot_base_url")
@@ -452,17 +436,16 @@ async def generate_redirects(request: Request,
             ttl_seconds=int(cfg_snapshot.get("antibot_token_ttl_hours", 168)) * 3600,
         )
 
-    _gen_progress.update(running=True, total=count, done=0, ok=0, errors=0)
-
     gen_proxies = _resolve_proxy_list(db, int(gen_proxy_id or 0))
+    job = job_manager.create(
+        "google_share", gen_uid,
+        f"google.share: {target[:60]} × {count}",
+        total=count, page_url="/redirects")
 
     def worker():
         try:
             from mailer.redirect_manager import RedirectManager
             from concurrent.futures import ThreadPoolExecutor, as_completed
-
-            generated = 0
-            done = 0
 
             def gen_one(_):
                 proxy = random.choice(gen_proxies) if gen_proxies else ""
@@ -471,39 +454,35 @@ async def generate_redirects(request: Request,
             with ThreadPoolExecutor(max_workers=gen_threads) as executor:
                 futures = [executor.submit(gen_one, i) for i in range(count)]
                 for f in as_completed(futures):
-                    done += 1
-                    _gen_progress["done"] = done
+                    if job.cancelled():
+                        for pending in futures:
+                            pending.cancel()
+                        job.log_line("cancel — pending futures gecancelled")
+                        break
                     try:
                         url = f.result(timeout=15)
                         if url:
                             if do_rewrite:
                                 url = _rewrite_share_google(url)
                             db.add_redirect(url, target, gen_uid, pool_id)
-                            generated += 1
-                            _gen_progress["ok"] = generated
+                            job.tick(ok=1)
                         else:
-                            _gen_progress["errors"] += 1
-                    except Exception:
-                        _gen_progress["errors"] += 1
-
-            _gen_progress["done"] = count
-            _gen_progress["ok"] = generated
-
+                            job.tick(err=1)
+                    except Exception as e:
+                        job.tick(err=1)
+                        job.log_line(str(e)[:150])
+            job.finish("done")
         except Exception as e:
             logger.error("Redirect generation error: %s", e, exc_info=True)
-            _gen_progress["errors"] += 1
-        finally:
-            _gen_progress["running"] = False
+            job.finish("error", str(e))
 
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
+    threading.Thread(target=worker, daemon=True).start()
     fmt_label = " (google.xx format)" if do_rewrite else ""
     antibot_label = " · via antibot" if antibot_active else ""
     return HTMLResponse(
-        f'<div class="alert alert-info">Generating {count} redirect links '
-        f'with {gen_threads} threads{fmt_label}{antibot_label}...</div>'
-        f'<div id="gen-progress" hx-get="/redirects/status" '
-        f'hx-trigger="every 2s" hx-swap="innerHTML"></div>'
+        f'<div class="alert alert-info">Job #{job.id} gestartet: {count} '
+        f'google.share Links mit {gen_threads} threads{fmt_label}{antibot_label}. '
+        f'Live-Progress + Abbrechen im Job-Widget (unten rechts).</div>'
     )
 
 
@@ -522,9 +501,6 @@ async def generate_s3_redirects(request: Request,
         return HTMLResponse('<div class="alert alert-warning">Enter a target URL.</div>')
     if not (target.startswith("http://") or target.startswith("https://")):
         return HTMLResponse('<div class="alert alert-warning">Target URL must start with http:// or https://</div>')
-    if _s3_progress["running"]:
-        return HTMLResponse('<div class="alert alert-warning">S3 generation already running.</div>')
-
     db = request.app.state.db
     uid = request.state.user["id"]
     region_override = (region or "").strip().lower()
@@ -560,20 +536,19 @@ async def generate_s3_redirects(request: Request,
     # only when the user asked for "Random" — if they picked a specific
     # region we respect it across the whole batch.
     region_per_bucket = per_link_bucket and region_was_random
-    _s3_progress.update(running=True, total=count, done=0, ok=0, errors=0,
-                         bucket="", stage="creating bucket", region=region,
-                         last_error="", aborted=False)
     logger.info("S3 gen: account=%s region=%s region_per_bucket=%s count=%d target=%s",
                 account_label or "(primary)", region, region_per_bucket, count, target[:80])
+    job = job_manager.create(
+        "s3_redirect_gen", gen_uid,
+        f"S3 Redirects: {target[:50]} × {count} ({region}{'/multi' if region_per_bucket else ''})",
+        total=count, page_url="/redirects")
 
     def worker():
+        consecutive = 0
         try:
             from mailer.s3_redirect import _new_bucket_name, make_s3_client, create_public_bucket
             from mailer.s3_redirect import _redirect_html, _random_suffix
 
-            # Cache one S3 client per region. With region_per_bucket=False
-            # this is just a single client; with True we lazily build one
-            # for every region we hit, but no more than ~12 ever exist.
             s3_clients = {}
             def _client_for(r: str):
                 if r not in s3_clients:
@@ -584,7 +559,6 @@ async def generate_s3_redirects(request: Request,
             body = _redirect_html(target, bot_filter=use_bot_filter).encode("utf-8")
 
             def _spawn_bucket(r: str):
-                """Create one fresh bucket in region r, return its name."""
                 cli = _client_for(r)
                 b = _new_bucket_name(bucket_prefix, tag)
                 for attempt in range(3):
@@ -605,52 +579,27 @@ async def generate_s3_redirects(request: Request,
             shared_bucket = None
             if not per_link_bucket:
                 shared_bucket = _spawn_bucket(region)
-                _s3_progress["bucket"] = shared_bucket
+                job.log_line(f"shared bucket: {shared_bucket}")
 
-            _s3_progress["stage"] = "uploading" if not per_link_bucket else "creating buckets + uploading"
-
-            ok = 0
-            errors = 0
-            consecutive = 0
             for i in range(count):
-                if consecutive >= CONSECUTIVE_ERROR_LIMIT:
-                    _s3_progress["aborted"] = True
-                    _s3_progress["stage"] = (
-                        f"aborted after {consecutive} consecutive errors. "
-                        f"Last: {_s3_progress.get('last_error', '')[:200]}"
-                    )
-                    logger.error(
-                        "S3 gen aborted at %d/%d after %d consecutive errors",
-                        i, count, consecutive,
-                    )
+                if job.cancelled():
+                    job.log_line(f"cancel bei {i}/{count}")
                     break
+                if consecutive >= CONSECUTIVE_ERROR_LIMIT:
+                    job.log_line(f"abort — {consecutive} consecutive errors")
+                    job.finish("error", f"aborted nach {consecutive} consecutive errors")
+                    return
 
                 if per_link_bucket:
-                    this_region = (
-                        random.choice(POPULAR_AWS_REGIONS)
-                        if region_per_bucket else region
-                    )
-                    _s3_progress["region"] = this_region
-                    _s3_progress["stage"] = (
-                        f"creating bucket {i + 1}/{count} in {this_region}"
-                    )
+                    this_region = (random.choice(POPULAR_AWS_REGIONS)
+                                    if region_per_bucket else region)
                     try:
                         bucket = _spawn_bucket(this_region)
                     except Exception as e:
-                        errors += 1
                         consecutive += 1
-                        _s3_progress["last_error"] = (
-                            f"bucket {i+1} ({this_region}): {str(e)[:300]}"
-                        )
-                        logger.warning("Per-link bucket %d in %s failed: %s",
-                                        i + 1, this_region, e)
-                        _s3_progress["done"] = i + 1
-                        _s3_progress["errors"] = errors
+                        job.tick(err=1)
+                        job.log_line(f"bucket {i+1} ({this_region}): {str(e)[:200]}")
                         continue
-                    _s3_progress["bucket"] = bucket
-                    _s3_progress["stage"] = (
-                        f"uploading object {i + 1}/{count} ({this_region})"
-                    )
                 else:
                     bucket = shared_bucket
                     this_region = region
@@ -664,34 +613,22 @@ async def generate_s3_redirects(request: Request,
                     )
                     url = f"https://s3.{this_region}.amazonaws.com/{bucket}/{key}"
                     db.add_redirect(url, target, gen_uid, pool_id)
-                    ok += 1
-                    consecutive = 0   # success resets the streak
+                    job.tick(ok=1)
+                    consecutive = 0
                 except Exception as e:
-                    errors += 1
                     consecutive += 1
-                    _s3_progress["last_error"] = f"upload {i+1}: {str(e)[:300]}"
+                    job.tick(err=1)
+                    job.log_line(f"upload {i+1}: {str(e)[:200]}")
                     logger.warning("S3 upload failed (%d/%d): %s", i + 1, count, e)
-                _s3_progress["done"] = i + 1
-                _s3_progress["ok"] = ok
-                _s3_progress["errors"] = errors
-
-            if not _s3_progress["aborted"]:
-                _s3_progress["stage"] = "done"
+            job.finish("done")
         except Exception as e:
             logger.error("S3 generation error: %s", e, exc_info=True)
-            _s3_progress["errors"] += 1
-            _s3_progress["aborted"] = True
-            _s3_progress["last_error"] = str(e)[:400]
-            _s3_progress["stage"] = f"error: {str(e)[:200]}"
-        finally:
-            _s3_progress["running"] = False
+            job.finish("error", str(e))
 
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
+    threading.Thread(target=worker, daemon=True).start()
     return HTMLResponse(
-        f'<div class="alert alert-info">Creating S3 bucket and uploading {count} redirect links...</div>'
-        f'<div id="s3-progress" hx-get="/redirects/s3-status" '
-        f'hx-trigger="every 2s" hx-swap="innerHTML"></div>'
+        f'<div class="alert alert-info">Job #{job.id} gestartet: {count} S3 Redirects. '
+        f'Live-Progress + Abbrechen im Job-Widget (unten rechts).</div>'
     )
 
 

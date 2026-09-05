@@ -17,24 +17,14 @@ from html import escape
 from fastapi import APIRouter, Request, Form, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
+from ..jobs import job_manager
+
 logger = logging.getLogger("trans.cloudinary")
 router = APIRouter()
 
 UPLOAD_TMP = os.path.abspath(os.path.join(
     os.path.dirname(__file__), "..", "static", "uploads", "cloudinary_src"))
 os.makedirs(UPLOAD_TMP, exist_ok=True)
-
-# In-process progress per user
-_progress: dict = {}
-
-
-def _prog(uid: int) -> dict:
-    p = _progress.get(uid)
-    if not p:
-        p = {"running": False, "done": 0, "total": 0, "ok": 0, "errors": 0,
-             "log": [], "upload_id": 0}
-        _progress[uid] = p
-    return p
 
 
 # ── helpers ──────────────────────────────────────────────
@@ -179,7 +169,6 @@ async def cloudinary_page(request: Request):
         },
         "proxies": proxies,
         "uploads": uploads,
-        "progress": _prog(uid),
     })
 
 
@@ -205,7 +194,6 @@ async def upload_logo(request: Request,
                       proxy_id: int = Form(0)):
     db = request.app.state.db
     uid = request.state.user["id"]
-    prog = _prog(uid)
     cfg = db.get_config()
     cloud_name = cfg.get("cloudinary_cloud_name", "")
     api_key = cfg.get("cloudinary_api_key", "")
@@ -215,8 +203,6 @@ async def upload_logo(request: Request,
         return HTMLResponse(
             '<div class="alert alert-danger">Cloudinary credentials missing — '
             'save them in the Config card first.</div>')
-    if prog["running"]:
-        return HTMLResponse('<div class="alert alert-warning">Another upload is still running.</div>')
     if not file or not file.filename:
         return HTMLResponse('<div class="alert alert-warning">No file selected.</div>')
     if not proxy_id:
@@ -248,23 +234,25 @@ async def upload_logo(request: Request,
         folder=folder, count=count, pixel_tweak=int(tweak),
         proxy_id=proxy_id, user_id=uid)
 
-    prog.update(running=True, done=0, total=count, ok=0, errors=0,
-                log=[], upload_id=upload_id)
-
     original_filename = file.filename
+    job = job_manager.create(
+        "cloudinary_upload", uid,
+        f"Cloudinary: {file.filename} × {count} via {proxy_row['name']}",
+        total=count, page_url="/cloudinary")
 
     def worker():
         try:
             for i in range(count):
+                if job.cancelled():
+                    job.log_line(f"abgebrochen bei {i}/{count}")
+                    break
                 suffix = f"{i + 1}" if count > 1 else ""
                 public_id = f"{base_name}{suffix}_{secrets.token_hex(3)}"
                 body = _tweaked_bytes(src_path, seed=i) if tweak else open(src_path, "rb").read()
-                # Rotate through proxy lines round-robin; single-line pools reuse the same line.
                 proxies = _proxies_dict(lines[i % len(lines)])
                 if not proxies:
-                    prog["errors"] += 1
-                    prog["log"].append(f"#{i + 1}: invalid proxy line")
-                    prog["done"] = i + 1
+                    job.tick(err=1)
+                    job.log_line(f"#{i + 1}: invalid proxy line")
                     continue
                 try:
                     resp = _cloudinary_upload(
@@ -275,16 +263,17 @@ async def upload_logo(request: Request,
                     secure_url = resp.get("secure_url", "")
                     if secure_url:
                         db.add_cloudinary_link(upload_id, public_id, secure_url)
-                        prog["ok"] += 1
+                        job.tick(ok=1)
                     else:
-                        prog["errors"] += 1
-                        prog["log"].append(f"#{i + 1}: empty response")
+                        job.tick(err=1)
+                        job.log_line(f"#{i + 1}: empty response")
                 except Exception as e:
-                    prog["errors"] += 1
-                    prog["log"].append(f"#{i + 1}: {str(e)[:200]}")
-                prog["done"] = i + 1
+                    job.tick(err=1)
+                    job.log_line(f"#{i + 1}: {str(e)[:200]}")
+            job.finish("done")
+        except Exception as e:
+            job.finish("error", str(e))
         finally:
-            prog["running"] = False
             try:
                 os.unlink(src_path)
             except Exception:
@@ -292,40 +281,11 @@ async def upload_logo(request: Request,
 
     threading.Thread(target=worker, daemon=True).start()
     return HTMLResponse(
-        f'<div class="alert alert-info">Uploading {count}× to Cloudinary via '
-        f'<code>{escape(proxy_row["name"])}</code>'
-        f'{" with per-upload pixel tweak" if tweak else ""}…</div>'
-        f'<div hx-get="/cloudinary/progress" hx-trigger="every 1s" hx-swap="outerHTML"></div>'
+        f'<div class="alert alert-info">Job #{job.id} gestartet: {count}× Cloudinary '
+        f'via <code>{escape(proxy_row["name"])}</code>'
+        f'{" mit pixel-tweak" if tweak else ""}. '
+        f'Live-Status + Abbrechen im Job-Widget (unten rechts).</div>'
     )
-
-
-@router.get("/cloudinary/progress", response_class=HTMLResponse)
-async def progress(request: Request):
-    uid = request.state.user["id"]
-    p = _prog(uid)
-    if p["running"]:
-        pct = int(p["done"] / p["total"] * 100) if p["total"] else 0
-        return HTMLResponse(
-            f'<div hx-get="/cloudinary/progress" hx-trigger="every 1s" hx-swap="outerHTML">'
-            f'<div class="progress" style="margin-bottom:6px">'
-            f'<div class="progress-bar" style="width:{pct}%">{p["done"]}/{p["total"]}</div></div>'
-            f'<p style="font-size:12px;color:var(--fg2)">'
-            f'{p["ok"]} uploaded, {p["errors"]} errors</p></div>'
-        )
-    if p["ok"] > 0 or p["errors"] > 0:
-        err_html = ''
-        if p["log"]:
-            err_html = ('<details style="margin-top:6px"><summary style="font-size:12px;'
-                        'color:var(--red);cursor:pointer">View errors</summary>'
-                        '<pre style="font-size:11px;background:#fdf0f0;padding:8px;'
-                        'border-radius:4px;white-space:pre-wrap">'
-                        + escape("\n".join(p["log"])) + '</pre></details>')
-        return HTMLResponse(
-            f'<div><div class="alert alert-success">Done — {p["ok"]} uploaded, '
-            f'{p["errors"]} errors. <a href="/cloudinary" style="color:var(--accent)">'
-            f'Reload</a></div>{err_html}</div>'
-        )
-    return HTMLResponse("")
 
 
 @router.post("/cloudinary/upload/{uid_}/delete")

@@ -58,6 +58,12 @@
         </div>
     </nav>
     <div class="main">{% block content %}{% endblock %}</div>
+
+    {% if request.state.user %}
+    <div id="jobs-widget" hx-get="/jobs/panel" hx-trigger="load, every 3s"
+         hx-swap="outerHTML" style="display:none"></div>
+    {% endif %}
+
     <script>
     function showTab(container, tabId) {
         const wrap = typeof container === 'string' ? document.getElementById(container) : (container.closest('.card') || container.closest('.tab-wrap') || container.closest('details') || container.closest('.details-body'));

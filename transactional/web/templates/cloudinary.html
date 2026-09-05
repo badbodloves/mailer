@@ -82,11 +82,7 @@
                 </button>
             </div>
         </form>
-        <div id="up-result" style="margin-top:10px">
-            {% if progress.running %}
-            <div hx-get="/cloudinary/progress" hx-trigger="load, every 1s" hx-swap="outerHTML"></div>
-            {% endif %}
-        </div>
+        <div id="up-result" style="margin-top:10px"></div>
     </div>
 </div>
 
