@@ -164,7 +164,7 @@
 
                 <label>Anzahl neuer Buckets</label>
                 <input name="bucket_count" type="number" value="3" min="1" max="30">
-                <div class="form-help">Buckets bekommen random Namen (<code>mailer-cdn-{hex}-{stamp}</code>).</div>
+                <div class="form-help">Buckets bekommen random Namen — 4 Strategien random-verteilt: <code>media-{hex}</code>, <code>web-assets-{hex}</code>, <code>s3-{region}-{hex}</code> (SDK-like), <code>{hex}</code> (pure token). Kein Bezug zum Mailer sichtbar.</div>
 
                 <label>Regionen (Multi-Select — pro Bucket round-robin)</label>
                 <div style="display:flex;flex-wrap:wrap;gap:6px;padding:6px 0" id="s3-regions-{{ accounts[0].id if accounts else 0 }}">
@@ -179,12 +179,14 @@
                 </div>
                 <input type="hidden" name="regions_csv" value="eu-central-1,us-east-1,eu-west-1">
 
-                <label>Bucket-Prefix (leer = random Pool)</label>
+                <label>Bucket-Prefix (leer = random Naming-Strategien)</label>
                 <input name="bucket_prefix" value="" pattern="[a-z0-9\-]*"
-                       placeholder="leer lassen für zufällige Prefixes (media, cdn, web-assets, ...)">
+                       placeholder="leer lassen — jeder Bucket wird random benannt">
                 <div class="form-help">
-                    Leer = jeder Bucket bekommt einen anderen Prefix aus einem Pool
-                    unauffälliger Wörter (assets, static, media, cdn, web-store, …).
+                    Leer = jeder Bucket zieht random eine von 4 Naming-Strategien:
+                    generisches Wort (<code>media-…</code>), Kombi (<code>web-assets-…</code>),
+                    SDK-like mit Region (<code>s3-eu-central-1-…</code>) oder pure hex
+                    (<code>a7f3b2c891234…</code>). Keine „mailer"-Signatur mehr.<br>
                     Gesetzt = alle Buckets bekommen deinen festen Prefix.
                 </div>
             </div>

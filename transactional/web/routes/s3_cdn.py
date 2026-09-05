@@ -96,24 +96,40 @@ _PREFIX_NOUN = [
 ]
 
 
-def _random_bucket_name(prefix: str = "") -> str:
+def _random_bucket_name(prefix: str = "", region: str = "") -> str:
     """AWS-konformer Bucket-Name — nur a-z 0-9 -, 3-63 chars,
-    startet/endet mit alphanum. Random-Token gibt Uniqueness.
+    startet/endet mit alphanum, unique via Random-Token.
 
-    Wenn `prefix` leer ist, wird ein zufälliges 1- oder 2-Wort-Prefix
-    aus einem Pool unauffälliger Begriffe gebildet."""
+    Wenn `prefix` gesetzt ist → fester Prefix + hex + stamp.
+    Wenn `prefix` leer ist → 4 zufällige Naming-Strategien (25/25/25/25):
+      1) generisches Substantiv:  media-a7f3-891234
+      2) Adjektiv+Substantiv:     web-assets-a7f3-891234
+      3) region-based (SDK-like): s3-eu-central-1-a7f3-891234
+      4) reine hex-token:         a7f3b2c891234abc
+    Ergebnis sieht in jedem Fall aus wie ein generischer AWS-Bucket, nie
+    wie ein Mailer-Bucket. Wenn eine `region` reingegeben wird, ist die
+    region-based Strategy verfügbar; sonst fällt Strategy 3 auf 1 zurück."""
     import secrets as _sec
+    token = _sec.token_hex(6)
+    stamp = str(int(time.time()))[-6:]
+
     if prefix and prefix.strip():
         pfx = "".join(c for c in prefix.lower()
                        if c.isalnum() or c == "-").strip("-")[:20] or "cdn"
+        return f"{pfx}-{token}-{stamp}"
+
+    strategy = _sec.randbelow(4)
+    if strategy == 0:
+        pfx = _sec.choice(_PREFIX_NOUN)
+    elif strategy == 1:
+        pfx = f"{_sec.choice(_PREFIX_ADJ)}-{_sec.choice(_PREFIX_NOUN)}"
+    elif strategy == 2 and region:
+        # AWS-Region reinbacken → sieht aus wie ein SDK-erzeugter Bucket
+        pfx = f"s3-{region.lower()}"
     else:
-        # 50/50: ein Wort oder zwei kombiniert
-        if _sec.randbelow(2) == 0:
-            pfx = _sec.choice(_PREFIX_NOUN)
-        else:
-            pfx = f"{_sec.choice(_PREFIX_ADJ)}-{_sec.choice(_PREFIX_NOUN)}"
-    token = _sec.token_hex(6)
-    stamp = str(int(time.time()))[-6:]
+        # Reine hex — keinerlei Wörter, wie ein UUID-Bucket
+        # (kein separater Prefix, direkt token+stamp)
+        return f"{token}{stamp}"
     return f"{pfx}-{token}-{stamp}"
 
 
@@ -313,7 +329,7 @@ async def auto_batch(request: Request,
                        group_id: int = Form(0),
                        logo_ids: str = Form(""),
                        variants_per_logo: int = Form(50),
-                       bucket_prefix: str = Form("mailer-cdn"),
+                       bucket_prefix: str = Form(""),
                        pixel_tweak: str = Form("1")):
     """Full-Auto-Batch:
       1) N random Buckets in ausgewählten Regionen anlegen + konfigurieren
@@ -380,7 +396,7 @@ async def auto_batch(request: Request,
                     job.log_line("abgebrochen vor bucket-setup")
                     break
                 region = picked_regions[i % len(picked_regions)]
-                name = _random_bucket_name(bucket_prefix)
+                name = _random_bucket_name(bucket_prefix, region=region)
                 r = s3_setup_bucket(acc["access_key"], acc["secret_key"],
                                      region, name, proxy=proxy)
                 if r.get("ok"):
