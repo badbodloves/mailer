@@ -1813,6 +1813,33 @@ class TransDB:
                   (upload_id, user_id))
         c.commit()
 
+    def delete_all_cloudinary_uploads(self, user_id: int) -> int:
+        """Löscht ALLE Cloudinary-Uploads + Links des Users. Remote-Assets
+        bei Cloudinary bleiben liegen (kann der User dort selber putzen).
+        Returns Anzahl gelöschter Uploads."""
+        c = self._conn()
+        c.execute(
+            "DELETE FROM trans_cloudinary_links WHERE upload_id IN "
+            "(SELECT id FROM trans_cloudinary_uploads WHERE user_id=?)",
+            (user_id,))
+        cur = c.execute(
+            "DELETE FROM trans_cloudinary_uploads WHERE user_id=?", (user_id,))
+        c.commit()
+        return cur.rowcount or 0
+
+    def delete_all_s3_uploads(self, user_id: int) -> int:
+        """Löscht ALLE S3-Upload-Referenzen + Links des Users. Bucket-Objekte
+        bei AWS bleiben liegen (via S3 Logos → Delete-Bucket löschen)."""
+        c = self._conn()
+        c.execute(
+            "DELETE FROM trans_s3_links WHERE upload_id IN "
+            "(SELECT id FROM trans_s3_uploads WHERE user_id=?)",
+            (user_id,))
+        cur = c.execute(
+            "DELETE FROM trans_s3_uploads WHERE user_id=?", (user_id,))
+        c.commit()
+        return cur.rowcount or 0
+
     def get_all_cdn_urls(self, user_id) -> list:
         """Union aus Cloudinary + S3 — der gemeinsame CDN-Pool den die
         Send-Loop nutzt. Reihenfolge irrelevant, wird eh random gepickt."""
