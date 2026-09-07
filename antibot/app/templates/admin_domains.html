@@ -245,6 +245,7 @@
     <form hx-post="/admin/domains/pipeline/run"
           hx-target="#pipeline-run-result" hx-swap="innerHTML"
           hx-include="[name='pipeline_domain']"
+          hx-encoding="multipart/form-data"
           hx-confirm="Pipeline wirklich starten? Bei aktivierter „Kaufen"-Option werden echte Domains gekauft (kostet Geld)."
           style="margin-top:16px">
         <div id="pipeline-selected-hint" class="muted" style="font-size:11px;margin-bottom:6px">
@@ -295,8 +296,13 @@
                         </span>
                     </div>
                     <div>
-                        <label>Logo (URL oder Pfad)</label>
-                        <input name="logo_path" placeholder="https://cdn.example.com/logo.png oder /static/logo.png">
+                        <label>Logo (Upload — PNG/JPG/WebP/SVG, max 2 MB)</label>
+                        <input type="file" name="logo_file" accept="image/png,image/jpeg,image/webp,image/svg+xml,image/gif">
+                        <div class="form-help">
+                            Wird nach <code>/static/logo/uploads/</code> gespeichert und für
+                            alle Domains dieses Runs als Gate-Logo gesetzt. Leer lassen =
+                            aktuelles Config-Logo behalten.
+                        </div>
                     </div>
                 </div>
                 <label style="margin-top:4px">Brand-Text (Header vom Warteschirm)</label>

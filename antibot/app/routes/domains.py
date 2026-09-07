@@ -1,10 +1,20 @@
 """Domain-Panel — Dynadot (Kauf + Search) + Cloudflare (Zones + DNS)
 + End-to-End Pipeline (Kauf → CF Zone → A-Records → Turnstile → Gate + Links)."""
+import os
 import time
+import secrets
 import logging
 from html import escape
 from fastapi import APIRouter, Request, Form
 from fastapi.responses import HTMLResponse, RedirectResponse
+
+# Zielverzeichnis für hochgeladene Gate-Logos (per Pipeline). Wird via
+# StaticFiles-Mount im app/main.py als /static/logo/uploads/ serviert.
+LOGO_UPLOAD_DIR = os.path.abspath(os.path.join(
+    os.path.dirname(__file__), "..", "..", "static", "logo", "uploads"))
+os.makedirs(LOGO_UPLOAD_DIR, exist_ok=True)
+_LOGO_EXTS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".svg"}
+_LOGO_MAX_BYTES = 2 * 1024 * 1024
 
 from ..presets import MODE_PRESETS, gen_slug, detect_public_ip
 
@@ -898,6 +908,30 @@ async def pipeline_run(request: Request):
         return HTMLResponse('<div class="alert alert-warning">Keine Domains ausgewählt. '
                             'Zuerst „Suchen" → dann Checkboxen setzen.</div>')
 
+    # Logo-Upload (multipart file) — wenn eine Datei mitkommt, unter
+    # /static/logo/uploads/ speichern und Pfad als logo_path benutzen.
+    uploaded_logo_path = ""
+    logo_upload = form.get("logo_file")
+    if logo_upload and hasattr(logo_upload, "filename") and logo_upload.filename:
+        ext = os.path.splitext(logo_upload.filename)[1].lower()
+        if ext not in _LOGO_EXTS:
+            return HTMLResponse(
+                f'<div class="alert alert-danger">Logo hat unerlaubte Endung '
+                f'({escape(ext)}). Erlaubt: {", ".join(sorted(_LOGO_EXTS))}.</div>')
+        raw = await logo_upload.read()
+        if not raw:
+            pass  # user hat den file input leer gesubmitted — ignoriere
+        elif len(raw) > _LOGO_MAX_BYTES:
+            return HTMLResponse(
+                f'<div class="alert alert-danger">Logo zu groß '
+                f'({len(raw)//1024} KB, max 2048 KB).</div>')
+        else:
+            safe = f"gate_{int(time.time())}_{secrets.token_hex(4)}{ext}"
+            dest = os.path.join(LOGO_UPLOAD_DIR, safe)
+            with open(dest, "wb") as fh:
+                fh.write(raw)
+            uploaded_logo_path = f"/static/logo/uploads/{safe}"
+
     pcfg = {
         "buy_dynadot": bool(form.get("buy_dynadot")),
         "add_www": bool(form.get("add_www")),
@@ -909,7 +943,7 @@ async def pipeline_run(request: Request):
         # Leer = Fallback auf globale Config im _pipeline_one_domain.
         "brand_color": (form.get("brand_color") or "").strip(),
         "brand_text": (form.get("brand_text") or "").strip(),
-        "logo_path": (form.get("logo_path") or "").strip(),
+        "logo_path": uploaded_logo_path,
     }
     if pcfg["mode"] not in MODE_PRESETS:
         pcfg["mode"] = "medium"
@@ -1012,6 +1046,24 @@ async def pipeline_run(request: Request):
                           'beim ersten HTTPS-Request automatisch das LE-Cert. '
                           'Wenn du CF-Wolke orange willst: <strong>erst nach dem ersten '
                           'Cert-Holen</strong> — der Bulk-Button oben macht das für alle Gates dieses Runs auf einmal.</p>')
+
+
+@router.post("/admin/gates/bulk-cf-proxy", response_class=HTMLResponse)
+async def all_gates_bulk_cf(request: Request, proxied: str = Form("1")):
+    """Bulk-Toggle über ALLE Gates im System — Aufruf vom
+    Gates-Übersicht-Panel (admin_gates.html). Delegiert an denselben
+    Backend-Code wie pipeline_bulk_orange nur mit gate_ids="alle"."""
+    db = request.app.state.db
+    all_gates = db.list_gates() if hasattr(db, "list_gates") else []
+    if not all_gates:
+        # Fallback: direkt aus der Tabelle lesen
+        rows = db._conn().execute("SELECT id FROM gates ORDER BY id").fetchall()
+        gate_ids = ",".join(str(r["id"] if hasattr(r, "keys") else r[0]) for r in rows)
+    else:
+        gate_ids = ",".join(str(dict(g)["id"]) for g in all_gates)
+    if not gate_ids:
+        return HTMLResponse('<span style="color:var(--fg2)">Keine Gates vorhanden.</span>')
+    return await pipeline_bulk_orange(request, gate_ids=gate_ids, proxied=proxied)
 
 
 @router.post("/admin/domains/pipeline/bulk-orange", response_class=HTMLResponse)

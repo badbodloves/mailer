@@ -14,6 +14,30 @@
 </p>
 
 {% if gates %}
+<div class="card" style="margin-bottom:12px;padding:10px 12px">
+    <strong style="font-size:13px">&#127774; CF-Wolke Bulk-Toggle für alle {{ gates|length }} Gates</strong>
+    <p class="muted" style="font-size:11px;margin:4px 0">
+        Schaltet alle A/AAAA/CNAME-Records aller Gates auf einmal auf CF-proxied
+        (orange) oder DNS-only (grau). Vorher sicherstellen dass Caddy die
+        HTTPS-Certs geholt hat — sonst hängt der Traffic.
+    </p>
+    <button class="btn btn-secondary btn-sm"
+            hx-post="/admin/gates/bulk-cf-proxy"
+            hx-vals='{"proxied":"1"}'
+            hx-target="#bulk-cf-result" hx-swap="innerHTML"
+            hx-confirm="ALLE Gates auf CF-orange (proxied) setzen?">
+        Alle auf orange
+    </button>
+    <button class="btn btn-secondary btn-sm" style="margin-left:6px"
+            hx-post="/admin/gates/bulk-cf-proxy"
+            hx-vals='{"proxied":"0"}'
+            hx-target="#bulk-cf-result" hx-swap="innerHTML"
+            hx-confirm="ALLE Gates auf CF-grau (DNS only) setzen?">
+        Alle auf grau
+    </button>
+    <div id="bulk-cf-result" style="margin-top:8px;font-size:12px"></div>
+</div>
+
 <table style="font-size:12px">
     <thead>
         <tr>
