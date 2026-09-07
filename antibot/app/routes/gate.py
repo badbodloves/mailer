@@ -18,12 +18,47 @@ router = APIRouter()
 
 VERIFY_COOKIE = "abo_verified"
 
+# Query-Parameter die das Antibot-Gate transparent an die Ziel-URL
+# weiterreicht. So funktioniert `?ref=USER123` (oder `?u=…`) end-to-end:
+# der Mailer hängt an den Gate-Link ran, das Gate leitet sie an die
+# Landing weiter. Whitelist gehalten damit keine ungewollten Params
+# (tokens, bypass, etc.) durchsickern.
+_REF_PARAM_WHITELIST = ("ref", "u", "utm_source", "utm_medium",
+                         "utm_campaign", "utm_content", "utm_id",
+                         "utm_term", "sub", "sid", "aff")
+
+
+def _forward_ref_params(target: str, request: Request) -> str:
+    """Hängt whitelisted query-params (ref/u/utm_*) an das Target an.
+    Wenn im Target schon vorhanden, wird NICHT überschrieben — der
+    ursprüngliche Wert im Target hat Vorrang."""
+    if not target:
+        return target
+    from urllib.parse import urlparse, urlencode, parse_qsl, urlunparse
+    incoming = {k: v for k, v in request.query_params.items()
+                if k.lower() in _REF_PARAM_WHITELIST and v}
+    if not incoming:
+        return target
+    try:
+        parsed = urlparse(target)
+        existing = dict(parse_qsl(parsed.query, keep_blank_values=True))
+        for k, v in incoming.items():
+            existing.setdefault(k, v)   # target-value wins bei Konflikt
+        new_query = urlencode(existing, doseq=False)
+        return urlunparse(parsed._replace(query=new_query))
+    except Exception:
+        # Wenn urlparse aus irgendeinem Grund failt (z.B. sehr kaputte
+        # target-URL), lieber das Original zurückgeben als crashen.
+        return target
+
 
 def _redirect_or_wait(request: Request, cfg: dict, target: str,
                        response=None) -> HTMLResponse:
     """Wenn wait_seconds > 0: Wait-Screen mit Logo zeigen und dann per JS/meta
     weiterleiten. Sonst direkter 302. `response` optional wenn wir Cookies
-    setzen müssen (verify-branch) — dann kopieren wir sie in die HTMLResponse."""
+    setzen müssen (verify-branch) — dann kopieren wir sie in die HTMLResponse.
+    Whitelist-Query-Params (ref, u, utm_*) werden ans Target weitergereicht."""
+    target = _forward_ref_params(target, request)
     try:
         wait_s = int(cfg.get("wait_seconds", "0"))
     except (ValueError, TypeError):
@@ -149,7 +184,7 @@ async def gate_entry(request: Request, param: str):
                         verdict="allow", score=0, signals_json='{"owner_bypass":true}',
                         token_valid=1 if token_valid else 0,
                         dry_run=1 if cfg.get("dry_run") == "1" else 0)
-        return RedirectResponse(target, status_code=302)
+        return RedirectResponse(_forward_ref_params(target, request), status_code=302)
 
     # If token invalid AND no default_target fallback wanted, 404
     if not token_valid and not target:
@@ -340,7 +375,7 @@ async def verify(request: Request,
     ttl = int(cfg.get("verification_ttl_hours", "6")) * 3600
     if link_row:
         db.bump_gate_link_hits(link_row["id"])
-    resp = RedirectResponse(target, status_code=302)
+    resp = RedirectResponse(_forward_ref_params(target, request), status_code=302)
     resp.set_cookie(VERIFY_COOKIE,
                     issue_verify_cookie(cookie_secret, bucket, ttl),
                     max_age=ttl, httponly=True, samesite="strict",

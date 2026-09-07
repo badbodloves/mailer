@@ -687,38 +687,64 @@ def _pipeline_one_domain(db, cfg: dict, domain: str, pcfg: dict) -> dict:
             ts_site = ts["site_key"]
             ts_secret = ts["secret_key"]
 
-    # 6. Gate anlegen (oder skippen wenn schon da)
+    # 6. Gate anlegen (oder skippen wenn schon da).
+    # Brand-Overrides pro Pipeline-Run erlaubt (Logo/Farbe/Text/Ziel).
+    # Leer → Fallback auf globale Config.
     existing = db.get_gate_by_host(domain)
+    brand_color = (pcfg.get("brand_color") or "").strip() \
+        or cfg.get("brand_color", "#005eb8")
+    brand_text = (pcfg.get("brand_text") or "").strip() \
+        or cfg.get("brand_text", "Sicherheitsprüfung läuft …")
+    logo_path = (pcfg.get("logo_path") or "").strip() \
+        or cfg.get("brand_logo_path", "")
     if existing:
         gate_id = existing["id"]
-        steps.append(("Gate existiert bereits", True, f"ID {gate_id} — nicht überschrieben"))
+        # Wenn Brand-Overrides gesetzt sind, auch das bestehende Gate updaten
+        updates = {}
+        if pcfg.get("brand_color"):
+            updates["brand_color"] = brand_color
+        if pcfg.get("brand_text"):
+            updates["brand_text"] = brand_text
+        if pcfg.get("logo_path"):
+            updates["logo_path"] = logo_path
+        if pcfg.get("target_url"):
+            updates["target_url"] = pcfg["target_url"]
+        if updates:
+            db.update_gate(gate_id, **updates)
+            steps.append(("Gate existiert — Brand/Ziel aktualisiert", True,
+                           ", ".join(updates.keys())))
+        else:
+            steps.append(("Gate existiert bereits", True, f"ID {gate_id} — nicht überschrieben"))
     else:
         gate_id = db.add_gate(
             hostname=domain,
             mode=pcfg.get("mode", "medium"),
             target_url=pcfg.get("target_url", ""),
-            brand_text=cfg.get("brand_text", "Sicherheitsprüfung läuft …"),
-            brand_color=cfg.get("brand_color", "#005eb8"),
+            brand_text=brand_text,
+            brand_color=brand_color,
+            logo_path=logo_path,
             turnstile_site_key=ts_site,
             turnstile_secret_key=ts_secret,
         )
         steps.append(("Gate angelegt", True, f"ID {gate_id}, Modus {pcfg.get('mode','medium')}"))
 
-    # 7. Ready-Links
+    # 7. Ready-Links (sammle Slugs — pipeline_run macht daraus die
+    #    kopierbare URL-Liste am Ende).
     n = max(0, min(int(pcfg.get("initial_links") or 0), 500))
-    generated = 0
+    generated_slugs = []
     for _ in range(n):
         for _try in range(5):
             slug = gen_slug(8)
             if not db.get_gate_link(gate_id, slug):
                 db.add_gate_link(gate_id, slug)
-                generated += 1
+                generated_slugs.append(slug)
                 break
     if n:
-        steps.append((f"{generated} Ready-Links generiert", True, ""))
+        steps.append((f"{len(generated_slugs)} Ready-Links generiert", True, ""))
 
     return {"domain": domain, "ok": True, "steps": steps,
-            "gate_id": gate_id, "ns_hint": ns_hint}
+            "gate_id": gate_id, "ns_hint": ns_hint,
+            "generated_slugs": generated_slugs}
 
 
 @router.post("/admin/domains/pipeline/precheck", response_class=HTMLResponse)
@@ -879,6 +905,11 @@ async def pipeline_run(request: Request):
         "target_url": (form.get("target_url") or "").strip(),
         "mode": form.get("mode") or "medium",
         "initial_links": int(form.get("initial_links") or 10),
+        # Brand-Overrides — für alle Domains dieses Runs identisch.
+        # Leer = Fallback auf globale Config im _pipeline_one_domain.
+        "brand_color": (form.get("brand_color") or "").strip(),
+        "brand_text": (form.get("brand_text") or "").strip(),
+        "logo_path": (form.get("logo_path") or "").strip(),
     }
     if pcfg["mode"] not in MODE_PRESETS:
         pcfg["mode"] = "medium"
@@ -888,9 +919,11 @@ async def pipeline_run(request: Request):
         res = _pipeline_one_domain(db, cfg, d, pcfg)
         results.append(res)
 
-    # Report
+    # Report — pro Domain
     sections = []
     all_ns_hints = set()
+    all_ready_links = []   # (domain, slug) für die Sammel-Ausgabe unten
+    all_gate_ids = []
     for r in results:
         color = "var(--green)" if r["ok"] else "var(--red)"
         head = (f'<h3 style="color:{color};margin:12px 0 6px">'
@@ -904,9 +937,12 @@ async def pipeline_run(request: Request):
         if r.get("gate_id"):
             gate_link = (f'<p><a href="/admin/gates/{r["gate_id"]}" '
                          f'class="btn btn-primary btn-xs">Gate + Ready-Links öffnen</a></p>')
+            all_gate_ids.append(r["gate_id"])
         sections.append(f'{head}<ul style="font-size:13px">{steps_html}</ul>{gate_link}')
         if r.get("ns_hint"):
             all_ns_hints.add(r["ns_hint"])
+        for slug in r.get("generated_slugs", []):
+            all_ready_links.append((r["domain"], slug))
 
     ns_alert = ""
     if all_ns_hints:
@@ -919,11 +955,114 @@ async def pipeline_run(request: Request):
     summary = (f'<div class="alert alert-{"success" if ok_count == len(results) else "warn"}">'
                f'{ok_count}/{len(results)} erfolgreich durchgelaufen.</div>')
 
-    return HTMLResponse(summary + ns_alert + "".join(sections)
+    # ── Sammel-Ausgabe: alle Ready-Links über ALLE Domains als
+    #    kopierbare Textarea. So spart sich der User das Öffnen jedes
+    #    einzelnen Gates.
+    ready_block = ""
+    if all_ready_links:
+        # Klartext-URLs — der Mailer hängt `?ref=…` selber per _append_ref
+        # dran, deshalb hier ohne. Gate-Redirect forward `?ref` an Ziel
+        # (siehe /admin/domains/ref-forward-info).
+        lines = [f"https://{host}/gate/{slug}"
+                 for host, slug in all_ready_links]
+        ready_block = (
+            f'<div class="card" style="margin-top:12px;background:#f0fff4">'
+            f'<h3>&#128279; {len(lines)} Ready-Links über {len(set(h for h,_ in all_ready_links))} Domain(s)</h3>'
+            f'<p class="muted" style="font-size:12px;margin:4px 0">'
+            f'Ein Klick ins Textfeld markiert alles. Der Mailer hängt beim '
+            f'Versand automatisch <code>?ref=…</code> an (Config in der Kampagne). '
+            f'Das Antibot-Gate leitet den ref-Parameter transparent an die '
+            f'Ziel-URL weiter.</p>'
+            f'<textarea readonly rows="{min(len(lines)+1, 15)}" '
+            f'onclick="this.select()" style="font-family:monospace;font-size:11px;'
+            f'width:100%">' + escape("\n".join(lines)) + f'</textarea>'
+            f'</div>'
+        )
+
+    # ── Bulk „CF-Wolke auf orange" Button — für alle Gates die dieser
+    #    Pipeline-Run gerade angelegt oder aktualisiert hat. Erst wenn
+    #    das erste HTTPS-Cert geholt wurde sinnvoll (siehe Hinweis unten).
+    bulk_orange = ""
+    if all_gate_ids:
+        ids_csv = ",".join(str(g) for g in all_gate_ids)
+        bulk_orange = (
+            f'<div class="card" style="margin-top:12px">'
+            f'<h3>&#127774; CF-Wolke Bulk-Toggle</h3>'
+            f'<p class="muted" style="font-size:12px;margin:4px 0">'
+            f'Wenn dein Caddy auf all diesen Domains das LE-Cert geholt hat '
+            f'(dauert ~1-5 Min ab dem ersten HTTPS-Request), einmal klicken um '
+            f'alle A-Records auf CF-orange zu setzen.</p>'
+            f'<button class="btn btn-secondary btn-sm" '
+            f'hx-post="/admin/domains/pipeline/bulk-orange" '
+            f'hx-vals=\'{{"gate_ids":"{ids_csv}","proxied":"1"}}\' '
+            f'hx-target="#bulk-orange-result" hx-swap="innerHTML" '
+            f'hx-confirm="Alle {len(all_gate_ids)} Gates auf CF-orange setzen?">'
+            f'Alle {len(all_gate_ids)} auf orange</button>'
+            f'<button class="btn btn-secondary btn-sm" style="margin-left:6px" '
+            f'hx-post="/admin/domains/pipeline/bulk-orange" '
+            f'hx-vals=\'{{"gate_ids":"{ids_csv}","proxied":"0"}}\' '
+            f'hx-target="#bulk-orange-result" hx-swap="innerHTML">'
+            f'Alle wieder auf grau</button>'
+            f'<div id="bulk-orange-result" style="margin-top:8px;font-size:12px"></div>'
+            f'</div>'
+        )
+
+    return HTMLResponse(summary + ns_alert + "".join(sections) + ready_block + bulk_orange
                         + '<p class="muted">DNS-Propagation dauert bis ~5 Min. Danach holt Caddy '
                           'beim ersten HTTPS-Request automatisch das LE-Cert. '
                           'Wenn du CF-Wolke orange willst: <strong>erst nach dem ersten '
-                          'Cert-Holen</strong> im Gate-Panel oder direkt in CF umschalten.</p>')
+                          'Cert-Holen</strong> — der Bulk-Button oben macht das für alle Gates dieses Runs auf einmal.</p>')
+
+
+@router.post("/admin/domains/pipeline/bulk-orange", response_class=HTMLResponse)
+async def pipeline_bulk_orange(request: Request,
+                                 gate_ids: str = Form(""),
+                                 proxied: str = Form("1")):
+    """Bulk: setzt CF-Proxy=orange (oder grau) für alle angegebenen Gates.
+    Läuft synchron — bei 20 Domains à ~2s = ~40s. Report als Liste."""
+    db = request.app.state.db
+    cfg = db.get_config()
+    if not _cf_configured(cfg):
+        return HTMLResponse('<span style="color:var(--red)">CF nicht konfiguriert.</span>')
+    want = proxied == "1"
+    ids = [int(x) for x in gate_ids.split(",") if x.strip().isdigit()]
+    if not ids:
+        return HTMLResponse('<span style="color:var(--red)">Keine Gate-IDs.</span>')
+    zones = _cf_zones(cfg)
+    zone_by_name = {z["name"]: z for z in zones}
+    import requests as _req
+    headers = _cf_auth(cfg)
+    lines = []
+    ok = 0
+    for gid in ids:
+        gate = db.get_gate(gid)
+        if not gate:
+            lines.append(f'<div style="color:var(--red)">Gate #{gid}: weg</div>')
+            continue
+        host = gate["hostname"]
+        z = zone_by_name.get(host)
+        if not z:
+            lines.append(f'<div style="color:var(--red)">{escape(host)}: keine CF-Zone</div>')
+            continue
+        records = _cf_records(cfg, z["id"])
+        patched = 0
+        for r in records:
+            if r.get("type") not in ("A", "AAAA", "CNAME"):
+                continue
+            if r.get("proxied") == want:
+                continue
+            resp = _req.patch(f"{CF_BASE}/zones/{z['id']}/dns_records/{r['id']}",
+                              headers=headers, json={"proxied": want}, timeout=15)
+            if resp.status_code == 200 and resp.json().get("success"):
+                patched += 1
+        color = "var(--green)" if patched > 0 else "var(--fg2)"
+        state = "orange" if want else "grau"
+        lines.append(f'<div style="color:{color}">✓ {escape(host)}: {patched} Record(s) → {state}</div>')
+        if patched > 0:
+            ok += 1
+    return HTMLResponse(
+        f'<div style="margin-bottom:6px"><strong>{ok}/{len(ids)}</strong> '
+        f'Gates umgeschaltet.</div>' + "".join(lines))
 
 
 # ── Gate: CF-Wolke orange/grau umschalten ────────────────

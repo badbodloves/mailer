@@ -283,6 +283,38 @@
                     <input name="initial_links" type="number" value="10" min="0" max="500">
                 </div>
             </div>
+
+            <fieldset style="margin-top:12px;padding:8px 12px;background:#f7faff;border-radius:4px">
+                <legend style="font-size:12px;font-weight:600">Brand-Look (für alle Domains dieses Runs identisch)</legend>
+                <div class="grid-2">
+                    <div>
+                        <label>Brand-Farbe (Buttons/Bar/Akzent)</label>
+                        <input type="color" name="brand_color" value="#005eb8" style="width:60px;height:32px;padding:2px">
+                        <span class="muted" style="font-size:11px;margin-left:8px">
+                            Leer/Default = globaler Wert aus Config
+                        </span>
+                    </div>
+                    <div>
+                        <label>Logo (URL oder Pfad)</label>
+                        <input name="logo_path" placeholder="https://cdn.example.com/logo.png oder /static/logo.png">
+                    </div>
+                </div>
+                <label style="margin-top:4px">Brand-Text (Header vom Warteschirm)</label>
+                <input name="brand_text" placeholder="Sicherheitsprüfung läuft …">
+                <div class="form-help">
+                    Leer lassen = Fallback auf die globalen Werte aus Antibot-Config.
+                    Perfekt wenn du 5 Domains als Corporate-Set aufsetzen willst — alle
+                    kriegen automatisch dasselbe Corporate-Design.
+                </div>
+            </fieldset>
+
+            <div style="margin-top:12px;padding:8px 10px;background:#f0fff4;border-left:3px solid var(--green);font-size:11px">
+                &#128279; <strong>Ref-Forwarding:</strong> Das Antibot-Gate reicht
+                <code>?ref=</code>, <code>?u=</code> und alle <code>?utm_*</code>-Parameter
+                transparent an die Ziel-URL weiter. Der Mailer hängt die per Kampagne dran —
+                Empfänger klickt <code>https://guard.foo/gate/xyz?ref=U123</code> →
+                Antibot filtert → 302 auf <code>&lt;target&gt;?ref=U123</code>. Ohne
+                zusätzliche Config.</div>
         </fieldset>
 
         <div style="margin-top:12px">
