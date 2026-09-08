@@ -576,7 +576,7 @@ async def generate_s3_redirects(request: Request,
 
             def _spawn_bucket(r: str):
                 cli = _client_for(r)
-                b = _new_bucket_name(bucket_prefix, tag)
+                b = _new_bucket_name(region=r)
                 for attempt in range(3):
                     try:
                         create_public_bucket(cli, b, r)
@@ -584,12 +584,12 @@ async def generate_s3_redirects(request: Request,
                     except cli.exceptions.BucketAlreadyOwnedByYou:
                         return b
                     except cli.exceptions.BucketAlreadyExists:
-                        b = _new_bucket_name(bucket_prefix, tag)
+                        b = _new_bucket_name(region=r)
                     except Exception as e:
                         if attempt == 2:
                             raise
                         logger.warning("Bucket creation retry %d: %s", attempt + 1, e)
-                        b = _new_bucket_name(bucket_prefix, tag)
+                        b = _new_bucket_name(region=r)
                 return b
 
             shared_bucket = None
@@ -756,7 +756,7 @@ async def generate_s3_multi_redirects(request: Request,
 
             def _spawn_bucket(r: str):
                 cli = _client_for(r)
-                b = _new_bucket_name(bucket_prefix, tag)
+                b = _new_bucket_name(region=r)
                 for attempt in range(3):
                     try:
                         create_public_bucket(cli, b, r)
@@ -764,11 +764,11 @@ async def generate_s3_multi_redirects(request: Request,
                     except cli.exceptions.BucketAlreadyOwnedByYou:
                         return b
                     except cli.exceptions.BucketAlreadyExists:
-                        b = _new_bucket_name(bucket_prefix, tag)
+                        b = _new_bucket_name(region=r)
                     except Exception as e:
                         if attempt == 2:
                             raise
-                        b = _new_bucket_name(bucket_prefix, tag)
+                        b = _new_bucket_name(region=r)
                 return b
 
             # Shared bucket über ALLE Targets (spart Setup-Zeit).

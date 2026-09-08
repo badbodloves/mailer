@@ -365,14 +365,13 @@
     <div class="card-header"><h3>S3 Accounts</h3></div>
     {% if s3_accounts %}
     <table style="margin-bottom:12px">
-        <thead><tr><th>Name</th><th>Access Key</th><th>Region</th><th>Prefix</th><th>Proxy</th><th>Primary</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>Access Key</th><th>Region</th><th>Proxy</th><th>Primary</th><th></th></tr></thead>
         <tbody>
         {% for a in s3_accounts %}
         <tr>
             <td style="font-weight:500">{{ a.name }}</td>
             <td style="font-family:monospace;font-size:11px">{{ a.access_key[:8] }}…{{ a.access_key[-4:] }}</td>
             <td><span class="badge badge-info">{{ a.region }}</span></td>
-            <td style="font-family:monospace;font-size:11px">{{ a.bucket_prefix }}</td>
             <td style="font-size:11px;color:var(--fg2)">
                 {% if a.proxy_id %}
                 {% for p in proxies %}{% if p.id == a.proxy_id %}{{ p.name }}{% endif %}{% endfor %}
@@ -397,20 +396,12 @@
                         <input name="access_key" value="{{ a.access_key }}">
                         <label style="font-size:11px">Secret Key</label>
                         <input name="secret_key" type="password" placeholder="(leave empty to keep)">
-                        <div class="form-row" style="margin-top:4px">
-                            <div>
-                                <label style="font-size:11px">Region</label>
-                                <select name="region">
-                                    {% for r in aws_regions %}
-                                    <option value="{{ r }}" {{ 'selected' if a.region == r }}>{{ r }}</option>
-                                    {% endfor %}
-                                </select>
-                            </div>
-                            <div>
-                                <label style="font-size:11px">Bucket Prefix</label>
-                                <input name="bucket_prefix" value="{{ a.bucket_prefix }}">
-                            </div>
-                        </div>
+                        <label style="font-size:11px">Region</label>
+                        <select name="region">
+                            {% for r in aws_regions %}
+                            <option value="{{ r }}" {{ 'selected' if a.region == r }}>{{ r }}</option>
+                            {% endfor %}
+                        </select>
                         <label style="font-size:11px">Proxy</label>
                         <select name="proxy_id">
                             <option value="0">No Proxy</option>
@@ -455,18 +446,13 @@
                 <div><label>Access Key ID</label><input name="access_key" placeholder="AKIA..." required></div>
                 <div><label>Secret Access Key</label><input name="secret_key" type="password" required></div>
             </div>
-            <div class="form-row" style="margin-top:6px">
-                <div><label>Bucket Prefix</label><input name="bucket_prefix" value="lk"></div>
-                <div>
-                    <label>Proxy</label>
-                    <select name="proxy_id">
-                        <option value="0">No Proxy</option>
-                        {% for p in proxies %}
-                        <option value="{{ p.id }}">{{ p.name }}</option>
-                        {% endfor %}
-                    </select>
-                </div>
-            </div>
+            <label style="margin-top:6px">Proxy</label>
+            <select name="proxy_id">
+                <option value="0">No Proxy</option>
+                {% for p in proxies %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+                {% endfor %}
+            </select>
             <div style="margin-top:10px"><button class="btn btn-primary btn-sm">Add Account</button></div>
         </form>
     </details>

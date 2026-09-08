@@ -3,6 +3,7 @@ redirect files. Returns path-style URLs."""
 import logging
 import secrets
 import string
+import time
 from typing import Optional
 
 logger = logging.getLogger("mailer.s3_redirect")
@@ -91,14 +92,39 @@ def _random_suffix(n: int = 8) -> str:
     return ''.join(secrets.choice(alphabet) for _ in range(n))
 
 
-def _new_bucket_name(prefix: str, tag: str = "") -> str:
-    p = (prefix or "lk").lower().strip().replace("_", "-")
-    suffix = _random_suffix(8)
-    if tag:
-        t = ''.join(c for c in tag.lower() if c.isalnum() or c == '-')[:16]
-        if t:
-            return f"{p}-{t}-{suffix}"
-    return f"{p}-{suffix}"
+_PREFIX_ADJ = ["web", "static", "public", "cdn", "img", "media", "assets",
+                "content", "files", "storage", "uploads", "cache", "shared",
+                "cloud", "prod", "app", "core", "edge", "digital", "resource",
+                "site", "brand", "portal", "hub", "vault", "delivery", "pub"]
+_PREFIX_NOUN = ["assets", "media", "cdn", "store", "cache", "content", "img",
+                 "files", "static", "hub", "pool", "hosting", "data", "cloud",
+                 "vault", "share", "delivery", "pack"]
+
+
+def _new_bucket_name(prefix: str = "", tag: str = "", region: str = "") -> str:
+    """AWS-konformer Bucket-Name — 4 random Naming-Strategien (analog zu
+    s3_cdn.py). `prefix` und `tag` sind Legacy-Parameter und werden
+    ignoriert — der Name soll komplett random aussehen, keine
+    Mailer-Signatur ("lk-…") mehr.
+
+    Strategien (je 25% Wahrscheinlichkeit):
+      1) generisches Substantiv:    media-a7f3b2-891234
+      2) Adjektiv+Substantiv:       web-assets-a7f3b2-891234
+      3) SDK-like mit Region:       s3-eu-central-1-a7f3b2-891234
+      4) reiner hex-Token:          a7f3b2c891234abc
+    """
+    token = _random_suffix(8)
+    stamp = str(int(time.time()))[-6:]
+    strategy = secrets.randbelow(4)
+    if strategy == 0:
+        pfx = secrets.choice(_PREFIX_NOUN)
+    elif strategy == 1:
+        pfx = f"{secrets.choice(_PREFIX_ADJ)}-{secrets.choice(_PREFIX_NOUN)}"
+    elif strategy == 2 and region:
+        pfx = f"s3-{region.lower()}"
+    else:
+        return f"{token}{stamp}"
+    return f"{pfx}-{token}-{stamp}"
 
 
 _SOCKS_PATCHED = False
@@ -292,7 +318,7 @@ def generate_links(
     progress_cb(done, total, ok, errors) called after each upload."""
     s3 = make_s3_client(access_key, secret_key, region)
 
-    bucket = _new_bucket_name(bucket_prefix, tag)
+    bucket = _new_bucket_name(region=region)
     for attempt in range(3):
         try:
             create_public_bucket(s3, bucket, region)
@@ -300,12 +326,12 @@ def generate_links(
         except s3.exceptions.BucketAlreadyOwnedByYou:
             break
         except s3.exceptions.BucketAlreadyExists:
-            bucket = _new_bucket_name(bucket_prefix, tag)
+            bucket = _new_bucket_name(region=region)
         except Exception as e:
             if attempt == 2:
                 raise
             logger.warning("Bucket creation retry %d: %s", attempt + 1, e)
-            bucket = _new_bucket_name(bucket_prefix, tag)
+            bucket = _new_bucket_name(region=region)
 
     body = _redirect_html(destination, bot_filter=bot_filter).encode("utf-8")
 
