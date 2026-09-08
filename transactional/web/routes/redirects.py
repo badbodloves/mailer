@@ -546,7 +546,7 @@ async def generate_s3_redirects(request: Request,
     per_link_bucket = strat == "unique"
     shuffled = strat == "shuffled"
     region_per_bucket = per_link_bucket and region_was_random
-    pool_n = max(1, min(int(shuffle_pool_size or 5), 30)) if shuffled else 0
+    pool_n = max(1, min(int(shuffle_pool_size or 5), 500)) if shuffled else 0
     logger.info("S3 gen: account=%s strategy=%s region=%s count=%d target=%s pool_n=%d",
                 account_label or "(primary)", strat, region, count, target[:80], pool_n)
     label_suffix = ""
@@ -728,7 +728,7 @@ async def generate_s3_multi_redirects(request: Request,
     per_link_bucket = strat == "unique"
     shuffled = strat == "shuffled"
     region_per_bucket = per_link_bucket and region_was_random
-    pool_n = max(1, min(int(shuffle_pool_size or 5), 30)) if shuffled else 0
+    pool_n = max(1, min(int(shuffle_pool_size or 5), 500)) if shuffled else 0
     total = len(valid) * count_per_target
     gen_uid = uid
     label_suffix = ""
