@@ -264,9 +264,13 @@
                 <option value="shuffled">Shuffled Pool — N Buckets in N Regionen, pro Link random gemixt</option>
                 <option value="unique">Unique per Link — jeder Link eigener Bucket (AWS: 10k/account)</option>
             </select>
-            <label class="shuf-inp" style="display:none;margin-top:6px">Pool-Größe (nur bei Shuffled)
+            <label class="shuf-inp" style="display:none;margin-top:6px">
+                Anzahl Buckets im Pool
                 <input name="shuffle_pool_size" type="number" value="5" min="2" max="30"
                        style="width:80px;margin-left:6px;display:inline-block">
+                <span style="font-size:11px;color:var(--fg2);margin-left:6px">
+                    (z.B. 5 = 5 Buckets in 5 random Regionen; Count/5 Links pro Bucket im Schnitt)
+                </span>
             </label>
             <div class="form-help" style="margin-top:4px">
                 <strong>Shuffled</strong> ist der „nicht monoton"-Modus: N Buckets werden
@@ -338,9 +342,13 @@
                     <option value="shuffled">Shuffled Pool — N Buckets random gemixt (empfohlen für Anti-Cluster)</option>
                     <option value="unique">Unique per Link — jeder Link eigener Bucket (langsam: 1-2s/Bucket)</option>
                 </select>
-                <label class="shuf-inp2" style="display:none;margin-top:6px">Pool-Größe (nur bei Shuffled)
+                <label class="shuf-inp2" style="display:none;margin-top:6px">
+                    Anzahl Buckets im Pool
                     <input name="shuffle_pool_size" type="number" value="5" min="2" max="30"
                            style="width:80px;margin-left:6px;display:inline-block">
+                    <span style="font-size:11px;color:var(--fg2);margin-left:6px">
+                        (z.B. 5 = 5 Buckets in 5 random Regionen; Total-Links/5 pro Bucket im Schnitt)
+                    </span>
                 </label>
                 <div style="margin-top:10px">
                     <button class="btn btn-primary" {% if not s3_configured %}disabled{% endif %}>
