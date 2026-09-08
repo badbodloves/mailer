@@ -21,7 +21,7 @@
    Checkboxen. #}
 <form id="bulk-gates-form" hx-post="/admin/gates/bulk-generate-links"
       hx-target="#bulk-links-result" hx-swap="innerHTML"
-      hx-include="[form='bulk-gates-form']">
+      hx-include="input[name='gate_ids']:checked">
 <div class="card" style="margin-bottom:12px;padding:10px 12px;border:2px solid var(--accent)">
     <strong style="font-size:13px">&#128279; Bulk Ready-Links: N pro ausgewähltem Gate</strong>
     <p class="muted" style="font-size:11px;margin:4px 0">
