@@ -262,7 +262,7 @@
             <select name="bucket_strategy" onchange="var s=this.form.querySelector('.shuf-inp');if(s)s.style.display=this.value==='shuffled'?'inline-block':'none'">
                 <option value="shared" selected>Shared — 1 Bucket für alle Links (schnell, wenig Diversität)</option>
                 <option value="shuffled">Shuffled Pool — N Buckets in N Regionen, pro Link random gemixt</option>
-                <option value="unique">Unique per Link — jeder Link eigener Bucket (⚠ AWS-Quota 100/account)</option>
+                <option value="unique">Unique per Link — jeder Link eigener Bucket (AWS: 10k/account)</option>
             </select>
             <label class="shuf-inp" style="display:none;margin-top:6px">Pool-Größe (nur bei Shuffled)
                 <input name="shuffle_pool_size" type="number" value="5" min="2" max="30"
@@ -271,8 +271,8 @@
             <div class="form-help" style="margin-top:4px">
                 <strong>Shuffled</strong> ist der „nicht monoton"-Modus: N Buckets werden
                 verteilt über N zufällige Regionen angelegt und die Links dann random gemixt —
-                Origin-Domain, Region und Bucket-Name variieren pro Link, aber du bleibst weit
-                unter der AWS-Quota.
+                Origin-Domain, Region und Bucket-Name variieren pro Link.
+                Setup-Zeit ~2s pro Bucket im Pool, Uploads danach sind schnell.
             </div>
             <div class="form-help" style="margin-top:6px">
                 URLs are extension-less path-style: <code>https://s3.{region}.amazonaws.com/{bucket}/{key}</code>.
@@ -336,7 +336,7 @@
                 <select name="bucket_strategy" onchange="var s=this.form.querySelector('.shuf-inp2');if(s)s.style.display=this.value==='shuffled'?'inline-block':'none'">
                     <option value="shared" selected>Shared — 1 Bucket über alle Targets (schnell)</option>
                     <option value="shuffled">Shuffled Pool — N Buckets random gemixt (empfohlen für Anti-Cluster)</option>
-                    <option value="unique">Unique per Link — jeder Link eigener Bucket (⚠ Quota)</option>
+                    <option value="unique">Unique per Link — jeder Link eigener Bucket (langsam: 1-2s/Bucket)</option>
                 </select>
                 <label class="shuf-inp2" style="display:none;margin-top:6px">Pool-Größe (nur bei Shuffled)
                     <input name="shuffle_pool_size" type="number" value="5" min="2" max="30"

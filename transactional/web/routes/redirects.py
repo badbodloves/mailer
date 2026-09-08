@@ -535,7 +535,7 @@ async def generate_s3_redirects(request: Request,
     use_bot_filter = bool(bot_filter)
     # Bucket-Strategie:
     #   shared   — ein Bucket für alle Links (schnell, wenig Diversität)
-    #   unique   — jeder Link kriegt eigenen Bucket (bricht AWS-Quota bei >100)
+    #   unique   — jeder Link kriegt eigenen Bucket (AWS erlaubt 10k/account seit Nov 2024)
     #   shuffled — Pool von N Buckets in N random Regions, pro Link random gepickt
     strat = (bucket_strategy or "").strip().lower()
     # Backwards-Compat: alte "unique_bucket" checkbox überschreibt wenn strat leer
