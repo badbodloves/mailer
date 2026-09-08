@@ -495,6 +495,8 @@ async def generate_s3_redirects(request: Request,
                                  pool_id: int = Form(0),
                                  bot_filter: str = Form(""),
                                  unique_bucket: str = Form(""),
+                                 bucket_strategy: str = Form(""),
+                                 shuffle_pool_size: int = Form(5),
                                  s3_account_id: int = Form(0)):
     target = target_url.strip()
     if not target:
@@ -531,16 +533,30 @@ async def generate_s3_redirects(request: Request,
     gen_uid = uid
 
     use_bot_filter = bool(bot_filter)
-    per_link_bucket = bool(unique_bucket)
-    # Each fresh bucket picks its own region from POPULAR_AWS_REGIONS
-    # only when the user asked for "Random" — if they picked a specific
-    # region we respect it across the whole batch.
+    # Bucket-Strategie:
+    #   shared   — ein Bucket für alle Links (schnell, wenig Diversität)
+    #   unique   — jeder Link kriegt eigenen Bucket (bricht AWS-Quota bei >100)
+    #   shuffled — Pool von N Buckets in N random Regions, pro Link random gepickt
+    strat = (bucket_strategy or "").strip().lower()
+    # Backwards-Compat: alte "unique_bucket" checkbox überschreibt wenn strat leer
+    if not strat:
+        strat = "unique" if unique_bucket else "shared"
+    if strat not in ("shared", "unique", "shuffled"):
+        strat = "shared"
+    per_link_bucket = strat == "unique"
+    shuffled = strat == "shuffled"
     region_per_bucket = per_link_bucket and region_was_random
-    logger.info("S3 gen: account=%s region=%s region_per_bucket=%s count=%d target=%s",
-                account_label or "(primary)", region, region_per_bucket, count, target[:80])
+    pool_n = max(1, min(int(shuffle_pool_size or 5), 30)) if shuffled else 0
+    logger.info("S3 gen: account=%s strategy=%s region=%s count=%d target=%s pool_n=%d",
+                account_label or "(primary)", strat, region, count, target[:80], pool_n)
+    label_suffix = ""
+    if shuffled:
+        label_suffix = f" (shuffled {pool_n})"
+    elif per_link_bucket:
+        label_suffix = "/multi"
     job = job_manager.create(
         "s3_redirect_gen", gen_uid,
-        f"S3 Redirects: {target[:50]} × {count} ({region}{'/multi' if region_per_bucket else ''})",
+        f"S3 Redirects: {target[:50]} × {count} ({region}{label_suffix})",
         total=count, page_url="/redirects")
 
     def worker():
@@ -577,7 +593,29 @@ async def generate_s3_redirects(request: Request,
                 return b
 
             shared_bucket = None
-            if not per_link_bucket:
+            shuffle_pool = []   # [(bucket, region), …] für strat=shuffled
+            if shuffled:
+                # Baue Pool: N Buckets, jedes in einer random Region aus dem
+                # POPULAR-Set. Wenn User bestimmte Region gewählt hat, bleiben
+                # alle Buckets dort (Region-Wahl gewinnt).
+                pool_regions = (random.sample(
+                    POPULAR_AWS_REGIONS,
+                    min(pool_n, len(POPULAR_AWS_REGIONS)))
+                    if region_was_random else [region] * pool_n)
+                # Falls User pool_n > len(POPULAR_AWS_REGIONS): auffüllen mit Wiederholung
+                while len(pool_regions) < pool_n:
+                    pool_regions.append(random.choice(POPULAR_AWS_REGIONS))
+                for r in pool_regions[:pool_n]:
+                    try:
+                        b = _spawn_bucket(r)
+                        shuffle_pool.append((b, r))
+                        job.log_line(f"pool + bucket {b} ({r})")
+                    except Exception as e:
+                        job.log_line(f"pool bucket in {r} failed: {str(e)[:150]}")
+                if not shuffle_pool:
+                    job.finish("error", "Kein einziger Bucket im Pool erstellbar")
+                    return
+            elif not per_link_bucket:
                 shared_bucket = _spawn_bucket(region)
                 job.log_line(f"shared bucket: {shared_bucket}")
 
@@ -590,7 +628,9 @@ async def generate_s3_redirects(request: Request,
                     job.finish("error", f"aborted nach {consecutive} consecutive errors")
                     return
 
-                if per_link_bucket:
+                if shuffled:
+                    bucket, this_region = random.choice(shuffle_pool)
+                elif per_link_bucket:
                     this_region = (random.choice(POPULAR_AWS_REGIONS)
                                     if region_per_bucket else region)
                     try:
@@ -641,6 +681,8 @@ async def generate_s3_multi_redirects(request: Request,
                                         pool_id: int = Form(0),
                                         bot_filter: str = Form(""),
                                         unique_bucket: str = Form(""),
+                                        bucket_strategy: str = Form(""),
+                                        shuffle_pool_size: int = Form(5),
                                         s3_account_id: int = Form(0)):
     """Wie generate_s3_redirects, aber für mehrere Targets in einer
     Textarea. Jedes Target kriegt N Links. Buckets werden über alle
@@ -678,13 +720,25 @@ async def generate_s3_multi_redirects(request: Request,
             'unter „S3 Accounts" anlegen.</div>')
 
     use_bot_filter = bool(bot_filter)
-    per_link_bucket = bool(unique_bucket)
+    strat = (bucket_strategy or "").strip().lower()
+    if not strat:
+        strat = "unique" if unique_bucket else "shared"
+    if strat not in ("shared", "unique", "shuffled"):
+        strat = "shared"
+    per_link_bucket = strat == "unique"
+    shuffled = strat == "shuffled"
     region_per_bucket = per_link_bucket and region_was_random
+    pool_n = max(1, min(int(shuffle_pool_size or 5), 30)) if shuffled else 0
     total = len(valid) * count_per_target
     gen_uid = uid
+    label_suffix = ""
+    if shuffled:
+        label_suffix = f" — shuffled pool of {pool_n}"
+    elif per_link_bucket:
+        label_suffix = " — unique/link"
     job = job_manager.create(
         "s3_redirect_multi", gen_uid,
-        f"S3 Multi: {len(valid)} Targets × {count_per_target} = {total} Links",
+        f"S3 Multi: {len(valid)} Targets × {count_per_target} = {total} Links{label_suffix}",
         total=total, page_url="/redirects")
 
     def worker():
@@ -719,8 +773,27 @@ async def generate_s3_multi_redirects(request: Request,
 
             # Shared bucket über ALLE Targets (spart Setup-Zeit).
             # Wenn per_link_bucket=1 → jeder Link kriegt eigenen Bucket.
+            # Wenn shuffled → Pool von N Buckets, pro Link random gepickt.
             shared_bucket = None
-            if not per_link_bucket:
+            shuffle_pool = []
+            if shuffled:
+                pool_regions = (random.sample(
+                    POPULAR_AWS_REGIONS,
+                    min(pool_n, len(POPULAR_AWS_REGIONS)))
+                    if region_was_random else [region] * pool_n)
+                while len(pool_regions) < pool_n:
+                    pool_regions.append(random.choice(POPULAR_AWS_REGIONS))
+                for r in pool_regions[:pool_n]:
+                    try:
+                        b = _spawn_bucket(r)
+                        shuffle_pool.append((b, r))
+                        job.log_line(f"pool + bucket {b} ({r})")
+                    except Exception as e:
+                        job.log_line(f"pool bucket in {r} failed: {str(e)[:150]}")
+                if not shuffle_pool:
+                    job.finish("error", "Kein einziger Bucket im Pool erstellbar")
+                    return
+            elif not per_link_bucket:
                 shared_bucket = _spawn_bucket(region)
                 job.log_line(f"shared bucket über alle Targets: {shared_bucket}")
 
@@ -739,7 +812,9 @@ async def generate_s3_multi_redirects(request: Request,
                         job.finish("error", f"aborted bei Target {t_idx} nach {consecutive} errors")
                         return
 
-                    if per_link_bucket:
+                    if shuffled:
+                        bucket, this_region = random.choice(shuffle_pool)
+                    elif per_link_bucket:
                         this_region = (random.choice(POPULAR_AWS_REGIONS)
                                         if region_per_bucket else region)
                         try:
@@ -774,7 +849,9 @@ async def generate_s3_multi_redirects(request: Request,
             job.finish("error", str(e))
 
     threading.Thread(target=worker, daemon=True).start()
-    bucket_mode = "eigener Bucket pro Link" if per_link_bucket else "ein Shared-Bucket"
+    bucket_mode = ({"shuffled": f"Shuffled Pool von {pool_n} Buckets",
+                     "unique": "eigener Bucket pro Link",
+                     "shared": "ein Shared-Bucket"}.get(strat, "ein Shared-Bucket"))
     return HTMLResponse(
         f'<div class="alert alert-info">Job #{job.id} gestartet: {len(valid)} Targets '
         f'× {count_per_target} = {total} S3 Redirects ({bucket_mode}). '
