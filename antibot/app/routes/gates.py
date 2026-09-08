@@ -298,6 +298,61 @@ async def gate_delete(request: Request, gate_id: int):
 
 # ── Link management ────────────────────────────────────────
 
+@router.post("/admin/gates/bulk-generate-links", response_class=HTMLResponse)
+async def bulk_generate_links(request: Request,
+                                 count_per_gate: int = Form(10),
+                                 slug_length: int = Form(8)):
+    """Bulk: N Ready-Links pro ausgewähltem Gate generieren.
+    Rückgabe: kopierbare Textarea mit allen URLs über alle Gates —
+    genau der "5 Domains, 10 Links each, alles in einem"-Case."""
+    db = request.app.state.db
+    form = await request.form()
+    ids = [int(x) for x in form.getlist("gate_ids") if str(x).isdigit()]
+    if not ids:
+        return HTMLResponse('<div class="alert alert-warning">Keine Gates ausgewählt — '
+                             'oben in der Liste Checkboxen setzen.</div>')
+    n_per = max(1, min(int(count_per_gate or 10), 500))
+    slug_len = max(4, min(int(slug_length or 8), 24))
+    lines = []
+    total = 0
+    per_domain = []
+    for gid in ids:
+        g = db.get_gate(gid)
+        if not g:
+            per_domain.append((gid, "gate weg", 0))
+            continue
+        gd = dict(g)
+        host = gd["hostname"]
+        made = 0
+        for _ in range(n_per):
+            for _try in range(5):
+                slug = gen_slug(slug_len)
+                if not db.get_gate_link(gid, slug):
+                    db.add_gate_link(gid, slug)
+                    lines.append(f"https://{host}/go/{slug}")
+                    made += 1
+                    break
+        per_domain.append((gid, host, made))
+        total += made
+    per_dom_html = "".join(
+        f'<div style="font-size:11px;color:var(--fg2)">✓ '
+        f'<code>{escape(str(host))}</code>: <strong>{made}</strong> Links</div>'
+        for _gid, host, made in per_domain
+    )
+    return HTMLResponse(
+        f'<div class="card" style="margin-top:8px;background:#f0fff4">'
+        f'<h3>&#128279; {total} Ready-Links über {len(ids)} Domain(s) generiert</h3>'
+        f'{per_dom_html}'
+        f'<p class="muted" style="font-size:11px;margin:6px 0">'
+        f'Ein Klick markiert alles. Der Mailer hängt beim Versand '
+        f'<code>?ref=…</code> automatisch dran, das Gate reicht es ans Ziel weiter.</p>'
+        f'<textarea readonly rows="{min(len(lines)+1, 20)}" onclick="this.select()" '
+        f'style="width:100%;font-family:monospace;font-size:11px">'
+        + escape("\n".join(lines)) +
+        f'</textarea></div>'
+    )
+
+
 @router.post("/admin/gates/{gate_id}/links/generate", response_class=HTMLResponse)
 async def links_generate(request: Request, gate_id: int,
                           count: int = Form(10), slug_length: int = Form(8),

@@ -14,6 +14,30 @@
 </p>
 
 {% if gates %}
+<form id="bulk-gates-form" hx-post="/admin/gates/bulk-generate-links"
+      hx-target="#bulk-links-result" hx-swap="innerHTML">
+<div class="card" style="margin-bottom:12px;padding:10px 12px;border:2px solid var(--accent)">
+    <strong style="font-size:13px">&#128279; Bulk Ready-Links: N pro ausgewähltem Gate</strong>
+    <p class="muted" style="font-size:11px;margin:4px 0">
+        Checkbox pro Gate in der Liste setzen (oder „Alle" oben in der Tabelle),
+        Anzahl pro Gate wählen, absenden — alle URLs kommen als kopierbare Liste zurück.
+    </p>
+    <div style="display:flex;gap:12px;align-items:end;flex-wrap:wrap">
+        <label style="margin:0">Links pro Gate
+            <input type="number" name="count_per_gate" value="10" min="1" max="500"
+                   style="width:90px;margin:0;display:block">
+        </label>
+        <label style="margin:0">Slug-Länge
+            <input type="number" name="slug_length" value="8" min="4" max="24"
+                   style="width:80px;margin:0;display:block">
+        </label>
+        <button type="submit" class="btn btn-primary btn-sm">Links generieren für ausgewählte</button>
+        <span style="font-size:11px;color:var(--fg2)"
+              id="bulk-selected-count">0 ausgewählt</span>
+    </div>
+    <div id="bulk-links-result" style="margin-top:10px"></div>
+</div>
+
 <div class="card" style="margin-bottom:12px;padding:10px 12px">
     <strong style="font-size:13px">&#127774; CF-Wolke Bulk-Toggle für alle {{ gates|length }} Gates</strong>
     <p class="muted" style="font-size:11px;margin:4px 0">
@@ -41,6 +65,8 @@
 <table style="font-size:12px">
     <thead>
         <tr>
+            <th style="width:24px"><input type="checkbox" id="bulk-all"
+                onchange="var f=document.getElementById('bulk-gates-form');f.querySelectorAll('input[name=gate_ids]').forEach(c=>{c.checked=this.checked});document.getElementById('bulk-selected-count').textContent=f.querySelectorAll('input[name=gate_ids]:checked').length+' ausgewählt';"></th>
             <th>Hostname</th><th>Modus</th><th>Ziel</th><th>Links</th>
             <th>Aktiv</th><th></th>
         </tr>
@@ -48,6 +74,8 @@
     <tbody>
     {% for g in gates %}
     <tr>
+        <td><input type="checkbox" name="gate_ids" value="{{ g.id }}" form="bulk-gates-form"
+                   onchange="var f=document.getElementById('bulk-gates-form');document.getElementById('bulk-selected-count').textContent=f.querySelectorAll('input[name=gate_ids]:checked').length+' ausgewählt';"></td>
         <td style="font-family:monospace">{{ g.hostname }}</td>
         <td><span class="badge">{{ g.mode }}</span>
             <div class="muted" style="font-size:10px">{{ g.mode_label }}</div></td>
@@ -68,6 +96,7 @@
     {% endfor %}
     </tbody>
 </table>
+</form>
 {% else %}
 <div class="card">
     <p class="muted">Noch keine Gate angelegt. <a href="/admin/gates/new">Neue Gate anlegen →</a></p>
