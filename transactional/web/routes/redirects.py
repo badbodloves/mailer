@@ -938,18 +938,31 @@ async def add_redirect(request: Request, short_url: str = Form(""),
 
 
 @router.post("/redirects/bulk-add", response_class=HTMLResponse)
-async def bulk_add(request: Request, urls: str = Form("")):
+async def bulk_add(request: Request, urls: str = Form(""),
+                     pool_id: int = Form(0)):
     db = request.app.state.db
     uid = request.state.user["id"]
+    pool_id = max(0, int(pool_id or 0))
+    # Verifiziere dass der Pool wirklich dem User gehört (sonst könnte
+    # jemand mit gültiger Session in fremde Pools schreiben).
+    if pool_id:
+        pools = {int(dict(p)["id"]) for p in db.get_redirect_pools(uid)}
+        if pool_id not in pools:
+            return HTMLResponse(
+                '<div class="alert alert-danger">Pool nicht gefunden oder '
+                'gehört nicht dir.</div>'
+            )
     added = 0
     for line in urls.splitlines():
         url = line.strip()
         if url and (url.startswith("http://") or url.startswith("https://")):
-            db.add_redirect(url, '', uid)
+            db.add_redirect(url, '', uid, pool_id)
             added += 1
     if added:
+        pool_note = f" in Pool #{pool_id}" if pool_id else " (kein Pool)"
         return HTMLResponse(
-            f'<div class="alert alert-success">{added} redirect link(s) added. '
+            f'<div class="alert alert-success">{added} redirect link(s) added'
+            f'{pool_note}. '
             f'<a href="/redirects" style="color:var(--accent)">Reload page</a></div>'
         )
     return HTMLResponse(

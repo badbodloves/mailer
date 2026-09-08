@@ -399,7 +399,14 @@
             </div>
         </form>
     <form hx-post="/redirects/bulk-add" hx-target="#bulk-result" hx-swap="innerHTML" style="margin-top:12px">
-        <label>Bulk Add (one URL per line)</label>
+        <label>Pool (optional — leer = No Pool / global)</label>
+        <select name="pool_id" style="max-width:280px">
+            <option value="0">No Pool (global)</option>
+            {% for p in redirect_pools %}
+            <option value="{{ p.id }}">{{ p.name }}</option>
+            {% endfor %}
+        </select>
+        <label style="margin-top:8px">Bulk Add (one URL per line)</label>
         <textarea name="urls" rows="4" placeholder="https://g.co/kgs/abc123&#10;https://g.co/kgs/def456" style="font-family:monospace;font-size:12px"></textarea>
         <div style="margin-top:8px"><button class="btn btn-secondary btn-sm">Bulk Add</button></div>
     </form>
