@@ -997,7 +997,7 @@ async def pipeline_run(request: Request):
         # Klartext-URLs — der Mailer hängt `?ref=…` selber per _append_ref
         # dran, deshalb hier ohne. Gate-Redirect forward `?ref` an Ziel
         # (siehe /admin/domains/ref-forward-info).
-        lines = [f"https://{host}/gate/{slug}"
+        lines = [f"https://{host}/go/{slug}"
                  for host, slug in all_ready_links]
         ready_block = (
             f'<div class="card" style="margin-top:12px;background:#f0fff4">'
