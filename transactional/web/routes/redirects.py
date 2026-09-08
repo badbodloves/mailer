@@ -595,23 +595,39 @@ async def generate_s3_redirects(request: Request,
             shared_bucket = None
             shuffle_pool = []   # [(bucket, region), …] für strat=shuffled
             if shuffled:
-                # Baue Pool: N Buckets, jedes in einer random Region aus dem
-                # POPULAR-Set. Wenn User bestimmte Region gewählt hat, bleiben
-                # alle Buckets dort (Region-Wahl gewinnt).
                 pool_regions = (random.sample(
                     POPULAR_AWS_REGIONS,
                     min(pool_n, len(POPULAR_AWS_REGIONS)))
                     if region_was_random else [region] * pool_n)
-                # Falls User pool_n > len(POPULAR_AWS_REGIONS): auffüllen mit Wiederholung
                 while len(pool_regions) < pool_n:
                     pool_regions.append(random.choice(POPULAR_AWS_REGIONS))
-                for r in pool_regions[:pool_n]:
+                # Parallel bucket-setup — sequential wäre bei 500 Buckets
+                # ~17 min bevor der erste Upload passiert. Mit 10 Workern
+                # parallel schafft man 500 in ~1-2 min. AWS-Rate-Limit
+                # für CreateBucket ist 100 req/s per account, weit weg.
+                from concurrent.futures import ThreadPoolExecutor as _TPE
+                job.log_line(f"pool setup: {pool_n} buckets parallel (10 workers)…")
+                def _one_pool_bucket(r):
                     try:
-                        b = _spawn_bucket(r)
-                        shuffle_pool.append((b, r))
-                        job.log_line(f"pool + bucket {b} ({r})")
+                        return (r, _spawn_bucket(r), None)
                     except Exception as e:
-                        job.log_line(f"pool bucket in {r} failed: {str(e)[:150]}")
+                        return (r, None, str(e)[:180])
+                results = []
+                with _TPE(max_workers=10) as tpe:
+                    for i, res in enumerate(
+                            tpe.map(_one_pool_bucket, pool_regions[:pool_n]), 1):
+                        results.append(res)
+                        if i % 10 == 0 or i == pool_n:
+                            ok_cnt = sum(1 for _r, b, _e in results if b)
+                            job.log_line(f"pool {i}/{pool_n} — {ok_cnt} ok, {i - ok_cnt} fail")
+                        if job.cancelled():
+                            break
+                for r, b, err in results:
+                    if b:
+                        shuffle_pool.append((b, r))
+                    else:
+                        job.log_line(f"pool bucket in {r} failed: {err}")
+                job.log_line(f"pool ready: {len(shuffle_pool)}/{pool_n} buckets usable")
                 if not shuffle_pool:
                     job.finish("error", "Kein einziger Bucket im Pool erstellbar")
                     return
@@ -783,13 +799,29 @@ async def generate_s3_multi_redirects(request: Request,
                     if region_was_random else [region] * pool_n)
                 while len(pool_regions) < pool_n:
                     pool_regions.append(random.choice(POPULAR_AWS_REGIONS))
-                for r in pool_regions[:pool_n]:
+                from concurrent.futures import ThreadPoolExecutor as _TPE
+                job.log_line(f"pool setup: {pool_n} buckets parallel (10 workers)…")
+                def _one_pool_bucket(r):
                     try:
-                        b = _spawn_bucket(r)
-                        shuffle_pool.append((b, r))
-                        job.log_line(f"pool + bucket {b} ({r})")
+                        return (r, _spawn_bucket(r), None)
                     except Exception as e:
-                        job.log_line(f"pool bucket in {r} failed: {str(e)[:150]}")
+                        return (r, None, str(e)[:180])
+                results = []
+                with _TPE(max_workers=10) as tpe:
+                    for i, res in enumerate(
+                            tpe.map(_one_pool_bucket, pool_regions[:pool_n]), 1):
+                        results.append(res)
+                        if i % 10 == 0 or i == pool_n:
+                            ok_cnt = sum(1 for _r, b, _e in results if b)
+                            job.log_line(f"pool {i}/{pool_n} — {ok_cnt} ok, {i - ok_cnt} fail")
+                        if job.cancelled():
+                            break
+                for r, b, err in results:
+                    if b:
+                        shuffle_pool.append((b, r))
+                    else:
+                        job.log_line(f"pool bucket in {r} failed: {err}")
+                job.log_line(f"pool ready: {len(shuffle_pool)}/{pool_n} buckets usable")
                 if not shuffle_pool:
                     job.finish("error", "Kein einziger Bucket im Pool erstellbar")
                     return
