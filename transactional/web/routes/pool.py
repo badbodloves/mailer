@@ -211,6 +211,16 @@ async def pool_build(request: Request,
         return HTMLResponse('<div class="alert alert-warning">Keine Source-Logos '
                              'gefunden — leg welche unter /logos an.</div>')
 
+    # UX-Fix: wenn Source aus einer Group kommt aber Target nicht explizit
+    # gesetzt ist, geht der Ziel-Ordner automatisch in dieselbe Group.
+    # Sonst hat man den klassischen Fall "Source=Pool2, Target leer=global,
+    # Kampagne mit logo_group_id=2 findet 0 Varianten und der User denkt
+    # 'er hat wieder den ersten Pool genommen'."
+    if source_mode == "group" and group_id and not target_group_id:
+        target_group_id = group_id
+        logger.info("pool_build: target_group_id auto-set auf %d (source group)",
+                     group_id)
+
     total_variants = max(1, min(int(total_variants or 1), 5000))
     pct_cid = max(0, min(100, int(pct_cid or 0)))
     pct_cloudinary = max(0, min(100, int(pct_cloudinary or 0)))

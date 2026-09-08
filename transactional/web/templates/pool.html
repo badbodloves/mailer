@@ -90,15 +90,16 @@
 
                 <label style="margin-top:12px">Ziel-Group für CID-Varianten</label>
                 <select name="target_group_id">
-                    <option value="0">— global (nur Kampagnen ohne Group) —</option>
+                    <option value="0">— auto (folgt der Source-Group) —</option>
                     {% for g in groups %}
                     <option value="{{ g.id }}">{{ g.name }}</option>
                     {% endfor %}
                 </select>
                 <div class="form-help">
-                    Wenn deine Kampagne eine Logo-Group nutzt (via <code>logo_group_id</code>),
-                    hier die gleiche Group wählen — sonst finden die CID-Varianten die
-                    Kampagne nicht.
+                    <strong>auto</strong> (Default): wenn Source aus einer Group kommt,
+                    landen die CID-Varianten automatisch in derselben Group — dann findet
+                    die Kampagne mit <code>logo_group_id=X</code> sie sofort.<br>
+                    Nur ändern wenn du bewusst Source aus Group A in Group B ablegen willst.
                 </div>
             </div>
 

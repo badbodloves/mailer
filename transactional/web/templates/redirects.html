@@ -269,6 +269,71 @@
             <div style="margin-top:10px"><button class="btn btn-primary" {% if not s3_configured %}disabled{% endif %}>Generate S3 Links</button></div>
         </form>
         <div id="s3-result" style="margin-top:10px"></div>
+
+        <details style="margin-top:16px;padding-top:12px;border-top:1px solid var(--border-light)">
+            <summary style="cursor:pointer;font-weight:600;font-size:14px">
+                &#128260; Multi-Target Bulk: mehrere Ziele in einem Rutsch
+            </summary>
+            <p class="muted" style="font-size:12px;margin:8px 0">
+                Textarea mit einer Ziel-URL pro Zeile — der Mailer arbeitet die
+                nacheinander ab. Wenn <em>Unique bucket per link</em> aus ist,
+                teilen sich alle Targets EINEN Bucket (spart AWS-Setup-Zeit).
+                Ein Job im Widget rechts unten, cancelable.
+            </p>
+            <form hx-post="/redirects/generate-s3-multi" hx-target="#s3-multi-result" hx-swap="innerHTML">
+                {% if s3_accounts %}
+                <label>S3 Account</label>
+                <select name="s3_account_id">
+                    {% for a in s3_accounts %}
+                    <option value="{{ a.id }}" {{ 'selected' if a.is_primary }}>{{ a.name }}{{ ' (Primary)' if a.is_primary }} — {{ a.region }}</option>
+                    {% endfor %}
+                </select>
+                {% endif %}
+                <label>Pool (optional)</label>
+                <select name="pool_id">
+                    <option value="0">No Pool (global)</option>
+                    {% for p in redirect_pools %}
+                    <option value="{{ p.id }}">{{ p.name }}</option>
+                    {% endfor %}
+                </select>
+                <label>Target URLs (eine pro Zeile)</label>
+                <textarea name="targets" rows="6" style="font-family:monospace;font-size:12px"
+                          placeholder="https://landing-a.tld/&#10;https://landing-b.tld/&#10;https://landing-c.tld/x"
+                          required></textarea>
+                <div class="form-row">
+                    <div>
+                        <label>Links pro Target</label>
+                        <input name="count_per_target" type="number" value="50" min="1" max="5000">
+                    </div>
+                    <div>
+                        <label>Tag (optional)</label>
+                        <input name="tag" placeholder="campaign-x" maxlength="16">
+                    </div>
+                </div>
+                <label style="margin-top:8px">Region</label>
+                <select name="region">
+                    <option value="random" selected>&#127922; Random — popular regions only</option>
+                    {% for r in aws_regions %}
+                    <option value="{{ r }}">{{ r }}</option>
+                    {% endfor %}
+                </select>
+                <label style="display:flex;align-items:center;gap:6px;margin-top:8px;font-weight:400;cursor:pointer">
+                    <input type="checkbox" name="bot_filter" value="1" checked style="margin:0;width:auto">
+                    <span>Bot Filter</span>
+                </label>
+                <label style="display:flex;align-items:center;gap:6px;margin-top:6px;font-weight:400;cursor:pointer">
+                    <input type="checkbox" name="unique_bucket" value="1" style="margin:0;width:auto">
+                    <span>Unique bucket per link</span>
+                    <span style="font-size:11px;color:var(--red)">&#9888; ohne = ein Shared-Bucket über alle Targets (schneller)</span>
+                </label>
+                <div style="margin-top:10px">
+                    <button class="btn btn-primary" {% if not s3_configured %}disabled{% endif %}>
+                        Generate S3 Multi-Target
+                    </button>
+                </div>
+            </form>
+            <div id="s3-multi-result" style="margin-top:10px"></div>
+        </details>
     </div>
 </div>
 

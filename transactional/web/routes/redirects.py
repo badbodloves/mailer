@@ -632,6 +632,156 @@ async def generate_s3_redirects(request: Request,
     )
 
 
+@router.post("/redirects/generate-s3-multi", response_class=HTMLResponse)
+async def generate_s3_multi_redirects(request: Request,
+                                        targets: str = Form(""),
+                                        count_per_target: int = Form(50),
+                                        tag: str = Form(""),
+                                        region: str = Form("random"),
+                                        pool_id: int = Form(0),
+                                        bot_filter: str = Form(""),
+                                        unique_bucket: str = Form(""),
+                                        s3_account_id: int = Form(0)):
+    """Wie generate_s3_redirects, aber für mehrere Targets in einer
+    Textarea. Jedes Target kriegt N Links. Buckets werden über alle
+    Targets geteilt (bzw. per-link neue wenn unique_bucket gesetzt) —
+    spart AWS-Setup-Zeit. Alles in einem Job im Widget rechts unten."""
+    lines = [ln.strip() for ln in targets.splitlines() if ln.strip()]
+    valid = [t for t in lines
+             if t.startswith("http://") or t.startswith("https://")]
+    if not valid:
+        return HTMLResponse('<div class="alert alert-warning">Keine gültigen URLs '
+                             '(jede muss mit http:// oder https:// anfangen).</div>')
+
+    db = request.app.state.db
+    uid = request.state.user["id"]
+    count_per_target = max(1, min(int(count_per_target or 1), 5000))
+    region_override = (region or "").strip().lower()
+    region_was_random = region_override in ("random", "")
+    if region_was_random:
+        chosen_region = random.choice(POPULAR_AWS_REGIONS)
+    elif region_override not in AWS_REGIONS:
+        return HTMLResponse(f'<div class="alert alert-warning">Unknown region: {escape(region_override)}</div>')
+    else:
+        chosen_region = region_override
+
+    acc = _resolve_s3_account(db, uid, int(s3_account_id or 0),
+                                region_override=chosen_region)
+    access_key = acc["access_key"]
+    secret_key = acc["secret_key"]
+    bucket_prefix = acc["bucket_prefix"]
+    proxy = acc["proxy_val"]
+    region = acc["region"]
+    if not access_key or not secret_key:
+        return HTMLResponse(
+            '<div class="alert alert-warning">AWS credentials fehlen — '
+            'unter „S3 Accounts" anlegen.</div>')
+
+    use_bot_filter = bool(bot_filter)
+    per_link_bucket = bool(unique_bucket)
+    region_per_bucket = per_link_bucket and region_was_random
+    total = len(valid) * count_per_target
+    gen_uid = uid
+    job = job_manager.create(
+        "s3_redirect_multi", gen_uid,
+        f"S3 Multi: {len(valid)} Targets × {count_per_target} = {total} Links",
+        total=total, page_url="/redirects")
+
+    def worker():
+        consecutive = 0
+        try:
+            from mailer.s3_redirect import (_new_bucket_name, make_s3_client,
+                                              create_public_bucket, _redirect_html,
+                                              _random_suffix)
+            s3_clients = {}
+            def _client_for(r: str):
+                if r not in s3_clients:
+                    s3_clients[r] = make_s3_client(
+                        access_key, secret_key, r, proxy=proxy)
+                return s3_clients[r]
+
+            def _spawn_bucket(r: str):
+                cli = _client_for(r)
+                b = _new_bucket_name(bucket_prefix, tag)
+                for attempt in range(3):
+                    try:
+                        create_public_bucket(cli, b, r)
+                        return b
+                    except cli.exceptions.BucketAlreadyOwnedByYou:
+                        return b
+                    except cli.exceptions.BucketAlreadyExists:
+                        b = _new_bucket_name(bucket_prefix, tag)
+                    except Exception as e:
+                        if attempt == 2:
+                            raise
+                        b = _new_bucket_name(bucket_prefix, tag)
+                return b
+
+            # Shared bucket über ALLE Targets (spart Setup-Zeit).
+            # Wenn per_link_bucket=1 → jeder Link kriegt eigenen Bucket.
+            shared_bucket = None
+            if not per_link_bucket:
+                shared_bucket = _spawn_bucket(region)
+                job.log_line(f"shared bucket über alle Targets: {shared_bucket}")
+
+            for t_idx, target in enumerate(valid, start=1):
+                if job.cancelled():
+                    job.log_line(f"cancel nach Target {t_idx-1}/{len(valid)}")
+                    break
+                body = _redirect_html(target, bot_filter=use_bot_filter).encode("utf-8")
+                job.log_line(f"→ Target {t_idx}/{len(valid)}: {target[:60]}")
+
+                for i in range(count_per_target):
+                    if job.cancelled():
+                        break
+                    if consecutive >= CONSECUTIVE_ERROR_LIMIT:
+                        job.log_line(f"abort — {consecutive} consecutive errors")
+                        job.finish("error", f"aborted bei Target {t_idx} nach {consecutive} errors")
+                        return
+
+                    if per_link_bucket:
+                        this_region = (random.choice(POPULAR_AWS_REGIONS)
+                                        if region_per_bucket else region)
+                        try:
+                            bucket = _spawn_bucket(this_region)
+                        except Exception as e:
+                            consecutive += 1
+                            job.tick(err=1)
+                            job.log_line(f"bucket for T{t_idx}#{i+1}: {str(e)[:150]}")
+                            continue
+                    else:
+                        bucket = shared_bucket
+                        this_region = region
+                    key = _random_suffix(10)
+                    try:
+                        cli = _client_for(this_region)
+                        cli.put_object(
+                            Bucket=bucket, Key=key, Body=body,
+                            ContentType="text/html; charset=utf-8",
+                            CacheControl="no-cache",
+                        )
+                        url = f"https://s3.{this_region}.amazonaws.com/{bucket}/{key}"
+                        db.add_redirect(url, target, gen_uid, pool_id)
+                        job.tick(ok=1)
+                        consecutive = 0
+                    except Exception as e:
+                        consecutive += 1
+                        job.tick(err=1)
+                        job.log_line(f"T{t_idx}#{i+1}: {str(e)[:150]}")
+            job.finish("done")
+        except Exception as e:
+            logger.error("S3 multi-target gen error: %s", e, exc_info=True)
+            job.finish("error", str(e))
+
+    threading.Thread(target=worker, daemon=True).start()
+    bucket_mode = "eigener Bucket pro Link" if per_link_bucket else "ein Shared-Bucket"
+    return HTMLResponse(
+        f'<div class="alert alert-info">Job #{job.id} gestartet: {len(valid)} Targets '
+        f'× {count_per_target} = {total} S3 Redirects ({bucket_mode}). '
+        f'Live-Progress + Abbrechen im Widget rechts unten.</div>'
+    )
+
+
 @router.get("/redirects/s3-status", response_class=HTMLResponse)
 async def s3_gen_status(request: Request):
     p = _s3_progress
