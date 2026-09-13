@@ -278,8 +278,10 @@
                         <option value="{{ k }}" {% if k == 'medium' %}selected{% endif %}>{{ p.label }}</option>
                         {% endfor %}
                     </select>
-                    <label>Ziel-URL (für alle neuen Gates)</label>
-                    <input name="target_url" placeholder="https://real-landing.de/x" required>
+                    <label>Ziel-URL(s) (für alle neuen Gates — mehrere = pro Klick random)</label>
+                    <textarea name="target_url" rows="3" required
+                              placeholder="https://real-landing.de/x&#10;https://backup-landing.de/y"
+                              style="font-family:monospace;font-size:12px"></textarea>
                     <label>Ready-Links pro Gate</label>
                     <input name="initial_links" type="number" value="10" min="0" max="500">
                 </div>

@@ -57,8 +57,10 @@
 
         <fieldset>
             <legend>Ziel &amp; Branding</legend>
-            <label>Ziel-URL (Fallback für alle Links dieser Gate)</label>
-            <input name="target_url" placeholder="https://real-landing.de/x" required>
+            <label>Ziel-URL(s) — eine pro Zeile, mehrere = random pro Klick</label>
+            <textarea name="target_url" rows="3" required
+                      placeholder="https://real-landing.de/x&#10;https://real-landing.de/y  (optional — random 50/50)"
+                      style="font-family:monospace;font-size:12px"></textarea>
             <label>Wartetext (Challenge-Seite)</label>
             <input name="brand_text" placeholder="Sicherheitsprüfung läuft …">
             <label>Primary Color</label>

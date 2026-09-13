@@ -60,9 +60,14 @@
                 {% endfor %}
             </select>
 
-            <label>Ziel-URL (Fallback für Links ohne target_override)</label>
-            <input name="target_url" value="{{ gate.target_url }}">
-            <div class="form-help">Ändern → alle bestehenden Links leiten sofort auf's neue Ziel um. Kein Regenerieren nötig.</div>
+            <label>Ziel-URL(s) (Fallback für Links ohne target_override)</label>
+            <textarea name="target_url" rows="3" style="font-family:monospace;font-size:12px">{{ gate.target_url }}</textarea>
+            <div class="form-help">
+                Eine URL = alle Klicks landen dort. <strong>Mehrere URLs</strong>
+                (eine pro Zeile oder komma-getrennt) = <strong>pro Klick random gepickt</strong>
+                (50/50 bei zwei, 25/25/25/25 bei vier usw.). Ändern → wirkt sofort auf
+                alle bestehenden Ready-Links, kein Regenerieren nötig.
+            </div>
 
             <label>Wartetext</label>
             <input name="brand_text" value="{{ gate.brand_text }}">

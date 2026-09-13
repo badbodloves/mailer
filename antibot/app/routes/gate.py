@@ -1,6 +1,7 @@
 """Public gate endpoints — the actual bot filter surface."""
 import time
 import json
+import random
 import logging
 import hashlib
 import threading
@@ -26,6 +27,22 @@ VERIFY_COOKIE = "abo_verified"
 _REF_PARAM_WHITELIST = ("ref", "u", "utm_source", "utm_medium",
                          "utm_campaign", "utm_content", "utm_id",
                          "utm_term", "sub", "sid", "aff")
+
+
+def _pick_target(raw: str) -> str:
+    """Multi-Target-Rotation: wenn target_url oder target_override mehrere
+    URLs enthält (durch Newline / Komma / Semikolon getrennt), random eine
+    picken. Single-URL bleibt unverändert."""
+    if not raw:
+        return ""
+    # trennt an \n, \r, komma, semikolon — leere lines und whitespace-only weg
+    import re as _re
+    parts = [p.strip() for p in _re.split(r"[\r\n,;]+", raw) if p.strip()]
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return parts[0]
+    return random.choice(parts)
 
 
 def _forward_ref_params(target: str, request: Request) -> str:
@@ -166,9 +183,9 @@ async def gate_entry(request: Request, param: str):
     if payload:
         target = payload.get("t") or ""
     elif link_row:
-        target = link_row.get("target_override") or gate.get("target_url") or ""
+        target = _pick_target(link_row.get("target_override") or gate.get("target_url") or "")
     if not target:
-        target = cfg.get("default_target", "")
+        target = _pick_target(cfg.get("default_target", ""))
     if not target:
         return PlainTextResponse("no target configured", status_code=500)
 
@@ -295,9 +312,9 @@ async def verify(request: Request,
     if payload:
         target = payload.get("t") or ""
     elif link_row:
-        target = link_row.get("target_override") or gate.get("target_url") or ""
+        target = _pick_target(link_row.get("target_override") or gate.get("target_url") or "")
     if not target:
-        target = cfg.get("default_target", "")
+        target = _pick_target(cfg.get("default_target", ""))
     if not target:
         return PlainTextResponse("no target", status_code=400)
 

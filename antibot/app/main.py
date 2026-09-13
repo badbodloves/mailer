@@ -49,12 +49,15 @@ class AuthMiddleware(BaseHTTPMiddleware):
             request.state.admin = admin_row
             return await call_next(request)
 
-        # root
+        # root — kein Admin-Redirect. Wer zufällig auf guard.example.com/
+        # landet soll nicht sehen dass da ein Login lauert. Ausnahme:
+        # Setup ist noch nicht durchgelaufen, dann muss man dorthin.
         if path == "/":
             cfg = db.get_config()
             if db.admin_count() == 0 or cfg.get("setup_done") != "1":
                 return RedirectResponse("/setup", status_code=303)
-            return RedirectResponse("/admin", status_code=303)
+            from fastapi.responses import PlainTextResponse
+            return PlainTextResponse("not found", status_code=404)
 
         return await call_next(request)
 
