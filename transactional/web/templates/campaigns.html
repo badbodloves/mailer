@@ -70,6 +70,19 @@
                             <option value="0">All Redirects</option>
                             {% for rp in redirect_pools %}<option value="{{ rp.id }}" {{ 'selected' if rp.id == c.redirect_pool_id }}>{{ rp.name }} ({{ rp.count }})</option>{% endfor %}
                         </select>
+                        <label>Media Pool (Logo-Group)</label>
+                        <select name="logo_group_id">
+                            <option value="0" {{ 'selected' if not c.get('logo_group_id') }}>— aus Template / kein Filter —</option>
+                            {% for g in logo_groups %}
+                            <option value="{{ g.id }}" {{ 'selected' if c.get('logo_group_id') == g.id }}>{{ g.name }}</option>
+                            {% endfor %}
+                        </select>
+                        <div class="form-help">
+                            Welcher Media-Pool (CID + Cloudinary + S3) versorgt diese Kampagne.
+                            Für parallele Kampagnen: Group A hier, Group B in der anderen Kampagne
+                            → keine gemischten Assets. Leer = Template-Default.
+                            Pools werden in <a href="/pool" style="color:var(--accent)">/pool</a> gebaut.
+                        </div>
                         <label>Schedule (HH:MM)</label>
                         <input name="schedule_time" value="{{ c.schedule_time or '' }}" placeholder="14:30">
                         <div class="form-help">Auto-start at this time. Empty = manual start.</div>

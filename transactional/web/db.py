@@ -332,6 +332,10 @@ class TransDB:
             ("trans_campaigns", "schedule_time", "''"),
             ("trans_campaigns", "template_id", "0"),
             ("trans_campaigns", "redirect_pool_id", "0"),
+            # Multi-Pool: welche Logo-Group liefert Assets (CID+Cloudinary+S3).
+            # 0 = "Template-Default nehmen" (backwards-compat). >0 = expliziter
+            # Override → Kampagne A und B können parallel mit A/B laufen.
+            ("trans_campaigns", "logo_group_id", "0"),
             # (Auto-Mode/Watchdog/Bandit entfernt — Live-HTML-Gen macht
             # das Fingerprint-Problem obsolet; siehe Meta-Rotation unten)
             # Assembly-Mode + Anti-FP-Rates pro Kampagne

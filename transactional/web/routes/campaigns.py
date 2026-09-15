@@ -194,11 +194,13 @@ async def campaigns_page(request: Request):
     pools = [dict(p, stats=db.pool_stats(p["id"])) for p in db.get_pools(uid)]
     templates = [dict(t) for t in db.get_templates(uid)]
     redirect_pools = [dict(p, count=db.get_redirect_pool_count(p["id"])) for p in db.get_redirect_pools(uid)]
+    logo_groups = [dict(g) for g in db.get_logo_groups(uid)]
     return request.app.state.templates.TemplateResponse(request, "campaigns.html", {
         "active": "campaigns", "campaigns": campaigns,
         "smtp_lists": smtp_lists, "lead_lists": lead_lists,
         "pools": pools, "templates": templates,
-        "redirect_pools": redirect_pools, "db": db,
+        "redirect_pools": redirect_pools,
+        "logo_groups": logo_groups, "db": db,
     })
 
 
@@ -261,6 +263,7 @@ async def save_campaign(request: Request, cid: int,
                         lead_list_id: int = Form(0),
                         template_id: int = Form(0),
                         redirect_pool_id: int = Form(0),
+                        logo_group_id: int = Form(-1),
                         schedule_time: str = Form(""),
                         assembly_mode_enabled: int = Form(0),
                         antifp_passthrough_rate: float = Form(0.02),
@@ -293,6 +296,9 @@ async def save_campaign(request: Request, cid: int,
                "auto_refresh_every": max(0, int(auto_refresh_every or 0)),
                "auto_refresh_variants": max(1, int(auto_refresh_variants or 1)),
                "auto_refresh_cid_weight": max(0.0, float(auto_refresh_cid_weight or 0))}
+    # -1 = "inherit from template" (Default). >=0 = expliziter Override.
+    if logo_group_id >= 0:
+        updates["logo_group_id"] = int(logo_group_id)
     if smtp_list_id:
         updates["smtp_list_id"] = smtp_list_id
     if lead_list_id:
@@ -1225,7 +1231,13 @@ def _run_campaign(db, cid: int):
         if cfg.get("image_enabled"):
             import glob
             from .logos import VARIANT_DIR, UPLOAD_DIR, _group_variant_dir, _resolve_path as _resolve_logo
-            if campaign_template_id:
+            # Campaign-Level Override gewinnt über Template-Default. So
+            # kann eine Kampagne den Media-Pool wählen ohne dass fürs
+            # Template ein Fork nötig wäre (Multi-Pool-Use-Case).
+            camp_group = int(camp.get("logo_group_id") or 0)
+            if camp_group:
+                logo_group_id = camp_group
+            elif campaign_template_id:
                 tpl_row = db.get_template(campaign_template_id)
                 if tpl_row:
                     logo_group_id = dict(tpl_row).get("logo_group_id", 0) or 0
