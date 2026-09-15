@@ -22,19 +22,73 @@
     </p>
 </div>
 
-<div class="card" style="margin-bottom:12px;border:2px solid var(--red)">
-    <h3>&#10005; Pool leeren</h3>
-    <p class="muted" style="font-size:12px">
-        Löscht alle CID-Varianten (Files) + alle Cloudinary-/S3-DB-Referenzen. Die
-        Remote-Assets bei Cloudinary/AWS bleiben liegen (kosten quasi nix — kannst du
-        über <a href="/s3-logos" style="color:var(--accent)">/s3-logos → Alle Buckets löschen</a>
-        wirklich entsorgen).
+<div class="card" style="margin-bottom:12px">
+    <h3>&#128193; Multi-Pool Übersicht (pro Logo-Gruppe)</h3>
+    <p class="muted" style="font-size:12px;margin:0 0 8px">
+        Jede Logo-Gruppe ist ein <strong>separater Media-Pool</strong>. Kampagnen mit
+        <code>logo_group_id=X</code> holen sich CID+Cloudinary+S3 <em>nur aus Group X</em>.
+        So kann eine Kampagne mit Pool A parallel zu einer Kampagne mit Pool B laufen
+        ohne dass die Assets sich mischen.
     </p>
-    <form hx-post="/pool/clear" hx-target="#clear-result" hx-swap="innerHTML"
-          hx-confirm="Alle Media-Assets (CID + Cloudinary + S3 DB-refs) löschen?"
-          style="margin-top:8px">
-        <button class="btn btn-danger btn-sm">Pool komplett leeren</button>
-    </form>
+    <table style="font-size:12px;width:auto">
+        <thead>
+            <tr><th>Group</th><th>CID</th><th>Cloudinary</th><th>S3</th>
+                <th>Total</th><th></th></tr>
+        </thead>
+        <tbody>
+            {% for g in groups %}
+            {% set gs = group_stats.get(g.id, {'cid':0,'cloudinary':0,'s3':0,'total':0}) %}
+            <tr>
+                <td><strong>{{ g.name }}</strong>
+                    <span style="color:var(--fg3);font-size:10px">#{{ g.id }}</span></td>
+                <td>{{ gs.cid }}</td>
+                <td>{{ gs.cloudinary }}</td>
+                <td>{{ gs.s3 }}</td>
+                <td><span class="badge {{ 'badge-info' if gs.total else '' }}">{{ gs.total }}</span></td>
+                <td>
+                    <button type="button" class="btn btn-danger btn-xs"
+                            hx-post="/pool/clear"
+                            hx-vals='{"group_id":"{{ g.id }}"}'
+                            hx-target="#clear-result" hx-swap="innerHTML"
+                            hx-confirm="Pool „{{ g.name }}" komplett leeren?">
+                        &#10005; leeren
+                    </button>
+                </td>
+            </tr>
+            {% endfor %}
+            {% set gs0 = group_stats.get(0, {'cid':0,'cloudinary':0,'s3':0,'total':0}) %}
+            <tr style="border-top:2px solid var(--border)">
+                <td><em style="color:var(--fg2)">— global / ohne Group</em></td>
+                <td>{{ gs0.cid }}</td>
+                <td>{{ gs0.cloudinary }}</td>
+                <td>{{ gs0.s3 }}</td>
+                <td><span class="badge {{ 'badge-info' if gs0.total else '' }}">{{ gs0.total }}</span></td>
+                <td>
+                    <button type="button" class="btn btn-danger btn-xs"
+                            hx-post="/pool/clear"
+                            hx-vals='{"group_id":"0"}'
+                            hx-target="#clear-result" hx-swap="innerHTML"
+                            hx-confirm="Nur globalen Pool (ohne Group-Zuordnung) leeren?">
+                        &#10005; leeren
+                    </button>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+    <div style="margin-top:8px;font-size:11px">
+        <button type="button" class="btn btn-danger btn-xs"
+                hx-post="/pool/clear" hx-vals='{"group_id":"-1"}'
+                hx-target="#clear-result" hx-swap="innerHTML"
+                hx-confirm="ALLE Pools über ALLE Groups leeren?">
+            &#10005; komplett alles leeren (alle Groups)
+        </button>
+        {% if not groups %}
+        <span style="color:var(--fg2);margin-left:10px">
+            &#9432; Für Multi-Pool: unter <a href="/logos" style="color:var(--accent)">/logos</a>
+            Logo-Gruppen anlegen (eine pro Kampagne).
+        </span>
+        {% endif %}
+    </div>
     <div id="clear-result" style="margin-top:8px"></div>
 </div>
 

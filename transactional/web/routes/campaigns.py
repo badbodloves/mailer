@@ -1280,7 +1280,14 @@ def _run_campaign(db, cid: int):
                     if gd.get("cdn_urls_json"):
                         logo_cdn_urls.extend(_json.loads(gd["cdn_urls_json"]))
             try:
-                pool_urls = db.get_all_cdn_urls(uid)
+                # Multi-Pool: wenn Kampagne eine logo_group_id hat, nur
+                # die Uploads dieser Group nehmen — sonst würden Pool-A
+                # und Pool-B beide gemischt an alle Kampagnen gehen.
+                # None = alle (backwards-compat für alte Kampagnen ohne
+                # Group und für Uploads die vor dem Multi-Pool-Feature
+                # gemacht wurden — die haben group_id=0).
+                pool_group = logo_group_id if logo_group_id else None
+                pool_urls = db.get_all_cdn_urls(uid, group_id=pool_group)
                 if pool_urls:
                     logo_cdn_urls.extend(pool_urls)
             except Exception as e:
@@ -1689,9 +1696,12 @@ def _run_campaign(db, cid: int):
                     def _on_cdn_url(url, bucket=None, key=None, account_id=None):
                         try:
                             if bucket is not None:
-                                # S3
-                                upload_id = db.add_s3_upload(account_id or 0,
-                                                              "auto-refresh", uid)
+                                # S3 — group_id folgt der Kampagne, sonst
+                                # würde der auto-refresh-Upload beim
+                                # nächsten Cycle vom Pool-Filter aussortiert
+                                upload_id = db.add_s3_upload(
+                                    account_id or 0, "auto-refresh", uid,
+                                    group_id=logo_group_id or 0)
                                 db.add_s3_link(upload_id, url, bucket, key or "")
                             # Live in den Pool zu adden ist dank Live-Query in
                             # db.get_all_cdn_urls automatisch. logo_cdn_urls

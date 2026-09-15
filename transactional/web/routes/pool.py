@@ -94,7 +94,7 @@ def _collect_sources(db, uid: int, source_mode: str, group_id: int,
 
 
 def _pool_stats(db, uid: int) -> dict:
-    """Aktuelle Zahlen für die Übersichts-Karte."""
+    """Gesamtsummen für den Header-Badge."""
     from .logos import VARIANT_DIR
     cid_count = 0
     if os.path.isdir(VARIANT_DIR):
@@ -112,6 +112,44 @@ def _pool_stats(db, uid: int) -> dict:
     }
 
 
+def _group_stats(db, uid: int, groups: list) -> dict:
+    """Pro Group: {group_id: {"cid": N, "cloudinary": N, "s3": N, "total": N}}.
+    Group-ID 0 = "global" (Uploads ohne explizite Group-Zuordnung)."""
+    from .logos import _group_variant_dir, VARIANT_DIR
+    cdn_by_group = db.get_cdn_stats_by_group(uid)
+    out = {}
+    # CID pro Group (Files im group_X/ Subdir)
+    for g in groups:
+        gid = g["id"]
+        gdir = _group_variant_dir(gid)
+        cid_n = 0
+        if os.path.isdir(gdir):
+            cid_n = sum(1 for f in os.listdir(gdir)
+                         if os.path.isfile(os.path.join(gdir, f))
+                         and not f.startswith("."))
+        cdn = cdn_by_group.get(gid, {"cloudinary": 0, "s3": 0})
+        out[gid] = {
+            "cid": cid_n,
+            "cloudinary": cdn["cloudinary"],
+            "s3": cdn["s3"],
+            "total": cid_n + cdn["cloudinary"] + cdn["s3"],
+        }
+    # Global (group_id=0): CID-Files direkt in VARIANT_DIR (nicht in Subdirs)
+    global_cid = 0
+    if os.path.isdir(VARIANT_DIR):
+        global_cid = sum(1 for f in os.listdir(VARIANT_DIR)
+                         if os.path.isfile(os.path.join(VARIANT_DIR, f))
+                         and not f.startswith("."))
+    global_cdn = cdn_by_group.get(0, {"cloudinary": 0, "s3": 0})
+    out[0] = {
+        "cid": global_cid,
+        "cloudinary": global_cdn["cloudinary"],
+        "s3": global_cdn["s3"],
+        "total": global_cid + global_cdn["cloudinary"] + global_cdn["s3"],
+    }
+    return out
+
+
 @router.get("/pool", response_class=HTMLResponse)
 async def pool_page(request: Request):
     db = request.app.state.db
@@ -124,6 +162,7 @@ async def pool_page(request: Request):
     proxies = [dict(p) for p in db.get_proxies(uid)]
     s3_accounts = [dict(a) for a in db.get_s3_accounts(uid)]
     stats = _pool_stats(db, uid)
+    group_stats = _group_stats(db, uid, groups)
     cloudinary_ready = bool(cfg.get("cloudinary_cloud_name")
                              and cfg.get("cloudinary_api_key")
                              and cfg.get("cloudinary_api_secret"))
@@ -131,6 +170,7 @@ async def pool_page(request: Request):
         "active": "pool",
         "logos": logos,
         "groups": groups,
+        "group_stats": group_stats,
         "proxies": proxies,
         "s3_accounts": s3_accounts,
         "stats": stats,
@@ -139,41 +179,71 @@ async def pool_page(request: Request):
 
 
 @router.post("/pool/clear", response_class=HTMLResponse)
-async def pool_clear(request: Request):
-    """Reißt den kompletten Media-Pool ab (CID variants im FS, Cloudinary+
-    S3-DB-Referenzen). Remote-Assets bleiben liegen — kann man später
-    via S3 Logos → „Alle Buckets löschen" wirklich entsorgen."""
+async def pool_clear(request: Request,
+                       group_id: int = Form(-1)):
+    """Reißt den Media-Pool ab. group_id=-1 (Default) → ALLES weg;
+    group_id=0 → nur globale/unassigned Uploads; group_id>0 → nur diese
+    Group. Remote-Assets bleiben liegen."""
     db = request.app.state.db
     uid = request.state.user["id"]
-    from .logos import VARIANT_DIR
+    from .logos import VARIANT_DIR, _group_variant_dir
     import shutil
 
+    only_group = None if int(group_id) < 0 else int(group_id)
+    if only_group is None:
+        scope_label = "kompletter Pool"
+    elif only_group == 0:
+        scope_label = "Pool global"
+    else:
+        scope_label = f"Pool Group #{only_group}"
+
     job = job_manager.create(
-        "pool_clear", uid, "Media-Pool leeren", total=3, page_url="/pool")
+        "pool_clear", uid, f"Media-Pool leeren: {scope_label}",
+        total=3, page_url="/pool")
 
     def worker():
         try:
-            # 1) CID-Varianten (Files + Group-Subdirs)
-            if os.path.isdir(VARIANT_DIR):
-                for entry in os.listdir(VARIANT_DIR):
-                    p = os.path.join(VARIANT_DIR, entry)
-                    try:
+            # 1) CID-Varianten
+            if only_group is None:
+                # alles: files direkt in VARIANT_DIR + alle group_X/
+                if os.path.isdir(VARIANT_DIR):
+                    for entry in os.listdir(VARIANT_DIR):
+                        p = os.path.join(VARIANT_DIR, entry)
+                        try:
+                            if os.path.isfile(p):
+                                os.unlink(p)
+                            elif os.path.isdir(p):
+                                shutil.rmtree(p)
+                        except OSError as e:
+                            job.log_line(f"cid: {entry} - {e}")
+            elif only_group == 0:
+                # nur die direkten Files in VARIANT_DIR (nicht group-Subdirs)
+                if os.path.isdir(VARIANT_DIR):
+                    for entry in os.listdir(VARIANT_DIR):
+                        p = os.path.join(VARIANT_DIR, entry)
                         if os.path.isfile(p):
-                            os.unlink(p)
-                        elif os.path.isdir(p):
-                            shutil.rmtree(p)
+                            try:
+                                os.unlink(p)
+                            except OSError as e:
+                                job.log_line(f"cid: {entry} - {e}")
+            else:
+                gdir = _group_variant_dir(only_group)
+                if os.path.isdir(gdir):
+                    try:
+                        shutil.rmtree(gdir)
+                        os.makedirs(gdir, exist_ok=True)
                     except OSError as e:
-                        job.log_line(f"cid: {entry} - {e}")
+                        job.log_line(f"cid group {only_group}: {e}")
             job.tick(ok=1)
             job.log_line("CID-Varianten weg")
 
             # 2) Cloudinary DB
-            n_cloud = db.delete_all_cloudinary_uploads(uid)
+            n_cloud = db.delete_all_cloudinary_uploads(uid, group_id=only_group)
             job.tick(ok=1)
             job.log_line(f"Cloudinary DB: {n_cloud} uploads gelöscht")
 
             # 3) S3 DB
-            n_s3 = db.delete_all_s3_uploads(uid)
+            n_s3 = db.delete_all_s3_uploads(uid, group_id=only_group)
             job.tick(ok=1)
             job.log_line(f"S3 DB: {n_s3} uploads gelöscht")
 
@@ -183,7 +253,7 @@ async def pool_clear(request: Request):
 
     threading.Thread(target=worker, daemon=True).start()
     return HTMLResponse(
-        f'<div class="alert alert-info">Job #{job.id} — Pool wird geleert. '
+        f'<div class="alert alert-info">Job #{job.id} — {scope_label} wird geleert. '
         f'Progress im Widget rechts unten.</div>'
     )
 
@@ -356,7 +426,8 @@ async def pool_build(request: Request,
             up_id = db.add_cloudinary_upload(
                 source_filename=src_name, base_public_id=base,
                 folder="pool", count=per_src, pixel_tweak=1,
-                proxy_id=cloudinary_proxy_id, user_id=uid)
+                proxy_id=cloudinary_proxy_id, user_id=uid,
+                group_id=target_group_id)
             for i in range(per_src):
                 if job.cancelled() or made >= n_cloud:
                     break
@@ -400,7 +471,8 @@ async def pool_build(request: Request,
                             if c.isalnum() or c in "-_") or "logo"
             ext = os.path.splitext(src_name)[1].lower() or ".png"
             ctype = mimetypes.guess_type(src_name)[0] or "image/png"
-            up_id = db.add_s3_upload(s3_account_id, src_name, uid)
+            up_id = db.add_s3_upload(s3_account_id, src_name, uid,
+                                       group_id=target_group_id)
             for i in range(per_src):
                 if job.cancelled() or made >= n_s3:
                     break

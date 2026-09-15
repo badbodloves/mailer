@@ -3,6 +3,7 @@ import os
 import json
 import sqlite3
 import threading
+from typing import Optional
 
 
 class TransDB:
@@ -247,6 +248,7 @@ class TransDB:
                 filename TEXT NOT NULL DEFAULT '',
                 variant_count INTEGER DEFAULT 0,
                 user_id INTEGER DEFAULT 0,
+                group_id INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)""")
         else:
             _cols = {r[1] for r in c.execute("PRAGMA table_info(trans_s3_uploads)").fetchall()}
@@ -255,6 +257,7 @@ class TransDB:
                 ("filename",      "TEXT NOT NULL DEFAULT ''"),
                 ("variant_count", "INTEGER DEFAULT 0"),
                 ("user_id",       "INTEGER DEFAULT 0"),
+                ("group_id",      "INTEGER DEFAULT 0"),
             ]:
                 if col_name not in _cols:
                     c.execute(f"ALTER TABLE trans_s3_uploads ADD COLUMN {col_name} {col_def}")
@@ -277,6 +280,14 @@ class TransDB:
             ]:
                 if col_name not in _cols:
                     c.execute(f"ALTER TABLE trans_s3_links ADD COLUMN {col_name} {col_def}")
+
+        # Cloudinary uploads: group_id nachträglich adden (für Multi-Pool)
+        if "trans_cloudinary_uploads" in tables:
+            _cols = {r[1] for r in c.execute(
+                "PRAGMA table_info(trans_cloudinary_uploads)").fetchall()}
+            if "group_id" not in _cols:
+                c.execute("ALTER TABLE trans_cloudinary_uploads "
+                          "ADD COLUMN group_id INTEGER DEFAULT 0")
 
         # Assembly-Mode Snippets — pro Slot ein Pool, live pro Send
         # zufällig kombiniert. Optionales Feature pro Kampagne.
@@ -482,6 +493,7 @@ class TransDB:
                 pixel_tweak INTEGER DEFAULT 1,
                 proxy_id INTEGER DEFAULT 0,
                 user_id INTEGER DEFAULT 0,
+                group_id INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)"""),
             ("trans_cloudinary_links", """CREATE TABLE IF NOT EXISTS trans_cloudinary_links (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1732,13 +1744,14 @@ class TransDB:
     # ── Cloudinary (transactional) ──────────────────────────
     def add_cloudinary_upload(self, source_filename: str, base_public_id: str,
                                folder: str, count: int, pixel_tweak: int,
-                               proxy_id: int, user_id: int) -> int:
+                               proxy_id: int, user_id: int, group_id: int = 0) -> int:
         c = self._conn()
         c.execute(
             "INSERT INTO trans_cloudinary_uploads "
-            "(source_filename, base_public_id, folder, count, pixel_tweak, proxy_id, user_id) "
-            "VALUES (?,?,?,?,?,?,?)",
-            (source_filename, base_public_id, folder, count, pixel_tweak, proxy_id, user_id))
+            "(source_filename, base_public_id, folder, count, pixel_tweak, proxy_id, user_id, group_id) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (source_filename, base_public_id, folder, count, pixel_tweak,
+             proxy_id, user_id, int(group_id or 0)))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -1781,10 +1794,10 @@ class TransDB:
                   (buckets, aid, user_id))
         c.commit()
 
-    def add_s3_upload(self, account_id, filename, user_id) -> int:
+    def add_s3_upload(self, account_id, filename, user_id, group_id: int = 0) -> int:
         c = self._conn()
-        c.execute("INSERT INTO trans_s3_uploads (account_id,filename,user_id) "
-                  "VALUES (?,?,?)", (account_id, filename, user_id))
+        c.execute("INSERT INTO trans_s3_uploads (account_id,filename,user_id,group_id) "
+                  "VALUES (?,?,?,?)", (account_id, filename, user_id, int(group_id or 0)))
         c.commit()
         return c.execute("SELECT last_insert_rowid()").fetchone()[0]
 
@@ -1813,46 +1826,103 @@ class TransDB:
                   (upload_id, user_id))
         c.commit()
 
-    def delete_all_cloudinary_uploads(self, user_id: int) -> int:
-        """Löscht ALLE Cloudinary-Uploads + Links des Users. Remote-Assets
-        bei Cloudinary bleiben liegen (kann der User dort selber putzen).
-        Returns Anzahl gelöschter Uploads."""
+    def delete_all_cloudinary_uploads(self, user_id: int,
+                                        group_id: Optional[int] = None) -> int:
+        """Löscht Cloudinary-Uploads + Links. group_id=None → alle des
+        Users; sonst nur die dieser Group. Remote-Assets bei Cloudinary
+        bleiben liegen (kann der User dort selber putzen)."""
         c = self._conn()
-        c.execute(
-            "DELETE FROM trans_cloudinary_links WHERE upload_id IN "
-            "(SELECT id FROM trans_cloudinary_uploads WHERE user_id=?)",
-            (user_id,))
-        cur = c.execute(
-            "DELETE FROM trans_cloudinary_uploads WHERE user_id=?", (user_id,))
+        if group_id is None:
+            c.execute(
+                "DELETE FROM trans_cloudinary_links WHERE upload_id IN "
+                "(SELECT id FROM trans_cloudinary_uploads WHERE user_id=?)",
+                (user_id,))
+            cur = c.execute(
+                "DELETE FROM trans_cloudinary_uploads WHERE user_id=?", (user_id,))
+        else:
+            c.execute(
+                "DELETE FROM trans_cloudinary_links WHERE upload_id IN "
+                "(SELECT id FROM trans_cloudinary_uploads WHERE user_id=? AND group_id=?)",
+                (user_id, int(group_id)))
+            cur = c.execute(
+                "DELETE FROM trans_cloudinary_uploads WHERE user_id=? AND group_id=?",
+                (user_id, int(group_id)))
         c.commit()
         return cur.rowcount or 0
 
-    def delete_all_s3_uploads(self, user_id: int) -> int:
-        """Löscht ALLE S3-Upload-Referenzen + Links des Users. Bucket-Objekte
-        bei AWS bleiben liegen (via S3 Logos → Delete-Bucket löschen)."""
+    def delete_all_s3_uploads(self, user_id: int,
+                                group_id: Optional[int] = None) -> int:
+        """Löscht S3-Upload-Referenzen + Links. group_id=None → alle des
+        Users; sonst nur die dieser Group. Bucket-Objekte bei AWS bleiben
+        liegen (via S3 Logos → Delete-Bucket löschen)."""
         c = self._conn()
-        c.execute(
-            "DELETE FROM trans_s3_links WHERE upload_id IN "
-            "(SELECT id FROM trans_s3_uploads WHERE user_id=?)",
-            (user_id,))
-        cur = c.execute(
-            "DELETE FROM trans_s3_uploads WHERE user_id=?", (user_id,))
+        if group_id is None:
+            c.execute(
+                "DELETE FROM trans_s3_links WHERE upload_id IN "
+                "(SELECT id FROM trans_s3_uploads WHERE user_id=?)",
+                (user_id,))
+            cur = c.execute(
+                "DELETE FROM trans_s3_uploads WHERE user_id=?", (user_id,))
+        else:
+            c.execute(
+                "DELETE FROM trans_s3_links WHERE upload_id IN "
+                "(SELECT id FROM trans_s3_uploads WHERE user_id=? AND group_id=?)",
+                (user_id, int(group_id)))
+            cur = c.execute(
+                "DELETE FROM trans_s3_uploads WHERE user_id=? AND group_id=?",
+                (user_id, int(group_id)))
         c.commit()
         return cur.rowcount or 0
 
-    def get_all_cdn_urls(self, user_id) -> list:
+    def get_all_cdn_urls(self, user_id, group_id: Optional[int] = None) -> list:
         """Union aus Cloudinary + S3 — der gemeinsame CDN-Pool den die
-        Send-Loop nutzt. Reihenfolge irrelevant, wird eh random gepickt."""
+        Send-Loop nutzt. group_id=None → alle Uploads des Users
+        (backwards-compat); int → nur diese Group (Multi-Pool). Reihenfolge
+        irrelevant, wird eh random gepickt."""
         c = self._conn()
-        cloud = c.execute(
-            "SELECT cl.secure_url AS url FROM trans_cloudinary_links cl "
-            "JOIN trans_cloudinary_uploads cu ON cu.id=cl.upload_id "
-            "WHERE cu.user_id=?", (user_id,)).fetchall()
-        s3 = c.execute(
-            "SELECT l.url FROM trans_s3_links l "
-            "JOIN trans_s3_uploads u ON u.id=l.upload_id "
-            "WHERE u.user_id=?", (user_id,)).fetchall()
+        if group_id is None:
+            cloud = c.execute(
+                "SELECT cl.secure_url AS url FROM trans_cloudinary_links cl "
+                "JOIN trans_cloudinary_uploads cu ON cu.id=cl.upload_id "
+                "WHERE cu.user_id=?", (user_id,)).fetchall()
+            s3 = c.execute(
+                "SELECT l.url FROM trans_s3_links l "
+                "JOIN trans_s3_uploads u ON u.id=l.upload_id "
+                "WHERE u.user_id=?", (user_id,)).fetchall()
+        else:
+            cloud = c.execute(
+                "SELECT cl.secure_url AS url FROM trans_cloudinary_links cl "
+                "JOIN trans_cloudinary_uploads cu ON cu.id=cl.upload_id "
+                "WHERE cu.user_id=? AND cu.group_id=?",
+                (user_id, int(group_id))).fetchall()
+            s3 = c.execute(
+                "SELECT l.url FROM trans_s3_links l "
+                "JOIN trans_s3_uploads u ON u.id=l.upload_id "
+                "WHERE u.user_id=? AND u.group_id=?",
+                (user_id, int(group_id))).fetchall()
         return [r["url"] for r in cloud] + [r["url"] for r in s3]
+
+    def get_cdn_stats_by_group(self, user_id) -> dict:
+        """Für's Pool-Panel: {group_id: {"cloudinary": N, "s3": N}}."""
+        c = self._conn()
+        rows = c.execute(
+            "SELECT cu.group_id AS gid, COUNT(cl.id) AS n "
+            "FROM trans_cloudinary_uploads cu "
+            "LEFT JOIN trans_cloudinary_links cl ON cl.upload_id=cu.id "
+            "WHERE cu.user_id=? GROUP BY cu.group_id",
+            (user_id,)).fetchall()
+        out = {}
+        for r in rows:
+            out.setdefault(r["gid"] or 0, {"cloudinary": 0, "s3": 0})["cloudinary"] = r["n"] or 0
+        rows = c.execute(
+            "SELECT u.group_id AS gid, COUNT(l.id) AS n "
+            "FROM trans_s3_uploads u "
+            "LEFT JOIN trans_s3_links l ON l.upload_id=u.id "
+            "WHERE u.user_id=? GROUP BY u.group_id",
+            (user_id,)).fetchall()
+        for r in rows:
+            out.setdefault(r["gid"] or 0, {"cloudinary": 0, "s3": 0})["s3"] = r["n"] or 0
+        return out
 
     # ── SMTP Check (send-test + IMAP delivery verify) ───────
     def create_smtp_check_job(self, **kw) -> int:
