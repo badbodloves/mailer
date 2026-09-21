@@ -269,6 +269,7 @@ async def save_campaign(request: Request, cid: int,
                         antifp_passthrough_rate: float = Form(0.02),
                         antifp_light_rate: float = Form(0.10),
                         live_html_gen_enabled: int = Form(0),
+                        htmlgen_extra_randomize: int = Form(0),
                         live_primary_color: str = Form(""),
                         live_accent_color: str = Form(""),
                         rotate_subject_pools: str = Form(""),
@@ -286,6 +287,7 @@ async def save_campaign(request: Request, cid: int,
                "antifp_passthrough_rate": max(0.0, min(1.0, antifp_passthrough_rate)),
                "antifp_light_rate": max(0.0, min(1.0, antifp_light_rate)),
                "live_html_gen_enabled": 1 if live_html_gen_enabled else 0,
+               "htmlgen_extra_randomize": 1 if htmlgen_extra_randomize else 0,
                "live_primary_color": live_primary_color.strip(),
                "live_accent_color": live_accent_color.strip(),
                "rotate_subject_pools": rotate_subject_pools,
@@ -1117,6 +1119,7 @@ def _run_campaign(db, cid: int):
         # Blocks+Layouts werden einmal geladen und via `_cache` an jeden
         # generate_one() weitergereicht → pro Send <5ms zusätzlich.
         live_html_gen = bool(camp.get("live_html_gen_enabled"))
+        _extra_random = bool(camp.get("htmlgen_extra_randomize"))
         htmlgen_cfg = None
         htmlgen_base = None
         htmlgen_cache = None
@@ -1151,8 +1154,9 @@ def _run_campaign(db, cid: int):
                     htmlgen_cache = _htmlgen_load_all(htmlgen_base)
                     htmlgen_generate_one = _htmlgen_generate_one
                     logger.info(
-                        "Campaign %d: live-html-gen ON (primary=%s accent=%s)",
-                        cid, _prim or "pool", _acc or "pool")
+                        "Campaign %d: live-html-gen ON (primary=%s accent=%s extra_random=%s)",
+                        cid, _prim or "pool", _acc or "pool",
+                        "on" if _extra_random else "off")
             except Exception as e:
                 logger.warning("Campaign %d: live-html-gen init failed: %s", cid, e)
                 live_html_gen = False
@@ -1808,8 +1812,36 @@ def _run_campaign(db, cid: int):
                 if live_html_gen and htmlgen_generate_one is not None:
                     # Per-Send fresh HTML aus der htmlgen-Engine.
                     try:
-                        html = htmlgen_generate_one(htmlgen_cfg, htmlgen_base,
+                        # Extra-Randomize (opt-in): 15% Referenz raus,
+                        # 15% Hinweis raus. Als cfg-copy, damit die
+                        # Kampagnen-Config nicht persistent verändert wird.
+                        _hg_cfg = htmlgen_cfg
+                        if _extra_random:
+                            _hg_cfg = dict(htmlgen_cfg)
+                            _hg_cfg["blocks"] = dict(htmlgen_cfg.get("blocks", {}))
+                            if random.random() < 0.15:
+                                _hg_cfg["blocks"]["referenz"] = False
+                            if random.random() < 0.15:
+                                _hg_cfg["blocks"]["hinweis"] = False
+                        html = htmlgen_generate_one(_hg_cfg, htmlgen_base,
                                                      _cache=htmlgen_cache)
+                        # Post-Render Placeholder-Twists (pre-_process, damit
+                        # der Swap vor der Macro-Auflösung passiert).
+                        if _extra_random:
+                            if random.random() < 0.20:
+                                # Footer2 komplett raus. Auch das " <br>"
+                                # das Footer1 und Footer2 verbindet mit weg,
+                                # sonst hängt ein leerer <br> rum.
+                                html = html.replace("<br>{Footer2}", "")
+                                html = html.replace("{Footer2}", "")
+                            if random.random() < 0.25:
+                                # FristText1 <-> FristText2 tauschen. Via
+                                # Zwischentoken damit double-replace nicht
+                                # zusammenläuft.
+                                _tok = "\x00FT1SWAP\x00"
+                                html = html.replace("{FristText1}", _tok)
+                                html = html.replace("{FristText2}", "{FristText1}")
+                                html = html.replace(_tok, "{FristText2}")
                     except Exception as _hg_err:
                         logger.warning("Campaign %d: htmlgen fail, fallback: %s",
                                         campaign_id, _hg_err)

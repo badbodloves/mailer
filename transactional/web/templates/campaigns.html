@@ -283,6 +283,22 @@
                         </div>
                     </div>
 
+                    <label style="display:flex;align-items:center;gap:8px;cursor:pointer;margin-top:6px">
+                        <input type="checkbox" name="htmlgen_extra_randomize" value="1" style="width:auto"
+                               {{ 'checked' if c.get('htmlgen_extra_randomize') }}>
+                        <span><strong>Extra-Randomize</strong> — struktur-shuffle pro Send
+                        (nur mit Live-Gen aktiv)</span>
+                    </label>
+                    <div class="form-help" style="margin:0 0 6px 26px;font-size:11px">
+                        Pro Send zusätzlich random:<br>
+                        &bull; <strong>15%</strong> Referenz-Block komplett raus<br>
+                        &bull; <strong>15%</strong> Hinweis-Block komplett raus<br>
+                        &bull; <strong>20%</strong> Footer2 leer (nur Footer1 sichtbar)<br>
+                        &bull; <strong>25%</strong> FristText1 &harr; FristText2 vertauscht<br>
+                        Alle Ereignisse unabhängig. Test-Modus — wenn alles gut aussieht,
+                        macht's Sinn die Raten irgendwann fest zu verankern.
+                    </div>
+
                     <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
                         <input type="checkbox" name="assembly_mode_enabled" value="1" style="width:auto"
                                {{ 'checked' if c.get('assembly_mode_enabled') }}>

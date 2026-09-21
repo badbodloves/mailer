@@ -344,6 +344,10 @@ class TransDB:
             ("trans_campaigns", "antifp_light_rate", "0.10"),
             # Live-HTML-Gen: pro Send frisches HTML aus htmlgen-Engine
             ("trans_campaigns", "live_html_gen_enabled", "0"),
+            # Extra-Randomize on top of Live-HTML-Gen: mal Referenz raus,
+            # mal Hinweis raus, mal Footer2 leer, mal FristText1<->2 swap.
+            # Alles per random.random() pro Send — kein Muster.
+            ("trans_campaigns", "htmlgen_extra_randomize", "0"),
             # Optionale Farb-Overrides für den Live-Gen. Leer = random
             # aus htmlgen/config.yaml Pool. Gesetzt = alle Mails der
             # Kampagne nutzen diese Brand-Farbe konsistent.
