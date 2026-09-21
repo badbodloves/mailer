@@ -1216,10 +1216,31 @@ def _run_campaign(db, cid: int):
         for m in db.get_active_macros(uid):
             md = dict(m)
             lines = [l.strip() for l in (md.get("values_text") or "").splitlines() if l.strip()]
-            if lines:
-                macros[md["name"]] = lines
-                if md.get("sticky"):
-                    sticky_macros.add(md["name"])
+            if not lines:
+                continue
+            name = md["name"]
+            # Mehrere aktive Presets pro Macro-Name → Values-Union nehmen
+            # (Schema erlaubt Duplikate: "need multiple presets per name").
+            # Sonst überschreibt das letzt-gesehene Preset das erste und
+            # Sticky-Verhalten wird inkonsistent je nach ORDER-BY-Ergebnis.
+            if name in macros:
+                seen = set(macros[name])
+                macros[name].extend(x for x in lines if x not in seen)
+            else:
+                macros[name] = list(lines)
+            if md.get("sticky"):
+                sticky_macros.add(name)
+
+        # Diagnose beim Kampagnen-Start — welche Macros sind aktiv und
+        # welche davon sticky? Falls "sticky greift nur bei einem" beobachtet
+        # wird, hier den ground-truth im journal nachschauen.
+        if macros:
+            _macro_lines = [
+                f"{{{n}}}={'sticky' if n in sticky_macros else 'random'}({len(v)})"
+                for n, v in sorted(macros.items())
+            ]
+            logger.info("Campaign %d: macros active — %s", cid,
+                          ", ".join(_macro_lines))
 
         from_name_cfg = cfg.get("from_name", "") or "Newsletter"
         from_email_cfg = cfg.get("from_email", "")
