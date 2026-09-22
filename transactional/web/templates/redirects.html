@@ -252,7 +252,19 @@
                 <option value="{{ p.id }}">{{ p.name }} ({{ p.proxy_type }})</option>
                 {% endfor %}
             </select>
-            <div style="margin-top:10px"><button class="btn btn-primary">Generate /goto Links</button></div>
+            <div style="margin-top:10px">
+                <button class="btn btn-primary">Generate /goto Links</button>
+                <button type="button" class="btn btn-secondary btn-sm" style="margin-left:8px"
+                        hx-post="/redirects/generate-goto-test"
+                        hx-include="[name='gen_proxy_id']"
+                        hx-vals='js:{"target_url": document.querySelector("[name=targets]").value.split("\n")[0].trim()}'
+                        hx-target="#goto-result" hx-swap="innerHTML">
+                    Test Single (Debug)
+                </button>
+                <span style="font-size:11px;color:var(--fg2);margin-left:6px">
+                    Testet die erste URL aus der Textarea, zeigt HTTP-Status + HTML-Snippet.
+                </span>
+            </div>
         </form>
         <div id="goto-result" style="margin-top:10px"></div>
     </div>

@@ -486,6 +486,41 @@ async def generate_redirects(request: Request,
     )
 
 
+@router.post("/redirects/generate-goto-test", response_class=HTMLResponse)
+async def generate_goto_test(request: Request, target_url: str = Form(""),
+                               gen_proxy_id: int = Form(0)):
+    """Diagnose-Endpoint: ruft _generate_one_goto mit debug=True für EINE
+    Target-URL und gibt zurück was Google wirklich antwortet."""
+    target = target_url.strip()
+    if not target:
+        return HTMLResponse('<div class="alert alert-warning">Target-URL fehlt.</div>')
+    from mailer.redirect_manager import RedirectManager
+    db = request.app.state.db
+    gen_proxies = _resolve_proxy_list(db, int(gen_proxy_id or 0))
+    proxy = gen_proxies[0] if gen_proxies else ""
+    result = RedirectManager._generate_one_goto(target, proxy=proxy, debug=True)
+    if not isinstance(result, tuple):
+        return HTMLResponse(
+            f'<div class="alert alert-danger">Kein Debug-Tuple zurück — '
+            f'Code nicht deployed? Antwort: {escape(str(result))[:200]}</div>')
+    url, status, snippet = result
+    color = "success" if url else "danger"
+    out = [f'<div class="alert alert-{color}">']
+    out.append(f'<strong>Status:</strong> {escape(status)}<br>')
+    if url:
+        out.append(f'<strong>Token:</strong> <code style="word-break:break-all">{escape(url)}</code>')
+    else:
+        out.append('<strong>Kein Token gefunden.</strong>')
+    out.append('</div>')
+    if snippet:
+        out.append('<details style="margin-top:8px"><summary style="cursor:pointer">'
+                    'HTML-Snippet (erste 400 chars vom Response)</summary>'
+                    f'<pre style="white-space:pre-wrap;font-size:11px;'
+                    f'background:#f7f7f7;padding:8px;max-height:300px;overflow:auto">'
+                    f'{escape(snippet)}</pre></details>')
+    return HTMLResponse("".join(out))
+
+
 @router.post("/redirects/generate-goto", response_class=HTMLResponse)
 async def generate_goto_redirects(request: Request,
                                     targets: str = Form(""),
@@ -493,15 +528,7 @@ async def generate_goto_redirects(request: Request,
                                     gen_threads: int = Form(3),
                                     pool_id: int = Form(0),
                                     gen_proxy_id: int = Form(0)):
-    """Google `/goto?url=<token>` — signed open-redirect via SERP-scraping.
-
-    Pro Target werden N Tokens generiert. Google gibt für dieselbe Ziel-URL
-    (bei nachfolgenden Anfragen) leicht andere Tokens zurück, weil ein
-    Timestamp+Nonce mit reinsigniert wird → Diversität pro Send trotz
-    gleichem Target.
-
-    TTL laut Beobachtung: 1-3 Tage. Kurz vor Kampagnen-Start generieren.
-    Antibot-Wrapping wird respektiert wenn aktiv."""
+    """Google `/goto?url=<token>` — signed open-redirect via SERP-scraping."""
     lines = [ln.strip() for ln in targets.splitlines() if ln.strip()]
     valid = [t for t in lines
              if t.startswith("http://") or t.startswith("https://")]
