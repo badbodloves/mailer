@@ -486,6 +486,101 @@ async def generate_redirects(request: Request,
     )
 
 
+@router.post("/redirects/generate-goto", response_class=HTMLResponse)
+async def generate_goto_redirects(request: Request,
+                                    targets: str = Form(""),
+                                    count_per_target: int = Form(50),
+                                    gen_threads: int = Form(3),
+                                    pool_id: int = Form(0),
+                                    gen_proxy_id: int = Form(0)):
+    """Google `/goto?url=<token>` — signed open-redirect via SERP-scraping.
+
+    Pro Target werden N Tokens generiert. Google gibt für dieselbe Ziel-URL
+    (bei nachfolgenden Anfragen) leicht andere Tokens zurück, weil ein
+    Timestamp+Nonce mit reinsigniert wird → Diversität pro Send trotz
+    gleichem Target.
+
+    TTL laut Beobachtung: 1-3 Tage. Kurz vor Kampagnen-Start generieren.
+    Antibot-Wrapping wird respektiert wenn aktiv."""
+    lines = [ln.strip() for ln in targets.splitlines() if ln.strip()]
+    valid = [t for t in lines
+             if t.startswith("http://") or t.startswith("https://")]
+    if not valid:
+        return HTMLResponse('<div class="alert alert-warning">Keine gültigen URLs '
+                             '(jede muss mit http:// oder https:// anfangen).</div>')
+
+    count_per_target = max(1, min(int(count_per_target or 1), 5000))
+    gen_threads = max(1, min(int(gen_threads or 3), 20))
+    db = request.app.state.db
+    gen_uid = request.state.user["id"]
+
+    cfg_snapshot = db.get_config()
+    antibot_active = (cfg_snapshot.get("antibot_enabled")
+                      and cfg_snapshot.get("antibot_base_url")
+                      and cfg_snapshot.get("antibot_hmac_secret"))
+
+    gen_proxies = _resolve_proxy_list(db, int(gen_proxy_id or 0))
+    total = len(valid) * count_per_target
+    job = job_manager.create(
+        "google_goto", gen_uid,
+        f"google /goto: {len(valid)} Target(s) × {count_per_target} = {total}",
+        total=total, page_url="/redirects")
+
+    def worker():
+        try:
+            from mailer.redirect_manager import RedirectManager
+            from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            for real_target in valid:
+                if job.cancelled():
+                    break
+                submit_target = real_target
+                if antibot_active:
+                    from .antibot_config import build_antibot_url
+                    submit_target = build_antibot_url(
+                        cfg_snapshot["antibot_base_url"],
+                        cfg_snapshot["antibot_hmac_secret"],
+                        real_target,
+                        ttl_seconds=int(cfg_snapshot.get("antibot_token_ttl_hours", 168)) * 3600,
+                    )
+                job.log_line(f"→ Target: {real_target[:70]}")
+
+                def gen_one(_):
+                    proxy = random.choice(gen_proxies) if gen_proxies else ""
+                    return RedirectManager._generate_one_goto(submit_target, proxy=proxy)
+
+                with ThreadPoolExecutor(max_workers=gen_threads) as executor:
+                    futures = [executor.submit(gen_one, i) for i in range(count_per_target)]
+                    for f in as_completed(futures):
+                        if job.cancelled():
+                            for pending in futures:
+                                pending.cancel()
+                            break
+                        try:
+                            url = f.result(timeout=25)
+                            if url:
+                                db.add_redirect(url, real_target, gen_uid, pool_id)
+                                job.tick(ok=1)
+                            else:
+                                job.tick(err=1)
+                        except Exception as e:
+                            job.tick(err=1)
+                            job.log_line(str(e)[:150])
+            job.finish("done")
+        except Exception as e:
+            logger.error("Google /goto gen error: %s", e, exc_info=True)
+            job.finish("error", str(e))
+
+    threading.Thread(target=worker, daemon=True).start()
+    ab_label = " · via antibot" if antibot_active else ""
+    return HTMLResponse(
+        f'<div class="alert alert-info">Job #{job.id} gestartet: {total} '
+        f'google.com/goto Links ({len(valid)} Targets × {count_per_target}){ab_label}. '
+        f'Live-Progress + Abbrechen im Widget rechts unten. '
+        f'&#9888; TTL 1-3 Tage — kurz vor Send generieren.</div>'
+    )
+
+
 @router.post("/redirects/generate-s3", response_class=HTMLResponse)
 async def generate_s3_redirects(request: Request,
                                  target_url: str = Form(""),

