@@ -511,7 +511,11 @@ async def generate_goto_test(request: Request, target_url: str = Form(""),
     proxy = gen_proxies[0] if gen_proxies else ""
     fn = (RedirectManager._generate_one_goto_pw if engine == "playwright"
           else RedirectManager._generate_one_goto)
-    result = fn(target, proxy=proxy, debug=True)
+    # Playwright's sync-API bricht wenn wir im asyncio-Loop sind (was in
+    # FastAPI-async-Endpoints der Fall ist). run_in_thread wrapt den Aufruf
+    # in einen echten Thread ohne event loop.
+    import asyncio as _asyncio
+    result = await _asyncio.to_thread(fn, target, proxy=proxy, debug=True)
     if not isinstance(result, tuple):
         return HTMLResponse(
             f'<div class="alert alert-danger">Kein Debug-Tuple zurück — '
