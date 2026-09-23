@@ -522,11 +522,25 @@ async def test_send(request: Request, cid: int):
         return HTMLResponse('<div class="alert alert-danger">No HTML templates. Add on HTML Editor page.</div>')
 
     macros = {}
-    for m in db.get_macros(uid):
+    sticky_macros = set()
+    # Test-Send nutzt jetzt die gleiche Sticky-Logik wie der echte Send-
+    # Loop: mehrere aktive Presets pro Name werden vereint, sticky wenn
+    # IRGENDEIN Preset sticky ist. Sonst würde der Test-Send anderes
+    # Verhalten zeigen als die echte Kampagne und der User denkt sticky
+    # klemmt bei manchen Macros.
+    for m in db.get_active_macros(uid):
         md = dict(m)
         lines = [l.strip() for l in (md.get("values_text") or "").splitlines() if l.strip()]
-        if lines:
-            macros[md["name"]] = lines
+        if not lines:
+            continue
+        name = md["name"]
+        if name in macros:
+            seen = set(macros[name])
+            macros[name].extend(x for x in lines if x not in seen)
+        else:
+            macros[name] = list(lines)
+        if md.get("sticky"):
+            sticky_macros.add(name)
 
     from_name_cfg = cfg.get("from_name", "") or "Test"
     from_email_cfg = cfg.get("from_email", "")
@@ -534,12 +548,28 @@ async def test_send(request: Request, cid: int):
 
     import random, smtplib, ssl
 
-    def _process_vars(text, email):
+    def _process_vars(text, email, sticky_cache=None):
         user = email.split("@")[0] if "@" in email else email
         domain = email.split("@")[1] if "@" in email else ""
         text = text.replace("{email}", email).replace("{email_user}", user).replace("{domain}", domain)
-        for mname, mlines in macros.items():
-            text = text.replace(f"{{{mname}}}", random.choice(mlines))
+        # Multi-Pass + sticky_cache: gleich wie im echten Send-Loop
+        for _pass in range(5):
+            changed = False
+            for mname, mlines in macros.items():
+                token = f"{{{mname}}}"
+                if token not in text:
+                    continue
+                changed = True
+                if mname in sticky_macros:
+                    cache = sticky_cache if sticky_cache is not None else {}
+                    if mname not in cache:
+                        cache[mname] = random.choice(mlines)
+                    text = text.replace(token, cache[mname])
+                else:
+                    while token in text:
+                        text = text.replace(token, random.choice(mlines), 1)
+            if not changed:
+                break
         def _spintax(m):
             return random.choice(m.group(1).split("|"))
         for _ in range(20):
@@ -576,8 +606,12 @@ async def test_send(request: Request, cid: int):
 
     for idx, recipient in enumerate(recipients):
         try:
+            # Sticky-Cache pro Empfänger — gleiches Verhalten wie im
+            # echten Send-Loop. Sonst kriegt jeder _process_vars-Call
+            # einen neuen Wert und man sieht kein sticky.
+            sticky_cache = {}
             html = random.choice(html_bodies)
-            html = _process_vars(html, recipient)
+            html = _process_vars(html, recipient, sticky_cache)
 
             if redirect_links and "{RedirectLink}" in html:
                 link = redirect_links[idx % len(redirect_links)]
@@ -623,8 +657,8 @@ async def test_send(request: Request, cid: int):
             if afp:
                 html = afp.transform(html)
             plain = re.sub(r"<[^>]+>", "", html).strip()
-            cur_subject = _process_vars(f"[TEST] {subject_cfg}", recipient)
-            cur_from = _process_vars(from_name_cfg, recipient)
+            cur_subject = _process_vars(f"[TEST] {subject_cfg}", recipient, sticky_cache)
+            cur_from = _process_vars(from_name_cfg, recipient, sticky_cache)
 
             from mailer.mime_builder import MIMEBuilder
             raw_msg = MIMEBuilder.build_email(
@@ -1640,19 +1674,29 @@ def _run_campaign(db, cid: int):
             user = email.split("@")[0] if "@" in email else email
             domain = email.split("@")[1] if "@" in email else ""
             text = text.replace("{email}", email).replace("{email_user}", user).replace("{domain}", domain)
-            for mname, mlines in macros.items():
-                token = f"{{{mname}}}"
-                if token not in text:
-                    continue
-                if mname in sticky_macros:
-                    cache = sticky_cache if sticky_cache is not None else {}
-                    if mname not in cache:
-                        cache[mname] = random.choice(mlines)
-                    text = text.replace(token, cache[mname])
-                else:
-                    # nicht sticky → jedes Vorkommen darf ein anderer Wert sein
-                    while token in text:
-                        text = text.replace(token, random.choice(mlines), 1)
+            # Multi-Pass damit nested Macros aufgelöst werden:
+            # {A} = "Hallo {B}" und {B} = "Peter" → nach 1 Pass wäre
+            # {B} nicht ersetzt (falls B im macros-dict vor A iteriert
+            # wurde und der Text initial nur {A} enthielt). Bis zu 5
+            # Passes, dann break wenn nichts mehr geändert.
+            for _pass in range(5):
+                changed = False
+                for mname, mlines in macros.items():
+                    token = f"{{{mname}}}"
+                    if token not in text:
+                        continue
+                    changed = True
+                    if mname in sticky_macros:
+                        cache = sticky_cache if sticky_cache is not None else {}
+                        if mname not in cache:
+                            cache[mname] = random.choice(mlines)
+                        text = text.replace(token, cache[mname])
+                    else:
+                        # nicht sticky → jedes Vorkommen darf ein anderer Wert sein
+                        while token in text:
+                            text = text.replace(token, random.choice(mlines), 1)
+                if not changed:
+                    break
             def _spintax(m):
                 return random.choice(m.group(1).split("|"))
             for _ in range(20):
