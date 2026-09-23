@@ -489,11 +489,11 @@ async def generate_redirects(request: Request,
 @router.post("/redirects/generate-goto-test", response_class=HTMLResponse)
 async def generate_goto_test(request: Request, target_url: str = Form(""),
                                targets: str = Form(""),
-                               gen_proxy_id: int = Form(0)):
-    """Diagnose-Endpoint: ruft _generate_one_goto mit debug=True für EINE
-    Target-URL und gibt zurück was Google wirklich antwortet.
-    Akzeptiert entweder target_url (single field) ODER targets (textarea,
-    dann wird die erste valide Zeile genommen)."""
+                               gen_proxy_id: int = Form(0),
+                               engine: str = Form("playwright")):
+    """Diagnose-Endpoint: ruft _generate_one_goto[_pw] mit debug=True für
+    EINE Target-URL und gibt zurück was Google wirklich antwortet.
+    engine=playwright (default) oder engine=requests."""
     target = target_url.strip()
     if not target and targets:
         for ln in targets.splitlines():
@@ -509,15 +509,18 @@ async def generate_goto_test(request: Request, target_url: str = Form(""),
     db = request.app.state.db
     gen_proxies = _resolve_proxy_list(db, int(gen_proxy_id or 0))
     proxy = gen_proxies[0] if gen_proxies else ""
-    result = RedirectManager._generate_one_goto(target, proxy=proxy, debug=True)
+    fn = (RedirectManager._generate_one_goto_pw if engine == "playwright"
+          else RedirectManager._generate_one_goto)
+    result = fn(target, proxy=proxy, debug=True)
     if not isinstance(result, tuple):
         return HTMLResponse(
             f'<div class="alert alert-danger">Kein Debug-Tuple zurück — '
             f'Code nicht deployed? Antwort: {escape(str(result))[:200]}</div>')
     url, status, snippet = result
     color = "success" if url else "danger"
-    out = [f'<div class="alert alert-{color}">']
-    out.append(f'<strong>Status:</strong> {escape(status)}<br>')
+    out = [f'<div class="alert alert-{color}">',
+           f'<strong>Engine:</strong> {escape(engine)}<br>',
+           f'<strong>Status:</strong> {escape(status)}<br>']
     if url:
         out.append(f'<strong>Token:</strong> <code style="word-break:break-all">{escape(url)}</code>')
     else:
@@ -525,7 +528,7 @@ async def generate_goto_test(request: Request, target_url: str = Form(""),
     out.append('</div>')
     if snippet:
         out.append('<details style="margin-top:8px"><summary style="cursor:pointer">'
-                    'HTML-Snippet (erste 400 chars vom Response)</summary>'
+                    'HTML-Snippet (erste 400 chars)</summary>'
                     f'<pre style="white-space:pre-wrap;font-size:11px;'
                     f'background:#f7f7f7;padding:8px;max-height:300px;overflow:auto">'
                     f'{escape(snippet)}</pre></details>')
@@ -538,7 +541,8 @@ async def generate_goto_redirects(request: Request,
                                     count_per_target: int = Form(50),
                                     gen_threads: int = Form(3),
                                     pool_id: int = Form(0),
-                                    gen_proxy_id: int = Form(0)):
+                                    gen_proxy_id: int = Form(0),
+                                    engine: str = Form("playwright")):
     """Google `/goto?url=<token>` — signed open-redirect via SERP-scraping."""
     lines = [ln.strip() for ln in targets.splitlines() if ln.strip()]
     valid = [t for t in lines
@@ -548,7 +552,9 @@ async def generate_goto_redirects(request: Request,
                              '(jede muss mit http:// oder https:// anfangen).</div>')
 
     count_per_target = max(1, min(int(count_per_target or 1), 5000))
-    gen_threads = max(1, min(int(gen_threads or 3), 20))
+    # Playwright is CPU/RAM heavy — limit threads bei playwright engine.
+    max_threads = 4 if engine == "playwright" else 20
+    gen_threads = max(1, min(int(gen_threads or 3), max_threads))
     db = request.app.state.db
     gen_uid = request.state.user["id"]
 
@@ -561,13 +567,35 @@ async def generate_goto_redirects(request: Request,
     total = len(valid) * count_per_target
     job = job_manager.create(
         "google_goto", gen_uid,
-        f"google /goto: {len(valid)} Target(s) × {count_per_target} = {total}",
+        f"google /goto ({engine}): {len(valid)} × {count_per_target} = {total}",
         total=total, page_url="/redirects")
 
     def worker():
         try:
             from mailer.redirect_manager import RedirectManager
             from concurrent.futures import ThreadPoolExecutor, as_completed
+
+            use_pw = engine == "playwright"
+            # Playwright: einen shared browser für den ganzen Batch —
+            # spart die ~2s Startup pro Link.
+            pw_ctx = None
+            shared_browser = None
+            if use_pw:
+                try:
+                    from playwright.sync_api import sync_playwright
+                    pw_ctx = sync_playwright().start()
+                    shared_browser = pw_ctx.chromium.launch(
+                        headless=True,
+                        args=["--disable-blink-features=AutomationControlled"])
+                    job.log_line("playwright browser launched (shared)")
+                except Exception as e:
+                    job.log_line(f"playwright launch fail — fallback requests: {e}")
+                    use_pw = False
+                    if pw_ctx:
+                        try: pw_ctx.stop()
+                        except Exception: pass
+                    pw_ctx = None
+                    shared_browser = None
 
             for real_target in valid:
                 if job.cancelled():
@@ -585,7 +613,11 @@ async def generate_goto_redirects(request: Request,
 
                 def gen_one(_):
                     proxy = random.choice(gen_proxies) if gen_proxies else ""
-                    return RedirectManager._generate_one_goto(submit_target, proxy=proxy)
+                    if use_pw:
+                        return RedirectManager._generate_one_goto_pw(
+                            submit_target, proxy=proxy, _browser=shared_browser)
+                    return RedirectManager._generate_one_goto(
+                        submit_target, proxy=proxy)
 
                 with ThreadPoolExecutor(max_workers=gen_threads) as executor:
                     futures = [executor.submit(gen_one, i) for i in range(count_per_target)]
@@ -595,7 +627,8 @@ async def generate_goto_redirects(request: Request,
                                 pending.cancel()
                             break
                         try:
-                            url = f.result(timeout=25)
+                            timeout = 45 if use_pw else 25
+                            url = f.result(timeout=timeout)
                             if url:
                                 db.add_redirect(url, real_target, gen_uid, pool_id)
                                 job.tick(ok=1)
@@ -604,6 +637,12 @@ async def generate_goto_redirects(request: Request,
                         except Exception as e:
                             job.tick(err=1)
                             job.log_line(str(e)[:150])
+            if shared_browser:
+                try: shared_browser.close()
+                except Exception: pass
+            if pw_ctx:
+                try: pw_ctx.stop()
+                except Exception: pass
             job.finish("done")
         except Exception as e:
             logger.error("Google /goto gen error: %s", e, exc_info=True)
@@ -612,8 +651,8 @@ async def generate_goto_redirects(request: Request,
     threading.Thread(target=worker, daemon=True).start()
     ab_label = " · via antibot" if antibot_active else ""
     return HTMLResponse(
-        f'<div class="alert alert-info">Job #{job.id} gestartet: {total} '
-        f'google.com/goto Links ({len(valid)} Targets × {count_per_target}){ab_label}. '
+        f'<div class="alert alert-info">Job #{job.id} gestartet ({engine}): {total} '
+        f'google.com/goto Links ({len(valid)} × {count_per_target}){ab_label}. '
         f'Live-Progress + Abbrechen im Widget rechts unten. '
         f'&#9888; TTL 1-3 Tage — kurz vor Send generieren.</div>'
     )

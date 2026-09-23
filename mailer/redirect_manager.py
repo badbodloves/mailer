@@ -178,6 +178,123 @@ class RedirectManager:
             return None
 
     @staticmethod
+    def _generate_one_goto_pw(target_url: str, proxy: str = "",
+                                debug: bool = False,
+                                _browser=None):
+        """Playwright-based /goto generator. Startet Chromium headless,
+        navigiert zur SERP, wartet bis JS gerendert hat, extrahiert
+        den /goto-Link. Robust gegen Google's Anti-Scraping (weil es
+        ein echter Browser ist).
+
+        Nutzt einen persistenten Browser wenn _browser übergeben wird
+        (für Batch-Jobs — einmal starten, viele Contexts drin).
+        """
+        try:
+            from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
+        except ImportError:
+            if debug:
+                return (None,
+                        "playwright not installed — pip install playwright && "
+                        "playwright install chromium", "")
+            logger.error("playwright not installed")
+            return None
+        import re as _re
+
+        pw_proxy = None
+        if proxy and proxy.strip():
+            p = _normalize_proxy(proxy.strip())
+            if p:
+                from urllib.parse import urlparse
+                pr = urlparse(p)
+                pw_proxy = {"server": f"{pr.scheme}://{pr.hostname}:{pr.port}"}
+                if pr.username:
+                    pw_proxy["username"] = pr.username
+                if pr.password:
+                    pw_proxy["password"] = pr.password
+
+        def _extract(page) -> str:
+            try:
+                anchors = page.eval_on_selector_all(
+                    "a[href*='/goto?url=']",
+                    "els => els.map(e => e.href)")
+                for href in anchors:
+                    m = _re.search(r'/goto\?url=([A-Za-z0-9_\-]+={0,3})', href)
+                    if m:
+                        return f"https://www.google.com/goto?url={m.group(1)}"
+            except Exception:
+                pass
+            html = page.content()
+            m = _re.search(r'/goto\?url=([A-Za-z0-9_\-]+={0,3})', html)
+            if m:
+                return f"https://www.google.com/goto?url={m.group(1)}"
+            return ""
+
+        def _run(pw):
+            own_browser = _browser is None
+            browser = _browser or pw.chromium.launch(
+                headless=True, proxy=pw_proxy,
+                args=["--disable-blink-features=AutomationControlled"])
+            context = None
+            try:
+                context = browser.new_context(
+                    user_agent=("Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                                "Chrome/130.0.0.0 Safari/537.36"),
+                    locale="de-DE",
+                    viewport={"width": 1280, "height": 900},
+                    extra_http_headers={"Accept-Language": "de-DE,de;q=0.9,en;q=0.7"},
+                )
+                context.add_cookies([
+                    {"name": "CONSENT",
+                     "value": "YES+cb.20240101-08-p0.de+FX+123",
+                     "domain": ".google.com", "path": "/"},
+                    {"name": "SOCS", "value": "CAESHAgBEhIaAB",
+                     "domain": ".google.com", "path": "/"},
+                ])
+                page = context.new_page()
+                from urllib.parse import quote as _quote
+                url = (f"https://www.google.com/search?q={_quote(target_url, safe='')}"
+                       f"&hl=de&gl=de&pws=0")
+                page.goto(url, wait_until="domcontentloaded", timeout=25000)
+                # Consent-Modal manchmal trotz Cookies
+                for label in ("Alle ablehnen", "Alle akzeptieren"):
+                    try:
+                        page.locator(f"button:has-text('{label}')").first.click(timeout=1500)
+                        break
+                    except Exception:
+                        continue
+                try:
+                    page.wait_for_selector("a[href*='/goto?url=']", timeout=10000)
+                except PWTimeout:
+                    pass
+                found = _extract(page)
+                if not found:
+                    if debug:
+                        return (None, f"no /goto in rendered DOM (final={page.url})",
+                                page.content()[:400])
+                    return None
+                if debug:
+                    return (found, "ok (playwright)", "")
+                return found
+            finally:
+                if context:
+                    try: context.close()
+                    except Exception: pass
+                if own_browser:
+                    try: browser.close()
+                    except Exception: pass
+
+        try:
+            with sync_playwright() as pw:
+                return _run(pw)
+        except Exception as exc:
+            if debug:
+                return (None, f"playwright exception: {exc}", "")
+            logger.error("playwright /goto error: %s", exc)
+            return None
+
+
+    @staticmethod
     def _generate_one_goto(target_url: str, proxy: str = "",
                             debug: bool = False):
         """Google `/goto?url=<token>` — signed open-redirect. Generiert

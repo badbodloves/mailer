@@ -252,11 +252,23 @@
                 <option value="{{ p.id }}">{{ p.name }} ({{ p.proxy_type }})</option>
                 {% endfor %}
             </select>
+            <label>Scraping-Engine</label>
+            <select name="engine">
+                <option value="playwright" selected>Playwright (Chromium headless — robust gegen JS-only)</option>
+                <option value="requests">Requests (schnell, aber Google gibt oft nur JS-Skeleton)</option>
+            </select>
+            <div class="form-help">
+                Playwright braucht Chromium installiert:
+                <code>pip install playwright &amp;&amp; playwright install chromium</code>.
+                ~3-5s pro Link, aber führt JS aus wie ein echter Browser.
+                Requests ist schnell (~300ms) aber Google mappt uns aggressiv auf
+                die JS-only SERP → meist kein Token.
+            </div>
             <div style="margin-top:10px">
                 <button class="btn btn-primary">Generate /goto Links</button>
                 <button type="button" class="btn btn-secondary btn-sm" style="margin-left:8px"
                         hx-post="/redirects/generate-goto-test"
-                        hx-include="[name='targets'],[name='gen_proxy_id']"
+                        hx-include="[name='targets'],[name='gen_proxy_id'],[name='engine']"
                         hx-target="#goto-result" hx-swap="innerHTML">
                     Test Single (Debug)
                 </button>
