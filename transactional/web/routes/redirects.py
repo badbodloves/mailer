@@ -488,12 +488,23 @@ async def generate_redirects(request: Request,
 
 @router.post("/redirects/generate-goto-test", response_class=HTMLResponse)
 async def generate_goto_test(request: Request, target_url: str = Form(""),
+                               targets: str = Form(""),
                                gen_proxy_id: int = Form(0)):
     """Diagnose-Endpoint: ruft _generate_one_goto mit debug=True für EINE
-    Target-URL und gibt zurück was Google wirklich antwortet."""
+    Target-URL und gibt zurück was Google wirklich antwortet.
+    Akzeptiert entweder target_url (single field) ODER targets (textarea,
+    dann wird die erste valide Zeile genommen)."""
     target = target_url.strip()
+    if not target and targets:
+        for ln in targets.splitlines():
+            ln = ln.strip()
+            if ln.startswith("http://") or ln.startswith("https://"):
+                target = ln
+                break
     if not target:
-        return HTMLResponse('<div class="alert alert-warning">Target-URL fehlt.</div>')
+        return HTMLResponse('<div class="alert alert-warning">Target-URL fehlt — '
+                             'oben in der Textarea eine URL eintragen (mit http:// '
+                             'oder https://).</div>')
     from mailer.redirect_manager import RedirectManager
     db = request.app.state.db
     gen_proxies = _resolve_proxy_list(db, int(gen_proxy_id or 0))

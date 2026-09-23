@@ -256,8 +256,7 @@
                 <button class="btn btn-primary">Generate /goto Links</button>
                 <button type="button" class="btn btn-secondary btn-sm" style="margin-left:8px"
                         hx-post="/redirects/generate-goto-test"
-                        hx-include="[name='gen_proxy_id']"
-                        hx-vals='js:{"target_url": document.querySelector("[name=targets]").value.split("\n")[0].trim()}'
+                        hx-include="[name='targets'],[name='gen_proxy_id']"
                         hx-target="#goto-result" hx-swap="innerHTML">
                     Test Single (Debug)
                 </button>
