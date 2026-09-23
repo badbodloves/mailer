@@ -187,30 +187,44 @@ class RedirectManager:
         Gültigkeit laut Beobachtung: 1-3 Tage. TTL steckt im Token, nicht
         beeinflussbar von uns — kurz vor Send generieren.
 
+        Nutzt gbv=1 (Google Basic View) um die JS-only SERP zu umgehen —
+        sonst kommt nur ein <noscript>-Skeleton zurück und der Regex
+        findet natürlich nichts.
+
         debug=True → returned tuple (url_or_None, status, html_snippet)
         statt nur der URL. Für den Test-Endpoint.
         """
         import re as _re
         from urllib.parse import quote as _quote
         headers = dict(HEADERS)
+        # Neuerer Chrome-UA — Firefox-124 wird von Google z.T. auf die
+        # JS-only SERP gemapped. Chrome-Desktop kriegt zuverlässiger die
+        # klassische HTML-SERP wenn kombiniert mit gbv=1.
+        headers["User-Agent"] = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36"
+        )
         headers["Accept"] = ("text/html,application/xhtml+xml,application/xml;"
                               "q=0.9,image/webp,*/*;q=0.8")
         headers["Accept-Language"] = "de-DE,de;q=0.9,en;q=0.7"
         headers["Sec-Fetch-Dest"] = "document"
         headers["Sec-Fetch-Mode"] = "navigate"
         headers["Sec-Fetch-Site"] = "none"
+        headers["Sec-Ch-Ua"] = ('"Chromium";v="130", "Google Chrome";v="130", '
+                                  '"Not-A.Brand";v="99"')
+        headers["Sec-Ch-Ua-Mobile"] = "?0"
+        headers["Sec-Ch-Ua-Platform"] = '"Windows"'
         headers["Upgrade-Insecure-Requests"] = "1"
-        # Consent-Cookie: Google prüft im EU-Raum ob der User zugestimmt hat,
-        # sonst kommt statt der SERP eine Consent-Wall (consent.google.com).
-        # YES+cb.<datum>+FX+<id> ist der Format, den Google akzeptiert.
-        # Zusätzlich NID (default search cookie) hilft die Wall zu umgehen.
         cookies = {
             "CONSENT": "YES+cb.20240101-08-p0.de+FX+123",
             "SOCS": "CAESHAgBEhIaAB",
             "NID": "511=abc" + _re.sub(r"\D", "",
                                        str(hash(target_url))[-15:]),
         }
-        url = f"https://www.google.com/search?q={_quote(target_url, safe='')}&hl=de&gl=de&pws=0"
+        # gbv=1 = Google Basic View → klassische HTML-SERP OHNE JS-Rendering.
+        # Genau die Ansicht die den /goto-Link inline im HTML einbaut.
+        url = (f"https://www.google.com/search?"
+               f"q={_quote(target_url, safe='')}&hl=de&gl=de&pws=0&gbv=1")
         kwargs = {"headers": headers, "cookies": cookies,
                   "timeout": 20, "allow_redirects": True}
         if proxy and proxy.strip():
@@ -222,8 +236,6 @@ class RedirectManager:
             html = resp.text or ""
             status = resp.status_code
             final_url = resp.url
-            # Consent-Wall? Redirect zu consent.google.com oder
-            # "Bevor Sie zur Google-Suche weitergehen" im HTML
             if "consent.google.com" in final_url or "consent.google" in html[:2000]:
                 if debug:
                     return (None, f"consent-wall (final={final_url})",
@@ -231,7 +243,6 @@ class RedirectManager:
                 logger.warning("Google /goto: consent-wall für %s (final=%s)",
                                 target_url[:80], final_url)
                 return None
-            # SERP-Rate-Limit / Captcha?
             if "unusual traffic" in html[:5000].lower() or "/sorry/" in final_url:
                 if debug:
                     return (None, f"rate-limited/captcha (final={final_url})",
@@ -239,27 +250,41 @@ class RedirectManager:
                 logger.warning("Google /goto: rate-limit für %s",
                                 target_url[:80])
                 return None
-            # Token extrahieren — mehrere Varianten
+            # JS-only skeleton? enablejs marker im first 3KB
+            if "/httpservice/retry/enablejs" in html[:3000]:
+                if debug:
+                    return (None, f"js-only skeleton (gbv=1 ignoriert, "
+                                   f"status={status})", html[:400])
+                logger.warning("Google /goto: JS-only für %s trotz gbv=1",
+                                target_url[:80])
+                return None
             patterns = [
                 r'/goto\?url=([A-Za-z0-9_\-]+={0,3})',
                 r'\\x2fgoto\\x3furl\\x3d([A-Za-z0-9_\-]+={0,3})',
                 r'"(https://www\.google\.com/goto\?url=[A-Za-z0-9_\-]+={0,3})"',
                 r'&#47;goto&#63;url&#61;([A-Za-z0-9_\-]+={0,3})',
+                # gbv=1 nutzt manchmal /url?q= statt /goto — auch akzeptieren
+                r'/url\?q=(https?[^&"\'<> ]+)&amp;',
+                r'/url\?q=(https?[^&"\'<> ]+)&sa=',
             ]
             for pat in patterns:
                 m = _re.search(pat, html)
                 if m:
                     tok = m.group(1)
-                    if tok.startswith("https://"):
+                    if tok.startswith("https://www.google.com/goto"):
                         found = tok
+                    elif tok.startswith("http"):
+                        # /url?q=<target> — nicht was wir wollen, aber besser als nichts
+                        # (das ist der klassische Google-URL-Rewrite, kein signed token)
+                        from urllib.parse import unquote as _unquote
+                        # Wenn der User /url?q= wirklich haben will, würde er
+                        # den alten Generator nutzen. Für /goto ignorieren wir das.
+                        continue
                     else:
                         found = f"https://www.google.com/goto?url={tok}"
                     if debug:
                         return (found, f"ok (status={status})", "")
                     return found
-            # Nichts gefunden — vielleicht wird die URL statt als /goto
-            # als /url?q= gerendert (alte Google-UI-Version). Prüfen und
-            # loggen für Debug-Zwecke.
             has_url_q = "/url?q=" in html
             has_ping = "ping=" in html
             if debug:
