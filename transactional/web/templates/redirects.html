@@ -262,7 +262,12 @@
                 <code>pip install playwright &amp;&amp; playwright install chromium</code>.
                 ~3-5s pro Link, aber führt JS aus wie ein echter Browser.
                 Requests ist schnell (~300ms) aber Google mappt uns aggressiv auf
-                die JS-only SERP → meist kein Token.
+                die JS-only SERP → meist kein Token.<br>
+                <strong>&#9888; Proxy-Auth:</strong> Chromium supported <em>kein SOCKS5 mit Auth</em>
+                (bekannter Bug). Was funktioniert:
+                <code>http://user:pass@host:port</code> (HTTP-Proxy mit Auth) ODER
+                <code>socks5://host:port</code> (SOCKS ohne Auth).
+                Bei SOCKS5+Auth wird der Proxy still übersprungen, du siehst das im Test-Status.
             </div>
             <div style="margin-top:10px">
                 <button class="btn btn-primary">Generate /goto Links</button>

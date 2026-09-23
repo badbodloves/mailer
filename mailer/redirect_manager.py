@@ -201,16 +201,30 @@ class RedirectManager:
         import re as _re
 
         pw_proxy = None
+        proxy_skipped_reason = ""
         if proxy and proxy.strip():
             p = _normalize_proxy(proxy.strip())
             if p:
                 from urllib.parse import urlparse
                 pr = urlparse(p)
-                pw_proxy = {"server": f"{pr.scheme}://{pr.hostname}:{pr.port}"}
-                if pr.username:
-                    pw_proxy["username"] = pr.username
-                if pr.password:
-                    pw_proxy["password"] = pr.password
+                # Chromium hat einen bekannten Bug: es supported SOCKS5-Auth
+                # nicht (Chromium issue seit Jahren offen). Für SOCKS5 ohne
+                # Auth und HTTP/HTTPS mit oder ohne Auth funktioniert es.
+                is_socks = pr.scheme.startswith("socks")
+                has_auth = bool(pr.username or pr.password)
+                if is_socks and has_auth:
+                    proxy_skipped_reason = (
+                        f"chromium supports socks5 without auth only "
+                        f"(dieser proxy hat user/pass) — ohne proxy weiter"
+                    )
+                    logger.warning("Playwright /goto: %s", proxy_skipped_reason)
+                else:
+                    # Playwright-Format: server + optional username/password
+                    pw_proxy = {"server": f"{pr.scheme}://{pr.hostname}:{pr.port}"}
+                    if pr.username:
+                        pw_proxy["username"] = pr.username
+                    if pr.password:
+                        pw_proxy["password"] = pr.password
 
         def _extract(page) -> str:
             try:
@@ -270,11 +284,13 @@ class RedirectManager:
                 found = _extract(page)
                 if not found:
                     if debug:
-                        return (None, f"no /goto in rendered DOM (final={page.url})",
+                        note = f" [{proxy_skipped_reason}]" if proxy_skipped_reason else ""
+                        return (None, f"no /goto in rendered DOM (final={page.url}){note}",
                                 page.content()[:400])
                     return None
                 if debug:
-                    return (found, "ok (playwright)", "")
+                    note = f" [{proxy_skipped_reason}]" if proxy_skipped_reason else ""
+                    return (found, f"ok (playwright){note}", "")
                 return found
             finally:
                 if context:
