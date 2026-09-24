@@ -1206,6 +1206,26 @@ def _run_campaign(db, cid: int):
         # rotierende Dimensionen effektiv verhindert.
         _subject_pools = _parse_pools(camp.get("rotate_subject_pools") or "")
         _from_name_pools = _parse_pools(camp.get("rotate_from_name_pools") or "")
+
+        # Meta-Rotation-Alias: extrahiere alle Macro-Namen die als komplette
+        # Pool-Zeile "{XYZ}" auftauchen. Wenn im Pool z.B. {Ende}, {Ende2},
+        # {Ende4} stehen und {Ende4} gepickt wird → der resolved Wert wird
+        # AUCH unter "Ende" und "Ende2" gecacht, damit die Signatur mit
+        # {Ende} denselben Namen zeigt wie das From-Feld.
+        # Nur wenn die Zeile GENAU ein Macro-Placeholder ist (keine Prosa
+        # drumherum), sonst wäre die Semantik unklar.
+        def _extract_pool_aliases(pools):
+            names = set()
+            _pat = re.compile(r"^\s*\{([a-zA-Z_][a-zA-Z0-9_]*)\}\s*$")
+            for pool in pools:
+                for line in pool:
+                    m = _pat.match(line)
+                    if m:
+                        names.add(m.group(1))
+            return names
+
+        _from_pool_aliases = _extract_pool_aliases(_from_name_pools)
+        _subject_pool_aliases = _extract_pool_aliases(_subject_pools)
         _image_modes_rot = [m for m in _parse_csv_list(camp.get("rotate_image_modes") or "")
                              if m in ("cid", "cloudinary", "cdn", "url", "static_url", "text")]
         _link_ref_styles_rot = [s for s in _parse_csv_list(camp.get("rotate_link_ref_styles") or "")
@@ -1215,6 +1235,13 @@ def _run_campaign(db, cid: int):
                          cid, len(_subject_pools), sum(len(p) for p in _subject_pools))
         if _from_name_pools:
             logger.info("Campaign %d: from-name-rotation ON — %d pools", cid, len(_from_name_pools))
+        if _from_pool_aliases:
+            logger.info("Campaign %d: from-pool-alias — sticky-values werden auch unter "
+                         "%s gecacht (damit Signatur mit einem anderen dieser Placeholder "
+                         "denselben Wert kriegt)", cid, sorted(_from_pool_aliases))
+        if _subject_pool_aliases:
+            logger.info("Campaign %d: subject-pool-alias — %s",
+                         cid, sorted(_subject_pool_aliases))
         if _image_modes_rot:
             logger.info("Campaign %d: image-mode-rotation ON — %s (weighted via auto-refresh-ctrl if enabled)",
                          cid, _image_modes_rot)
@@ -1861,6 +1888,13 @@ def _run_campaign(db, cid: int):
                 if _from_name_pools:
                     _pool = random.choice(_from_name_pools)
                     cur_from_name = _process(random.choice(_pool), email, sticky_cache)
+                    # Alias-Apply: die anderen Sticky-Macros im gleichen
+                    # Pool bekommen den resolved Wert auch — so kann in
+                    # der Signatur ein anderer Alias-Name stehen und
+                    # kriegt trotzdem den From-Name.
+                    for _alias in _from_pool_aliases:
+                        if _alias in sticky_macros and _alias not in sticky_cache:
+                            sticky_cache[_alias] = cur_from_name
                 else:
                     cur_from_name = _process(from_name_cfg, email, sticky_cache)
                 # === Meta-Rotation: subject-pool ===
@@ -1868,6 +1902,9 @@ def _run_campaign(db, cid: int):
                     _pool = random.choice(_subject_pools)
                     raw_subject = random.choice(_pool)
                     cur_subject = _process(raw_subject, email, sticky_cache)
+                    for _alias in _subject_pool_aliases:
+                        if _alias in sticky_macros and _alias not in sticky_cache:
+                            sticky_cache[_alias] = cur_subject
                     _track_subject(cid, raw_subject, cur_subject)
                 else:
                     raw_subject = subject_cfg
