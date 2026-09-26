@@ -31,7 +31,12 @@ _pb_progress = {"running": False, "log": [], "domain": "", "done": False}
 def _normalize_proxy(raw: str):
     """Nimmt einen Proxy-String und liefert ein requests-proxies dict.
     Akzeptiert host:port, host:port:user:pass, scheme://…, scheme://host:port:user:pass.
-    Default-Scheme socks5h (DNS auch durch proxy). Return None wenn leer/kaputt."""
+    Default-Scheme socks5h (DNS auch durch proxy). Return None wenn leer/kaputt.
+
+    Wichtig: socks5 (ohne h) → wird auf socks5h upgraded. Viele Proxy-Provider
+    haben Ziel-Whitelists auf Hostname-Ebene — lokales DNS liefert die IP und
+    der Proxy blockt (Reply 0x05 Connection refused). Remote DNS umgeht das.
+    Wer WIRKLICH lokales DNS will kann socks5-local:// als Scheme nutzen."""
     s = (raw or "").strip()
     if not s:
         return None
@@ -39,6 +44,11 @@ def _normalize_proxy(raw: str):
     rest = s
     if "://" in s:
         scheme, rest = s.split("://", 1)
+    # socks5 → socks5h upgrade. socks5-local behält lokales DNS.
+    if scheme == "socks5":
+        scheme = "socks5h"
+    elif scheme == "socks5-local":
+        scheme = "socks5"
     if "@" in rest:
         url = f"{scheme}://{rest}"
         return {"http": url, "https": url}
@@ -46,7 +56,6 @@ def _normalize_proxy(raw: str):
     if len(parts) == 2:
         url = f"{scheme}://{parts[0]}:{parts[1]}"
     elif len(parts) == 4:
-        # host:port:user:pass — Colon-Auth-Format
         url = f"{scheme}://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
     else:
         return None
