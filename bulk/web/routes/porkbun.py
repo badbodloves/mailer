@@ -524,6 +524,31 @@ def _do_buy_pb(db, api_key, api_secret, domain, cf_account_id, log,
                                        proxy=proxy)
         if not reg["ok"]:
             log.append(f"Register fehlgeschlagen: {reg['msg']}")
+            # Volle Porkbun-Response ins Log — "Unable to register domain"
+            # allein hilft nicht, aber im raw stehen oft die echten Gründe
+            # (fehlende Contact-Info, Whois-Verify, no buy permission, …)
+            import json as _json
+            try:
+                raw_str = _json.dumps(reg.get("raw", {}), ensure_ascii=False,
+                                       indent=2)[:1200]
+                log.append(f"→ Porkbun raw response:\n{raw_str}")
+            except Exception:
+                log.append(f"→ raw: {str(reg.get('raw'))[:800]}")
+            # Häufigste Ursachen als Checkliste
+            msg_low = reg.get("msg", "").lower()
+            hints = []
+            if "unable to register" in msg_low:
+                hints.append("• Porkbun-Dashboard → API → Edit Key → 'Domains' Toggle AN (buy permission)")
+                hints.append("• Porkbun-Dashboard → Account → Contact Info alle Felder gefüllt (Name/Adresse/Tel/Land)")
+                hints.append("• Bei .de: DENIC braucht komplette Adresse — Postfach reicht nicht")
+                hints.append("• Erste Bestellung → evtl. Account-Verify im Porkbun-Dashboard nötig")
+                hints.append("• Guthaben checken (Balance im Response oben — wenn None: Account nicht auf Prepaid oder Karte fehlt)")
+            elif "insufficient" in msg_low or "balance" in msg_low:
+                hints.append("• Guthaben zu niedrig — Porkbun-Dashboard → Add Funds")
+            elif "price" in msg_low or "cost" in msg_low:
+                hints.append("• Preis-Mismatch — nochmal aus Suche kaufen (kein 10s-Stale-Cache)")
+            for h in hints:
+                log.append(h)
             return
     log.append(f"✓ Registriert. OrderID: {reg.get('order_id') or '?'}")
     if reg.get("balance") is not None:
