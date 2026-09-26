@@ -28,23 +28,54 @@ _pb_progress = {"running": False, "log": [], "domain": "", "done": False}
 
 # ── Low-Level API Call ────────────────────────────────────
 
+def _normalize_proxy(raw: str):
+    """Nimmt einen Proxy-String und liefert ein requests-proxies dict.
+    Akzeptiert host:port, host:port:user:pass, scheme://…, scheme://host:port:user:pass.
+    Default-Scheme socks5h (DNS auch durch proxy). Return None wenn leer/kaputt."""
+    s = (raw or "").strip()
+    if not s:
+        return None
+    scheme = "socks5h"
+    rest = s
+    if "://" in s:
+        scheme, rest = s.split("://", 1)
+    if "@" in rest:
+        url = f"{scheme}://{rest}"
+        return {"http": url, "https": url}
+    parts = rest.split(":")
+    if len(parts) == 2:
+        url = f"{scheme}://{parts[0]}:{parts[1]}"
+    elif len(parts) == 4:
+        # host:port:user:pass — Colon-Auth-Format
+        url = f"{scheme}://{parts[2]}:{parts[3]}@{parts[0]}:{parts[1]}"
+    else:
+        return None
+    return {"http": url, "https": url}
+
+
 def _pb_call(api_key: str, api_secret: str, path: str,
-              body: dict = None, timeout: int = 20) -> dict:
-    """Alle Porkbun-Calls sind POST mit apikey+secretapikey im Body."""
+              body: dict = None, timeout: int = 20,
+              proxy: str = "") -> dict:
+    """Alle Porkbun-Calls sind POST mit apikey+secretapikey im Body.
+    Optional per SOCKS5/HTTP-Proxy — für Anti-Fingerprinting oder wenn
+    der Registrar auf Hetzner-IPs blockt."""
     import requests
     if not api_key or not api_secret:
         return {"_error": "Kein Porkbun API-Key + Secret gesetzt", "status": "ERROR"}
     payload = {"apikey": api_key, "secretapikey": api_secret}
     if body:
         payload.update(body)
+    kwargs = {"json": payload, "timeout": timeout}
+    px = _normalize_proxy(proxy)
+    if px:
+        kwargs["proxies"] = px
     try:
-        r = requests.post(f"{PORKBUN_BASE}{path}", json=payload, timeout=timeout)
+        r = requests.post(f"{PORKBUN_BASE}{path}", **kwargs)
         try:
             data = r.json() if r.text else {}
         except Exception:
             data = {"_raw": r.text[:500]}
         data.setdefault("_status", r.status_code)
-        # Porkbun-Convention: "status" == "SUCCESS" oder "ERROR" + message
         if data.get("status") == "ERROR" and "_error" not in data:
             data["_error"] = data.get("message", "unknown error")
         return data
@@ -53,28 +84,34 @@ def _pb_call(api_key: str, api_secret: str, path: str,
 
 
 def _pb_from_account_id(db, aid: int) -> tuple:
+    """Returns (api_key, api_secret, name, proxy)."""
     row = db.get_porkbun_account(aid) if aid else db.get_primary_porkbun_account()
     if not row:
-        return "", "", ""
+        return "", "", "", ""
     r = dict(row)
-    return r.get("api_key", ""), r.get("api_secret", ""), r.get("name", "")
+    return (r.get("api_key", ""), r.get("api_secret", ""),
+            r.get("name", ""), r.get("proxy", "") or "")
 
 
 # ── High-Level Convenience ────────────────────────────────
 
-def pb_ping(api_key: str, api_secret: str) -> dict:
+def pb_ping(api_key: str, api_secret: str, proxy: str = "") -> dict:
     """Auth-Test — returns your IP address on success."""
-    return _pb_call(api_key, api_secret, "/ping")
+    return _pb_call(api_key, api_secret, "/ping", proxy=proxy)
 
 
-def pb_list_domains(api_key: str, api_secret: str, start: int = 0) -> dict:
+def pb_list_domains(api_key: str, api_secret: str, start: int = 0,
+                     proxy: str = "") -> dict:
     """List domains — bis 1000 pro Call, paginierbar via start=N."""
     return _pb_call(api_key, api_secret, "/domain/listAll",
-                     body={"start": start, "includeLabels": "yes"})
+                     body={"start": start, "includeLabels": "yes"},
+                     proxy=proxy)
 
 
-def pb_get_ns(api_key: str, api_secret: str, domain: str) -> dict:
-    return _pb_call(api_key, api_secret, f"/domain/getNs/{domain}")
+def pb_get_ns(api_key: str, api_secret: str, domain: str,
+               proxy: str = "") -> dict:
+    return _pb_call(api_key, api_secret, f"/domain/getNs/{domain}",
+                     proxy=proxy)
 
 
 def _is_rate_limit(msg: str) -> bool:
@@ -87,14 +124,16 @@ def _is_rate_limit(msg: str) -> bool:
 def pb_check_availability(api_key: str, api_secret: str, domain: str,
                             wait_on_rate_limit: bool = False,
                             max_retries: int = 3,
-                            log_step=None) -> dict:
+                            log_step=None,
+                            proxy: str = "") -> dict:
     """Rückgabe: {available, price, cents, currency, premium, raw,
                   error, rate_limited}.
     Porkbun erlaubt checkDomain nur 1×/10s. Wenn `wait_on_rate_limit=True`,
     warten wir 12s und retryen bis zu `max_retries`× ."""
     resp = {}
     for attempt in range(max_retries):
-        resp = _pb_call(api_key, api_secret, f"/domain/checkDomain/{domain}")
+        resp = _pb_call(api_key, api_secret, f"/domain/checkDomain/{domain}",
+                         proxy=proxy)
         if resp.get("status") == "SUCCESS":
             break
         err_msg = resp.get("message") or resp.get("_error") or ""
@@ -135,7 +174,7 @@ def pb_check_availability(api_key: str, api_secret: str, domain: str,
 
 
 def pb_register_domain(api_key: str, api_secret: str, domain: str,
-                        cost_cents: int) -> dict:
+                        cost_cents: int, proxy: str = "") -> dict:
     """POST /domain/create/{domain} — Body {cost, agreeToTerms:"yes"}.
     Cost in Cents, muss zum Availability-Preis passen sonst reject.
     Nutzt die Default-Kontakte am Account (im Porkbun-Dashboard einmal setzen)."""
@@ -144,7 +183,7 @@ def pb_register_domain(api_key: str, api_secret: str, domain: str,
                 "raw": {}}
     resp = _pb_call(api_key, api_secret, f"/domain/create/{domain}",
                     body={"cost": cost_cents, "agreeToTerms": "yes"},
-                    timeout=45)
+                    timeout=45, proxy=proxy)
     status = (resp.get("status") or "").upper()
     if status == "SUCCESS":
         return {"ok": True, "msg": "registriert",
@@ -156,18 +195,18 @@ def pb_register_domain(api_key: str, api_secret: str, domain: str,
             "raw": resp}
 
 
-def pb_get_pricing(api_key: str, api_secret: str) -> dict:
-    return _pb_call(api_key, api_secret, "/pricing/get")
+def pb_get_pricing(api_key: str, api_secret: str, proxy: str = "") -> dict:
+    return _pb_call(api_key, api_secret, "/pricing/get", proxy=proxy)
 
 
 def pb_set_nameservers(api_key: str, api_secret: str, domain: str,
-                         ns_list: list) -> dict:
+                         ns_list: list, proxy: str = "") -> dict:
     """NS setzen — Body {ns: [...]}. Returns {ok, msg, not_ready_yet}."""
     if not ns_list or len(ns_list) < 2:
         return {"ok": False, "msg": "brauche mindestens 2 Nameserver",
                 "not_ready_yet": False}
     resp = _pb_call(api_key, api_secret, f"/domain/updateNs/{domain}",
-                    body={"ns": ns_list[:8]})   # Porkbun max 8 NS
+                    body={"ns": ns_list[:8]}, proxy=proxy)
     status = (resp.get("status") or "").upper()
     msg = resp.get("message") or resp.get("_error") or ""
     msg_lower = msg.lower()
@@ -184,7 +223,8 @@ def pb_set_nameservers(api_key: str, api_secret: str, domain: str,
 
 
 def pb_set_ns_with_retry(api_key: str, api_secret: str, domain: str,
-                           ns_list: list, log_step=None) -> dict:
+                           ns_list: list, log_step=None,
+                           proxy: str = "") -> dict:
     is_de = domain.lower().endswith(".de")
     max_retries = 4 if is_de else 2
     wait_s = 30 if is_de else 10
@@ -195,7 +235,7 @@ def pb_set_ns_with_retry(api_key: str, api_secret: str, domain: str,
                 log_step(f"NS: warte {wait_s}s (Attempt {attempt+1}/{max_retries})",
                          True, "Porkbun braucht kurz bis der Domain-Datensatz settled ist")
             time.sleep(wait_s)
-        r = pb_set_nameservers(api_key, api_secret, domain, ns_list)
+        r = pb_set_nameservers(api_key, api_secret, domain, ns_list, proxy=proxy)
         last = r
         if r["ok"] or not r.get("not_ready_yet"):
             return r
@@ -213,12 +253,13 @@ async def porkbun_page(request: Request):
     ping_ip = ""
     if primary:
         pd = dict(primary)
-        p = pb_ping(pd["api_key"], pd["api_secret"])
+        _px = pd.get("proxy", "") or ""
+        p = pb_ping(pd["api_key"], pd["api_secret"], proxy=_px)
         if p.get("_error"):
             ping_ip = f"— ({p['_error']})"
         else:
             ping_ip = p.get("yourIp") or p.get("your_ip") or "OK"
-        dlist = pb_list_domains(pd["api_key"], pd["api_secret"])
+        dlist = pb_list_domains(pd["api_key"], pd["api_secret"], proxy=_px)
         if dlist.get("status") == "SUCCESS":
             domains = dlist.get("domains") or []
     cf_accounts = [dict(a) for a in db.get_cf_accounts()]
@@ -236,10 +277,13 @@ async def porkbun_page(request: Request):
 async def add_account(request: Request,
                        name: str = Form(""),
                        api_key: str = Form(""),
-                       api_secret: str = Form("")):
+                       api_secret: str = Form(""),
+                       proxy: str = Form("")):
     db = request.app.state.db
     if name.strip() and api_key.strip() and api_secret.strip():
-        db.add_porkbun_account(name.strip(), api_key.strip(), api_secret.strip())
+        aid = db.add_porkbun_account(name.strip(), api_key.strip(), api_secret.strip())
+        if proxy.strip():
+            db.update_porkbun_account(aid, proxy=proxy.strip())
     return RedirectResponse("/porkbun", status_code=303)
 
 
@@ -247,7 +291,8 @@ async def add_account(request: Request,
 async def update_account(request: Request, aid: int,
                           name: str = Form(""),
                           api_key: str = Form(""),
-                          api_secret: str = Form("")):
+                          api_secret: str = Form(""),
+                          proxy: str = Form("__unchanged__")):
     db = request.app.state.db
     fields = {}
     if name.strip():
@@ -256,6 +301,11 @@ async def update_account(request: Request, aid: int,
         fields["api_key"] = api_key.strip()
     if api_secret.strip():
         fields["api_secret"] = api_secret.strip()
+    # Proxy explizit setzbar (auch leer = "kein proxy" möglich).
+    # Sentinel "__unchanged__" damit ein fehlendes Form-Feld nicht die
+    # bestehenden Proxy-Einstellungen zurücksetzt.
+    if proxy != "__unchanged__":
+        fields["proxy"] = proxy.strip()
     db.update_porkbun_account(aid, **fields)
     return RedirectResponse("/porkbun", status_code=303)
 
@@ -275,17 +325,19 @@ async def delete_account(request: Request, aid: int):
 @router.post("/porkbun/test", response_class=HTMLResponse)
 async def test_account(request: Request, account_id: int = Form(0)):
     db = request.app.state.db
-    key, secret, name = _pb_from_account_id(db, account_id)
+    key, secret, name, proxy = _pb_from_account_id(db, account_id)
     if not key or not secret:
         return HTMLResponse('<span style="color:var(--red)">Kein Account oder API-Key fehlt</span>')
-    p = pb_ping(key, secret)
+    p = pb_ping(key, secret, proxy=proxy)
     if p.get("_error"):
         return HTMLResponse(
-            f'<span style="color:var(--red)">✗ {escape(p["_error"])}</span>'
+            f'<span style="color:var(--red)">✗ {escape(p["_error"])}'
+            f'{" [via proxy]" if proxy else ""}</span>'
         )
     return HTMLResponse(
         f'<span style="color:var(--green)">✓ Auth OK — dein IP bei Porkbun: '
-        f'<code>{escape(str(p.get("yourIp", "?")))}</code></span>'
+        f'<code>{escape(str(p.get("yourIp", "?")))}</code>'
+        f'{" [via proxy]" if proxy else ""}</span>'
     )
 
 
@@ -294,7 +346,7 @@ async def set_ns_route(request: Request, domain: str = Form(""),
                         nameservers: str = Form(""),
                         account_id: int = Form(0)):
     db = request.app.state.db
-    key, secret, name = _pb_from_account_id(db, account_id)
+    key, secret, name, proxy = _pb_from_account_id(db, account_id)
     if not key or not secret:
         return HTMLResponse('<span style="color:var(--red)">Kein Account gesetzt</span>')
     domain = domain.strip().lower()
@@ -304,7 +356,8 @@ async def set_ns_route(request: Request, domain: str = Form(""),
     logs = []
     res = pb_set_ns_with_retry(
         key, secret, domain, ns,
-        log_step=lambda label, ok, detail: logs.append((label, ok, detail)))
+        log_step=lambda label, ok, detail: logs.append((label, ok, detail)),
+        proxy=proxy)
     log_html = "".join(
         f'<li>{"✓" if ok else "…"} {escape(label)}'
         f'{": " + escape(detail) if detail else ""}</li>'
@@ -328,7 +381,7 @@ async def search_domains(request: Request, query: str = Form(""),
     """Bulk-Availability. Porkbun bietet KEIN API-Register — daher für
     verfügbare Domains ein Deep-Link zu Porkbun-Cart."""
     db = request.app.state.db
-    key, secret, name = _pb_from_account_id(db, account_id)
+    key, secret, name, proxy = _pb_from_account_id(db, account_id)
     if not key or not secret:
         return HTMLResponse('<div class="alert alert-danger">Kein Porkbun-Account gesetzt.</div>')
     domains_raw = [d.strip().lower() for d in query.replace(",", "\n").splitlines() if d.strip()]
@@ -338,7 +391,7 @@ async def search_domains(request: Request, query: str = Form(""),
     # Domains im Account? (aus /domain/listAll)
     owned = set()
     try:
-        dl = pb_list_domains(key, secret)
+        dl = pb_list_domains(key, secret, proxy=proxy)
         if dl.get("status") == "SUCCESS":
             for it in dl.get("domains") or []:
                 nm = (it.get("domain") or it.get("name") or "").lower()
@@ -372,7 +425,7 @@ async def search_domains(request: Request, query: str = Form(""),
         if idx > 0:
             time.sleep(11)
         r = pb_check_availability(key, secret, d, wait_on_rate_limit=True,
-                                    max_retries=2)
+                                    max_retries=2, proxy=proxy)
         if r["available"] is True:
             badge = '<span class="badge badge-running">Verfügbar</span>'
             if r["premium"]:
@@ -421,11 +474,12 @@ async def search_domains(request: Request, query: str = Form(""),
 
 
 def _do_buy_pb(db, api_key, api_secret, domain, cf_account_id, log,
-                cost_cents: int = 0):
+                cost_cents: int = 0, proxy: str = ""):
     """Register → CF-Zone → NS bei Porkbun setzen (mit Retry). Analog
     Dynadot _do_buy. Wenn `cost_cents>0` übergeben (z.B. vom Search-Result),
     sparen wir uns den zweiten Availability-Call (Rate-Limit!) und
-    registrieren direkt."""
+    registrieren direkt. `proxy` (SOCKS5/HTTP) optional — der Registrar-
+    Traffic läuft dann darüber."""
     if cost_cents > 0:
         log.append(f"Preis aus Suche übernommen: {cost_cents/100:.2f} USD "
                     f"({cost_cents} cents) — kein zweiter Availability-Check.")
@@ -434,7 +488,8 @@ def _do_buy_pb(db, api_key, api_secret, domain, cf_account_id, log,
         log.append(f"Availability-Check für {domain}… (retry falls Rate-Limit)")
         av = pb_check_availability(api_key, api_secret, domain,
                                     wait_on_rate_limit=True, max_retries=3,
-                                    log_step=lambda m: log.append(m))
+                                    log_step=lambda m: log.append(m),
+                                    proxy=proxy)
         if av.get("rate_limited"):
             log.append("Rate-Limit hält an — abbruch.")
             return
@@ -449,14 +504,15 @@ def _do_buy_pb(db, api_key, api_secret, domain, cf_account_id, log,
             log.append("⚠ Premium-Domain! Weiter mit angegebenem Preis.")
         av_cents = av["cents"]
 
-    log.append(f"Register {domain} über /domain/create/{domain}…")
-    reg = pb_register_domain(api_key, api_secret, domain, av_cents)
+    log.append(f"Register {domain} über /domain/create/{domain}…"
+                + (f" [via proxy]" if proxy else ""))
+    reg = pb_register_domain(api_key, api_secret, domain, av_cents, proxy=proxy)
     if not reg["ok"]:
-        # Ggf. Rate-Limit auf create? Retry mal
         if _is_rate_limit(reg.get("msg", "")):
             log.append("Register Rate-Limit — warte 12s und retry.")
             time.sleep(12)
-            reg = pb_register_domain(api_key, api_secret, domain, av_cents)
+            reg = pb_register_domain(api_key, api_secret, domain, av_cents,
+                                       proxy=proxy)
         if not reg["ok"]:
             log.append(f"Register fehlgeschlagen: {reg['msg']}")
             return
@@ -509,7 +565,8 @@ def _do_buy_pb(db, api_key, api_secret, domain, cf_account_id, log,
         api_key, api_secret, domain, ns_list,
         log_step=lambda label, ok, detail: log.append(
             f"{'✓' if ok else '…'} {label}"
-            f"{': ' + detail if detail else ''}"))
+            f"{': ' + detail if detail else ''}"),
+        proxy=proxy)
     if res["ok"]:
         log.append(f"✓ NS gesetzt. {domain} zeigt jetzt auf Cloudflare.")
     else:
@@ -526,7 +583,7 @@ async def buy_domain(request: Request, domain: str = Form(""),
     `cost_cents` optional — aus dem Search-Result-Button — spart einen
     zweiten checkDomain-Aufruf (der wegen Rate-Limit sonst hängen würde)."""
     db = request.app.state.db
-    key, secret, name = _pb_from_account_id(db, account_id)
+    key, secret, name, proxy = _pb_from_account_id(db, account_id)
     if not key or not secret:
         return HTMLResponse('<div class="alert alert-danger">Kein Porkbun-Account gesetzt.</div>')
     domain = domain.strip().lower()
@@ -542,7 +599,7 @@ async def buy_domain(request: Request, domain: str = Form(""),
         log = _pb_progress["log"]
         try:
             _do_buy_pb(db, key, secret, domain, cf_account_id, log,
-                        cost_cents=cost_cents)
+                        cost_cents=cost_cents, proxy=proxy)
         except Exception as e:
             log.append(f"Fatal: {e}")
         finally:
@@ -597,7 +654,7 @@ async def set_ns_from_cf(request: Request, domain: str = Form(""),
                           account_id: int = Form(0)):
     """Auto-Flow: CF-Zone anlegen falls nicht da → NS bei Porkbun setzen mit Retry."""
     db = request.app.state.db
-    key, secret, pb_name = _pb_from_account_id(db, account_id)
+    key, secret, pb_name, proxy = _pb_from_account_id(db, account_id)
     if not key or not secret:
         return HTMLResponse('<div class="alert alert-danger">Kein Porkbun-Account gesetzt.</div>')
     domain = domain.strip().lower()
@@ -648,7 +705,8 @@ async def set_ns_from_cf(request: Request, domain: str = Form(""),
         logs.append((ns_hint, True, ""))
     res = pb_set_ns_with_retry(
         key, secret, domain, ns_list,
-        log_step=lambda label, ok, detail: logs.append((label, ok, detail)))
+        log_step=lambda label, ok, detail: logs.append((label, ok, detail)),
+        proxy=proxy)
     log_html = "".join(
         f'<li>{"✓" if ok else "…"} <strong>{escape(label)}</strong>'
         f'{": " + escape(detail) if detail else ""}</li>'

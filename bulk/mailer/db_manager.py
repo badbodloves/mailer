@@ -347,8 +347,19 @@ class BulkDBManager:
                 api_key TEXT DEFAULT '',
                 api_secret TEXT DEFAULT '',
                 is_primary INTEGER DEFAULT 0,
+                proxy TEXT DEFAULT '',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )""")
+        else:
+            pb_cols = {r[1] for r in c.execute("PRAGMA table_info(porkbun_accounts)").fetchall()}
+            if "proxy" not in pb_cols:
+                c.execute("ALTER TABLE porkbun_accounts ADD COLUMN proxy TEXT DEFAULT ''")
+
+        # Registrar-Proxy nachrüsten für Dynadot + Spaceship (analog Porkbun)
+        for _tbl in ("dynadot_accounts", "spaceship_accounts"):
+            _cols = {r[1] for r in c.execute(f"PRAGMA table_info({_tbl})").fetchall()}
+            if _cols and "proxy" not in _cols:
+                c.execute(f"ALTER TABLE {_tbl} ADD COLUMN proxy TEXT DEFAULT ''")
 
         # PDF Variator pools (kv-store, ein Eintrag pro Pool-Typ)
         if "pdf_variator_pools" not in tables:

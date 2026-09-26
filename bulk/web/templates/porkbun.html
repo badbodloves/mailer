@@ -96,18 +96,46 @@
     </p>
     {% if accounts %}
     <table style="font-size:12px">
-        <thead><tr><th>Name</th><th>API-Key</th><th>Primary</th><th></th></tr></thead>
+        <thead><tr><th>Name</th><th>API-Key</th><th>Proxy</th><th>Primary</th><th></th></tr></thead>
         <tbody>
         {% for a in accounts %}
         <tr>
             <td>{{ a.name }}</td>
             <td style="font-family:monospace;font-size:11px">{{ a.api_key[:6] }}…{{ a.api_key[-4:] if a.api_key|length > 10 else '' }}</td>
+            <td style="font-family:monospace;font-size:10px;color:var(--fg2)">
+                {% if a.proxy %}
+                {% set _p = a.proxy.split('@')[-1] if '@' in a.proxy else a.proxy %}
+                {{ _p[:24] }}{% if _p|length > 24 %}…{% endif %}
+                {% else %}—{% endif %}
+            </td>
             <td>{% if a.is_primary %}<span class="badge badge-running">Primary</span>{% else %}
                 <form method="post" action="/porkbun/accounts/{{ a.id }}/set-primary" style="display:inline">
                     <button class="btn btn-secondary btn-xs">Set primary</button>
                 </form>{% endif %}
             </td>
             <td>
+                <details style="display:inline-block;vertical-align:middle">
+                    <summary class="btn btn-secondary btn-xs" style="cursor:pointer">Edit</summary>
+                    <form method="post" action="/porkbun/accounts/{{ a.id }}/update"
+                          style="margin-top:6px;padding:6px;background:var(--bg);border-radius:4px">
+                        <label style="font-size:11px">Name</label>
+                        <input name="name" value="{{ a.name }}" style="font-size:12px">
+                        <label style="font-size:11px">Neuer API-Key (leer = unverändert)</label>
+                        <input name="api_key" type="password" placeholder="pk1_..." style="font-size:12px">
+                        <label style="font-size:11px">Neues Secret (leer = unverändert)</label>
+                        <input name="api_secret" type="password" placeholder="sk1_..." style="font-size:12px">
+                        <label style="font-size:11px">Proxy (optional)</label>
+                        <input name="proxy" value="{{ a.proxy or '' }}"
+                               placeholder="socks5://user:pass@host:port oder host:port:user:pass"
+                               style="font-family:monospace;font-size:11px">
+                        <div class="form-help" style="font-size:10px;color:var(--fg2)">
+                            Wenn gesetzt: alle API-Calls dieses Accounts laufen über den Proxy.
+                            Leer = direct. Formate: <code>socks5://…</code>, <code>http://user:pass@host:port</code>,
+                            <code>host:port:user:pass</code>.
+                        </div>
+                        <button class="btn btn-primary btn-xs" style="margin-top:6px">Speichern</button>
+                    </form>
+                </details>
                 <button type="button" class="btn btn-secondary btn-xs"
                         hx-post="/porkbun/test"
                         hx-vals='{"account_id":"{{ a.id }}"}'
@@ -132,6 +160,15 @@
             <input name="api_key" type="password" required>
             <label>Secret API Key (sk1_...)</label>
             <input name="api_secret" type="password" required>
+            <label>Proxy (optional)</label>
+            <input name="proxy" placeholder="socks5://user:pass@host:port (leer = direct)"
+                   style="font-family:monospace;font-size:12px">
+            <div class="form-help" style="font-size:11px">
+                Wenn gesetzt: alle Porkbun-API-Calls dieses Accounts laufen ausschließlich
+                über den Proxy (Search, Availability, Register, NS-Set).
+                Formate: <code>socks5://user:pass@host:port</code>, <code>http://user:pass@host:port</code>,
+                <code>host:port:user:pass</code> (default SOCKS5).
+            </div>
             <button class="btn btn-primary btn-sm" style="margin-top:8px">Hinzufügen</button>
         </form>
     </details>
